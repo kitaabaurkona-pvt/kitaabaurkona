@@ -1,33 +1,28 @@
-import apiClient from './apiClient';
-import { API_ROUTES } from '../utils/constants';
+import { supabase } from '../clients/supabase';
 
 /**
- * Authenticate a user.
- * @param {string} email
- * @param {string} password
- * @returns {Promise<{token: string, user: object}>}
+ * Authenticate a user with Supabase.
  */
-export async function login(email, password) {
-  return apiClient(API_ROUTES.LOGIN, {
-    method: 'POST',
-    body: { email, password },
-  });
+export async function signIn(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
 }
 
 /**
- * Register a new user.
- * @param {object} userData - { name, email, password }
+ * Register a new user with Supabase. May require email confirmation
+ * depending on project settings.
  */
-export async function register(userData) {
-  return apiClient(API_ROUTES.REGISTER, {
-    method: 'POST',
-    body: userData,
-  });
+export async function signUp(email, password) {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return data;
 }
 
 /**
  * Log out the current user.
  */
-export async function logout() {
-  return apiClient(API_ROUTES.LOGOUT, { method: 'POST' });
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }

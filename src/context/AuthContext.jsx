@@ -1,46 +1,73 @@
 import { createContext, useState, useEffect, useCallback } from 'react';
-import * as authService from '../services/authService';
+import { supabase } from '../clients/supabase';
 
 export const AuthContext = createContext(null);
 
+async function fetchRole(userId) {
+  const { data } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .single();
+  return data?.role ?? null;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(() => localStorage.getItem('auth_token'));
+  const [role, setRole] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Hydrate user from stored token on mount
   useEffect(() => {
-    if (token) {
-      // TODO: validate token / fetch user profile
-      setUser({ token }); // placeholder until profile endpoint is wired
-    }
-    setLoading(false);
-  }, [token]);
+    let active = true;
 
-  const login = useCallback(async (email, password) => {
-    const data = await authService.login(email, password);
-    localStorage.setItem('auth_token', data.token);
-    setToken(data.token);
-    setUser(data.user);
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!active) return;
+      setUser(session?.user ?? null);
+      setRole(session?.user ? await fetchRole(session.user.id) : null);
+      setLoading(false);
+    });
+
+    const { data: subscription } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        if (!active) return;
+        setUser(session?.user ?? null);
+        setRole(session?.user ? await fetchRole(session.user.id) : null);
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      active = false;
+      subscription.subscription.unsubscribe();
+    };
+  }, []);
+
+  const signIn = useCallback(async (email, password) => {
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
     return data;
   }, []);
 
-  const register = useCallback(async (userData) => {
-    const data = await authService.register(userData);
-    localStorage.setItem('auth_token', data.token);
-    setToken(data.token);
-    setUser(data.user);
+  const signUp = useCallback(async (email, password) => {
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) throw error;
     return data;
   }, []);
 
-  const logout = useCallback(async () => {
-    await authService.logout().catch(() => {}); // best-effort server call
-    localStorage.removeItem('auth_token');
-    setToken(null);
-    setUser(null);
+  const signOut = useCallback(async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
   }, []);
 
-  const value = { user, token, loading, login, register, logout };
+  const value = {
+    user,
+    role,
+    loading,
+    isAuthenticated: !!user,
+    signIn,
+    signUp,
+    signOut,
+  };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -3,7 +3,7 @@ import { AuthContext } from '../context/AuthContext';
 
 /**
  * Convenience hook to consume AuthContext.
- * @returns {{ user, token, loading, login, register, logout }}
+ * @returns {{ user, role, loading, isAuthenticated, signIn, signUp, signOut }}
  */
 export function useAuth() {
   const context = useContext(AuthContext);
