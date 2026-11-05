@@ -1,16 +1,8 @@
-import { createContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useState, useEffect, useMemo } from 'react';
 import { supabase } from '../clients/supabase';
+import * as authService from '../services/authService';
 
 export const AuthContext = createContext(null);
-
-async function fetchRole(userId) {
-  const { data } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', userId)
-    .single();
-  return data?.role ?? null;
-}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -19,55 +11,46 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let active = true;
+    let latest = 0;
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!active) return;
-      setUser(session?.user ?? null);
-      setRole(session?.user ? await fetchRole(session.user.id) : null);
+    async function applySession(session) {
+      const current = ++latest;
+      const nextUser = session?.user ?? null;
+      const nextRole = nextUser ? await authService.getUserRole(nextUser.id) : null;
+      if (!active || current !== latest) return;
+      setUser(nextUser);
+      setRole(nextRole);
       setLoading(false);
-    });
+    }
 
-    const { data: subscription } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (!active) return;
-        setUser(session?.user ?? null);
-        setRole(session?.user ? await fetchRole(session.user.id) : null);
-        setLoading(false);
-      }
-    );
+    supabase.auth.getSession().then(({ data }) => applySession(data.session));
+
+    // Supabase calls made inside this callback can deadlock the auth lock,
+    // so the work is deferred until the callback has returned.
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setTimeout(() => applySession(session), 0);
+    });
 
     return () => {
       active = false;
-      subscription.subscription.unsubscribe();
+      subscription.unsubscribe();
     };
   }, []);
 
-  const signIn = useCallback(async (email, password) => {
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
-    return data;
-  }, []);
-
-  const signUp = useCallback(async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) throw error;
-    return data;
-  }, []);
-
-  const signOut = useCallback(async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) throw error;
-  }, []);
-
-  const value = {
-    user,
-    role,
-    loading,
-    isAuthenticated: !!user,
-    signIn,
-    signUp,
-    signOut,
-  };
+  const value = useMemo(
+    () => ({
+      user,
+      role,
+      loading,
+      isAuthenticated: !!user,
+      signIn: authService.signIn,
+      signUp: authService.signUp,
+      signOut: authService.signOut,
+    }),
+    [user, role, loading]
+  );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

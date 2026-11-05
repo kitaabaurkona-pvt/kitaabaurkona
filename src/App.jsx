@@ -15,11 +15,13 @@ import Profile from './pages/Profile';
 function App() {
   return (
     <Routes>
+      {/* Auth pages render their own shell instead of the app layout */}
+      <Route path="/sign-in" element={<SignIn />} />
+      <Route path="/sign-up" element={<SignUp />} />
+
       <Route element={<Layout />}>
         {/* Public */}
         <Route path="/" element={<ProductListing />} />
-        <Route path="/sign-in" element={<SignIn />} />
-        <Route path="/sign-up" element={<SignUp />} />
         <Route path="/products" element={<ProductListing />} />
         <Route path="/products/:id" element={<ProductDetail />} />
         <Route path="/403" element={<Forbidden />} />

@@ -1,71 +1,93 @@
 import { useState } from 'react';
-import { Link, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import AuthShell from '../components/auth/AuthShell';
+import { PasswordField, SubmitButton, TextField } from '../components/auth/fields';
+import {
+  focusField,
+  normalizeEmail,
+  safeRedirect,
+  signInErrorMessage,
+  validateSignIn,
+} from '../utils/authForm';
 
 function SignIn() {
-  const { signIn, isAuthenticated, loading: authLoading } = useAuth();
-  const navigate = useNavigate();
+  const { signIn, isAuthenticated, loading } = useAuth();
   const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  if (authLoading) return null;
+  if (loading) return null;
+  if (isAuthenticated) return <Navigate to={safeRedirect(location.state?.from)} replace />;
 
-  if (isAuthenticated) {
-    const redirectTo = location.state?.from ?? '/dashboard';
-    return <Navigate to={redirectTo} replace />;
-  }
+  const fieldError = (field) => (error?.field === field ? error.message : undefined);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setError('');
+  async function handleSubmit(event) {
+    event.preventDefault();
+    if (submitting) return;
+
+    const values = { email: normalizeEmail(email), password };
+    const invalid = validateSignIn(values);
+    if (invalid) {
+      setError(invalid);
+      focusField(invalid.field);
+      return;
+    }
+
+    setError(null);
     setSubmitting(true);
     try {
-      await signIn(email, password);
-      navigate('/dashboard', { replace: true });
+      await signIn(values.email, values.password);
     } catch (err) {
-      setError(err.message || 'Unable to sign in.');
+      setError({ field: null, message: signInErrorMessage(err) });
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <main>
-      <h1>Sign In</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
-          Email
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={8}
-            autoComplete="current-password"
-          />
-        </label>
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={submitting}>
-          {submitting ? 'Signing in…' : 'Sign In'}
-        </button>
+    <AuthShell title="Log in" backTo="/" backLabel="Back to home">
+      <form className="auth-form" onSubmit={handleSubmit} noValidate>
+        <TextField
+          id="email"
+          label="Email"
+          type="email"
+          inputMode="email"
+          autoComplete="username"
+          autoCapitalize="none"
+          spellCheck={false}
+          maxLength={254}
+          placeholder="Enter your email address"
+          required
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          error={fieldError('email')}
+        />
+        <PasswordField
+          id="password"
+          label="Password"
+          autoComplete="current-password"
+          maxLength={72}
+          placeholder="Enter your password"
+          required
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          error={fieldError('password')}
+        />
+        {error && !error.field && (
+          <p className="auth-error" role="alert">
+            {error.message}
+          </p>
+        )}
+        <SubmitButton busy={submitting} idleLabel="Log in" busyLabel="Logging in…" />
       </form>
-      <p>
-        No account? <Link to="/sign-up">Sign Up</Link>
+      <p className="auth-switch">
+        New to Kitaabaurkona?
+        <Link to="/sign-up">Sign up</Link>
       </p>
-    </main>
+    </AuthShell>
   );
 }
 
