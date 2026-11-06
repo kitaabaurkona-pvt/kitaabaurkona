@@ -402,6 +402,31 @@ textarea.field-input {
   cursor: default;
 }
 
+.btn-secondary[aria-busy='true'] {
+  cursor: progress;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.75rem 0;
+  color: var(--auth-muted);
+  font-size: 0.8125rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--auth-line);
+}
+
+.auth-error--spaced {
+  margin-top: 0.75rem;
+}
+
 .auth-page a,
 .auth-page button {
   -webkit-tap-highlight-color: transparent;

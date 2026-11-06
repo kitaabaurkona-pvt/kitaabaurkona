@@ -2,8 +2,11 @@ import { useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/auth/AuthShell';
+import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
 import {
+  AuthDivider,
   ChoiceGroup,
+  GoogleButton,
   PasswordField,
   PhoneField,
   SubmitButton,
@@ -38,6 +41,7 @@ function SignUp() {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [pendingEmail, setPendingEmail] = useState(null);
+  const google = useGoogleSignIn();
 
   if (loading) return null;
   if (isAuthenticated) return <Navigate to="/dashboard" replace />;
@@ -191,6 +195,8 @@ function SignUp() {
         )}
         <SubmitButton busy={submitting} idleLabel="Create account" busyLabel="Creating account…" />
       </form>
+      <AuthDivider />
+      <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
       <p className="auth-switch">
         Already have an account?
         <Link to="/sign-in">Log in</Link>

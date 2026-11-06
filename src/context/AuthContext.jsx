@@ -47,6 +47,7 @@ export function AuthProvider({ children }) {
       isAuthenticated: !!user,
       signIn: authService.signIn,
       signUp: authService.signUp,
+      signInWithGoogle: authService.signInWithGoogle,
       signOut: authService.signOut,
       requestPasswordReset: authService.requestPasswordReset,
       updatePassword: authService.updatePassword,

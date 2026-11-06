@@ -2,7 +2,14 @@ import { useState } from 'react';
 import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/auth/AuthShell';
-import { PasswordField, SubmitButton, TextField } from '../components/auth/fields';
+import {
+  AuthDivider,
+  GoogleButton,
+  PasswordField,
+  SubmitButton,
+  TextField,
+} from '../components/auth/fields';
+import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
 import {
   focusField,
   normalizeEmail,
@@ -18,6 +25,7 @@ function SignIn() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const google = useGoogleSignIn(location.state?.from);
 
   if (loading) return null;
   if (isAuthenticated) return <Navigate to={safeRedirect(location.state?.from)} replace />;
@@ -88,6 +96,8 @@ function SignIn() {
         )}
         <SubmitButton busy={submitting} idleLabel="Log in" busyLabel="Logging in…" />
       </form>
+      <AuthDivider />
+      <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
       <p className="auth-switch">
         New to Kitaabaurkona?
         <Link to="/sign-up">Sign up</Link>

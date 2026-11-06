@@ -95,6 +95,12 @@ export function signUpErrorMessage(error) {
   return 'Unable to create your account. Check your details and try again.';
 }
 
+export function oauthErrorMessage(error) {
+  if (isRateLimited(error)) return 'Too many attempts. Try again in a few minutes.';
+  if (isNetworkError(error)) return 'Unable to reach the server. Check your connection and try again.';
+  return 'Unable to continue with Google. Try again.';
+}
+
 export function resetRequestErrorMessage(error) {
   if (isRateLimited(error)) return 'Too many requests. Wait a minute before trying again.';
   if (isNetworkError(error)) return 'Unable to reach the server. Check your connection and try again.';
