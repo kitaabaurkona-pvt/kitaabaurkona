@@ -18,6 +18,23 @@ export async function signUp(email, password, profile = {}) {
   return data;
 }
 
+// Supabase answers identically whether or not the email has an account, so callers
+// must not treat success as proof that the account exists. The redirect target is
+// built from this site's own origin and Supabase only honors it if it is allow-listed.
+export async function requestPasswordReset(email) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`,
+  });
+  if (error) throw error;
+}
+
+// A reset may follow an account compromise, so every other session is revoked.
+export async function updatePassword(password) {
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+  await supabase.auth.signOut({ scope: 'others' });
+}
+
 export async function signOut() {
   const { error } = await supabase.auth.signOut();
   if (error) throw error;

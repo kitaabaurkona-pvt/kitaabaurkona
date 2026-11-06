@@ -48,6 +48,8 @@ export function AuthProvider({ children }) {
       signIn: authService.signIn,
       signUp: authService.signUp,
       signOut: authService.signOut,
+      requestPasswordReset: authService.requestPasswordReset,
+      updatePassword: authService.updatePassword,
     }),
     [user, role, loading]
   );

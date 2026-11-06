@@ -3,6 +3,7 @@ export const PASSWORD_MAX_LENGTH = 72;
 export const NAME_MIN_LENGTH = 2;
 export const NAME_MAX_LENGTH = 80;
 export const ADDRESS_MAX_LENGTH = 300;
+export const RESEND_COOLDOWN_SECONDS = 60;
 
 export const GENDER_OPTIONS = [
   { value: 'male', label: 'Male' },
@@ -35,15 +36,7 @@ export function validateSignIn({ email, password }) {
   return null;
 }
 
-export function validateSignUp({ fullName, email, phone, gender, password, confirmPassword, address }) {
-  if (fullName.length < NAME_MIN_LENGTH || fullName.length > NAME_MAX_LENGTH) {
-    return { field: 'full-name', message: `Enter your full name (${NAME_MIN_LENGTH}-${NAME_MAX_LENGTH} characters).` };
-  }
-  if (!isValidEmail(email)) return { field: 'email', message: 'Enter a valid email address.' };
-  if (!PHONE_PATTERN.test(phone)) return { field: 'phone', message: 'Enter a valid 10-digit mobile number.' };
-  if (!GENDER_OPTIONS.some((option) => option.value === gender)) {
-    return { field: 'gender', message: 'Select a gender.' };
-  }
+export function validatePasswordPair(password, confirmPassword) {
   if (password.length < PASSWORD_MIN_LENGTH) {
     return { field: 'password', message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` };
   }
@@ -53,6 +46,20 @@ export function validateSignUp({ fullName, email, phone, gender, password, confi
   if (password !== confirmPassword) {
     return { field: 'confirm-password', message: 'Passwords do not match.' };
   }
+  return null;
+}
+
+export function validateSignUp({ fullName, email, phone, gender, password, confirmPassword, address }) {
+  if (fullName.length < NAME_MIN_LENGTH || fullName.length > NAME_MAX_LENGTH) {
+    return { field: 'full-name', message: `Enter your full name (${NAME_MIN_LENGTH}-${NAME_MAX_LENGTH} characters).` };
+  }
+  if (!isValidEmail(email)) return { field: 'email', message: 'Enter a valid email address.' };
+  if (!PHONE_PATTERN.test(phone)) return { field: 'phone', message: 'Enter a valid 10-digit mobile number.' };
+  if (!GENDER_OPTIONS.some((option) => option.value === gender)) {
+    return { field: 'gender', message: 'Select a gender.' };
+  }
+  const passwordProblem = validatePasswordPair(password, confirmPassword);
+  if (passwordProblem) return passwordProblem;
   if (address.length > ADDRESS_MAX_LENGTH) {
     return { field: 'address', message: `Address must be at most ${ADDRESS_MAX_LENGTH} characters.` };
   }
@@ -64,7 +71,7 @@ export function focusField(field) {
   document.getElementById(id)?.focus();
 }
 
-function isRateLimited(error) {
+export function isRateLimited(error) {
   return error?.status === 429 || /rate_limit/.test(error?.code ?? '');
 }
 
@@ -86,6 +93,23 @@ export function signUpErrorMessage(error) {
   if (isNetworkError(error)) return 'Unable to reach the server. Check your connection and try again.';
   if (error?.code === 'weak_password') return 'Choose a stronger password.';
   return 'Unable to create your account. Check your details and try again.';
+}
+
+export function resetRequestErrorMessage(error) {
+  if (isRateLimited(error)) return 'Too many requests. Wait a minute before trying again.';
+  if (isNetworkError(error)) return 'Unable to reach the server. Check your connection and try again.';
+  return 'Unable to send the reset link. Try again.';
+}
+
+export function updatePasswordErrorMessage(error) {
+  if (error?.name === 'AuthSessionMissingError' || error?.code === 'session_not_found') {
+    return 'This reset link has expired. Request a new one.';
+  }
+  if (isRateLimited(error)) return 'Too many attempts. Try again in a few minutes.';
+  if (isNetworkError(error)) return 'Unable to reach the server. Check your connection and try again.';
+  if (error?.code === 'same_password') return 'Choose a password different from your current one.';
+  if (error?.code === 'weak_password') return 'Choose a stronger password.';
+  return 'Unable to update your password. Try again.';
 }
 
 // Only same-origin absolute paths are allowed, which blocks open redirects such as //evil.com.

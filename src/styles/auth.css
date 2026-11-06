@@ -65,6 +65,7 @@
 .auth-back:focus-visible,
 .auth-brand:focus-visible,
 .auth-switch a:focus-visible,
+.field-link:focus-visible,
 .field-toggle:focus-visible {
   outline: 3px solid var(--auth-focus);
   outline-offset: 2px;
@@ -130,6 +131,28 @@ legend.field-label {
   scroll-margin-top: calc(6rem + env(safe-area-inset-top, 0px));
 }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.field-link {
+  margin: -0.5rem 0;
+  padding: 0.5rem 0;
+  color: var(--auth-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  .field-link:hover {
+    color: var(--auth-ink);
+  }
+}
+
 .field-control {
   position: relative;
   display: flex;
@@ -146,6 +169,7 @@ legend.field-label {
   color: var(--auth-ink);
   font: inherit;
   appearance: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 textarea.field-input {
@@ -192,8 +216,10 @@ textarea.field-input {
   cursor: pointer;
 }
 
-.field-toggle:hover {
-  color: var(--auth-ink);
+@media (hover: hover) {
+  .field-toggle:hover {
+    color: var(--auth-ink);
+  }
 }
 
 .field-error {
@@ -212,6 +238,7 @@ textarea.field-input {
   border-radius: 0.5rem;
   background: #ffffff;
   overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .phone-group:focus-within {
@@ -277,6 +304,7 @@ textarea.field-input {
   color: var(--auth-ink);
   font-size: 0.9375rem;
   font-weight: 500;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .choice-input:checked + .choice-pill {
@@ -322,22 +350,62 @@ textarea.field-input {
   transition: background-color 0.15s ease;
 }
 
-.btn-primary:hover {
-  background: var(--auth-accent-hover);
+@media (hover: hover) {
+  .btn-primary:hover {
+    background: var(--auth-accent-hover);
+  }
+
+  .btn-secondary:hover {
+    background: #f4f4f6;
+  }
 }
 
 .btn-primary:active {
   background: var(--auth-accent-active);
 }
 
-.btn-primary:focus-visible {
+.btn-secondary:active {
+  background: #e9e9ed;
+}
+
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible {
   outline: 3px solid var(--auth-ink);
   outline-offset: 2px;
 }
 
-.btn-primary:disabled {
+.btn-primary[aria-disabled='true'] {
   background: var(--auth-accent-hover);
   cursor: progress;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  height: 3rem;
+  padding: 0 1rem;
+  border: 1px solid var(--auth-control);
+  border-radius: 0.5rem;
+  background: #ffffff;
+  color: var(--auth-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.btn-secondary[aria-disabled='true'] {
+  color: var(--auth-muted);
+  cursor: default;
+}
+
+.auth-page a,
+.auth-page button {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .spinner {
@@ -360,7 +428,11 @@ textarea.field-input {
     animation-duration: 2s;
   }
 
-  .btn-primary {
+  .btn-primary,
+  .btn-secondary,
+  .field-input,
+  .phone-group,
+  .choice-pill {
     transition: none;
   }
 }
@@ -379,8 +451,23 @@ textarea.field-input {
   text-decoration: none;
 }
 
-.auth-switch a:hover {
-  text-decoration: underline;
+@media (hover: hover) {
+  .auth-switch a:hover {
+    text-decoration: underline;
+  }
+}
+
+.auth-status {
+  margin: 0.75rem 0 0;
+  color: var(--auth-body);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+.auth-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
 
 .auth-notice {

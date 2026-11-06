@@ -63,13 +63,16 @@ function EyeIcon({ crossed }) {
   );
 }
 
-export function PasswordField({ id, label, error, ...props }) {
+export function PasswordField({ id, label, error, labelAction, ...props }) {
   const [visible, setVisible] = useState(false);
   return (
     <div className="field">
-      <label className="field-label" htmlFor={id}>
-        {label}
-      </label>
+      <div className="field-label-row">
+        <label className="field-label" htmlFor={id}>
+          {label}
+        </label>
+        {labelAction}
+      </div>
       <div className="field-control">
         <input
           id={id}
@@ -121,9 +124,11 @@ export function ChoiceGroup({ name, legend, options, value, onChange, error }) {
   );
 }
 
+// aria-disabled (not disabled) keeps keyboard focus on the button while a request runs;
+// the page handlers ignore submits while busy.
 export function SubmitButton({ busy, idleLabel, busyLabel }) {
   return (
-    <button type="submit" className="btn-primary" disabled={busy} aria-busy={busy}>
+    <button type="submit" className="btn-primary" aria-disabled={busy || undefined} aria-busy={busy}>
       {busy && <span className="spinner" aria-hidden="true" />}
       {busy ? busyLabel : idleLabel}
     </button>

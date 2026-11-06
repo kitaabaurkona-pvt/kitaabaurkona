@@ -5,6 +5,8 @@ import AdminRoute from './components/AdminRoute';
 import Dashboard from './pages/Dashboard';
 import SignIn from './pages/SignIn';
 import SignUp from './pages/SignUp';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import Forbidden from './pages/Forbidden';
 import ProductListing from './pages/ProductListing';
 import ProductDetail from './pages/ProductDetail';
@@ -18,6 +20,8 @@ function App() {
       {/* Auth pages render their own shell instead of the app layout */}
       <Route path="/sign-in" element={<SignIn />} />
       <Route path="/sign-up" element={<SignUp />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
 
       <Route element={<Layout />}>
         {/* Public */}

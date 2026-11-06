@@ -69,6 +69,11 @@ function SignIn() {
           id="password"
           label="Password"
           autoComplete="current-password"
+          labelAction={
+            <Link to="/forgot-password" className="field-link">
+              Forgot password?
+            </Link>
+          }
           maxLength={72}
           placeholder="Enter your password"
           required
