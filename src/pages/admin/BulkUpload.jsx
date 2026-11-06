@@ -3,6 +3,7 @@ import Papa from 'papaparse';
 import { REQUIRED_COLUMNS, sanitizeCatalogue } from '../../utils/catalogueSanitizer';
 import { MAX_BOOKS_PER_UPLOAD, uploadBooks, uploadErrorMessage } from '../../services/catalogueService';
 import '../../styles/admin.css';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // Browsers report CSV files under several MIME types (and Windows often reports none).
@@ -28,6 +29,7 @@ function toRows(data) {
 const plural = (count, word) => `${count.toLocaleString('en-IN')} ${word}${count === 1 ? '' : 's'}`;
 
 function BulkUpload() {
+  useDocumentTitle('Bulk upload');
   // Steps 1-2: reading and checking the file. status.books holds the sanitized rows.
   const [status, setStatus] = useState({ state: 'idle' });
   // Step 3: sending them to the database.
@@ -208,8 +210,8 @@ function BulkUpload() {
   const books = status.state === 'ready' ? status.books : null;
 
   return (
-    <main className="admin-page">
-      <h1 className="admin-title">Bulk upload books</h1>
+    <section className="admin-page" aria-labelledby="bulk-heading">
+      <h2 id="bulk-heading" className="admin-title">Bulk upload books</h2>
 
       <label
         className="dropzone"
@@ -296,7 +298,7 @@ function BulkUpload() {
           )}
         </section>
       )}
-    </main>
+    </section>
   );
 }
 

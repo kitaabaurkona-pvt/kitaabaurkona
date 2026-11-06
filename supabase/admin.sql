@@ -19,10 +19,12 @@
 
 
 -- 1. CONFIRM ROW LEVEL SECURITY IS ON --------------------------------------------
--- Expected: three rows (book_internal, books, users), and rowsecurity = true on all.
+-- Expected: six rows (book_internal, books, order_items, orders, users,
+-- wishlist_items), and rowsecurity = true on all.
 select tablename, rowsecurity
 from pg_tables
-where schemaname = 'public' and tablename in ('users', 'books', 'book_internal')
+where schemaname = 'public'
+  and tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items')
 order by tablename;
 
 
@@ -33,7 +35,11 @@ order by tablename;
 --          "Signed-in users view books" (SELECT, authenticated);
 --          "Admins add books" (INSERT); "Admins edit books" (UPDATE);
 --          "Admins delete books" (DELETE)
+--   order_items: "Users view own order items" (SELECT)
+--   orders: "Users view own orders" (SELECT)
 --   users: "Users view own record" (SELECT); "Users update own record" (UPDATE)
+--   wishlist_items: "Users view own wishlist" (SELECT); "Users add to own
+--          wishlist" (INSERT); "Users remove from own wishlist" (DELETE)
 select tablename, policyname, cmd, roles
 from pg_policies
 where schemaname = 'public'

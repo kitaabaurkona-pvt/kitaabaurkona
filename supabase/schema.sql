@@ -20,7 +20,13 @@
 --   4. public.admin_upsert_books()
 --                           The one call the bulk upload makes: adds or updates
 --                           books and their internal data together.
---   Plus Row Level Security on all three tables, and public.is_admin(), the single
+--   5. public.wishlist_items Each signed-in user's saved books.
+--   6. public.orders, public.order_items
+--                           Orders and a snapshot of what was ordered. Created
+--                           only by create_order(), which prices everything from
+--                           the books table; cancel_order() for customers and
+--                           admin_set_order_status() for admins.
+--   Plus Row Level Security on every table, and public.is_admin(), the single
 --   check every admin-only rule uses.
 --
 -- WHO CAN DO WHAT
@@ -28,8 +34,11 @@
 --   Customer:             browse visible books; read and edit their OWN name,
 --                         mobile, gender and address. Can never change their role
 --                         or email, and can never see cost prices.
---   Admin:                everything a customer can, plus see hidden books and
---                         add/edit/delete books and their internal data.
+--                         They manage their own wishlist, place orders, see only
+--                         their own orders and cancel them while unpaid.
+--   Admin:                everything a customer can, plus see hidden books,
+--                         add/edit/delete books and their internal data, see all
+--                         orders and move them through paid, shipped, delivered.
 --   Roles change ONLY here in the SQL Editor (see the last section of this file,
 --   or supabase/admin.sql). The website has no way to make anyone an admin.
 -- =============================================================================
@@ -262,7 +271,15 @@ create table if not exists public.books (
   constraint books_price_not_above_mrp check (price <= mrp)
 );
 
+-- Worked out by the database from price and MRP, so it is always correct and the
+-- shop can sort by it.
+alter table public.books add column if not exists discount_percent integer
+  generated always as (
+    case when mrp > 0 then floor((1 - price / mrp) * 100)::integer else 0 end
+  ) stored;
+
 create index if not exists books_visible_category_idx on public.books (is_visible, category);
+create index if not exists books_discount_idx on public.books (discount_percent desc);
 
 drop trigger if exists books_set_updated_at on public.books;
 create trigger books_set_updated_at
@@ -432,6 +449,286 @@ revoke execute on function public.admin_upsert_books(jsonb) from public, anon;
 grant execute on function public.admin_upsert_books(jsonb) to authenticated;
 
 
+-- -----------------------------------------------------------------------------
+-- 7. WISHLIST
+-- -----------------------------------------------------------------------------
+-- One row per saved book per signed-in user. Each user sees and changes only
+-- their own rows. Removing a book from the catalogue removes it from wishlists.
+
+create table if not exists public.wishlist_items (
+  user_id uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  book_id uuid not null references public.books (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, book_id)
+);
+
+alter table public.wishlist_items enable row level security;
+
+drop policy if exists "Users view own wishlist" on public.wishlist_items;
+create policy "Users view own wishlist" on public.wishlist_items
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+drop policy if exists "Users add to own wishlist" on public.wishlist_items;
+create policy "Users add to own wishlist" on public.wishlist_items
+  for insert to authenticated
+  with check ((select auth.uid()) = user_id);
+
+drop policy if exists "Users remove from own wishlist" on public.wishlist_items;
+create policy "Users remove from own wishlist" on public.wishlist_items
+  for delete to authenticated
+  using ((select auth.uid()) = user_id);
+
+revoke all on public.wishlist_items from anon, authenticated;
+grant select, insert, delete on public.wishlist_items to authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 8. ORDERS
+-- -----------------------------------------------------------------------------
+-- Orders are created ONLY by create_order() below, which reads prices and stock
+-- from the books table itself. Nothing the browser sends about prices or totals
+-- is trusted. Customers can read their own orders; admins can read all of them.
+-- Status flow: pending_payment -> paid -> shipped -> delivered, and
+-- pending_payment or paid -> cancelled. Stock is reserved when an order is marked
+-- paid and returned if a paid order is cancelled.
+
+create table if not exists public.orders (
+  id uuid primary key default gen_random_uuid(),
+  order_number bigint generated always as identity unique,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  status text not null default 'pending_payment'
+    check (status in ('pending_payment', 'paid', 'shipped', 'delivered', 'cancelled')),
+  item_count integer not null check (item_count between 1 and 500),
+  subtotal numeric(12, 2) not null check (subtotal >= 0),
+  mrp_total numeric(12, 2) not null check (mrp_total >= subtotal),
+  shipping_name text not null check (char_length(shipping_name) between 2 and 80),
+  shipping_phone text not null check (shipping_phone ~ '^[6-9][0-9]{9}$'),
+  shipping_address text not null check (char_length(shipping_address) between 5 and 300),
+  shipping_city text not null check (char_length(shipping_city) between 2 and 60),
+  shipping_state text not null check (char_length(shipping_state) between 2 and 60),
+  shipping_pincode text not null check (shipping_pincode ~ '^[1-9][0-9]{5}$'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists orders_user_created_idx on public.orders (user_id, created_at desc);
+create index if not exists orders_status_idx on public.orders (status);
+
+drop trigger if exists orders_set_updated_at on public.orders;
+create trigger orders_set_updated_at
+  before update on public.orders
+  for each row execute function public.set_updated_at();
+
+-- A snapshot of each book at the moment of ordering, so later price or title
+-- changes never alter a past order.
+create table if not exists public.order_items (
+  order_id uuid not null references public.orders (id) on delete cascade,
+  book_id uuid references public.books (id) on delete set null,
+  sku text not null,
+  title text not null,
+  image_url text,
+  unit_price numeric(10, 2) not null check (unit_price >= 0),
+  unit_mrp numeric(10, 2) not null check (unit_mrp >= unit_price),
+  quantity integer not null check (quantity between 1 and 10),
+  primary key (order_id, sku)
+);
+
+alter table public.orders enable row level security;
+alter table public.order_items enable row level security;
+
+drop policy if exists "Users view own orders" on public.orders;
+create policy "Users view own orders" on public.orders
+  for select to authenticated
+  using ((select auth.uid()) = user_id or (select public.is_admin()));
+
+drop policy if exists "Users view own order items" on public.order_items;
+create policy "Users view own order items" on public.order_items
+  for select to authenticated
+  using (
+    exists (
+      select 1 from public.orders o
+      where o.id = order_id
+        and ((select auth.uid()) = o.user_id or (select public.is_admin()))
+    )
+  );
+
+-- Read-only from the website. All changes go through the functions below.
+revoke all on public.orders from anon, authenticated;
+revoke all on public.order_items from anon, authenticated;
+grant select on public.orders to authenticated;
+grant select on public.order_items to authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 9. ORDER FUNCTIONS
+-- -----------------------------------------------------------------------------
+
+-- Places an order for the signed-in user. items: [{ "book_id": uuid, "quantity": 1-10 }]
+-- (1 to 50 different books). shipping: { name, phone, address, city, state, pincode }.
+-- Prices, titles and stock come from the books table, never from the request.
+-- A user can have at most 5 orders awaiting payment at once.
+create or replace function public.create_order(items jsonb, shipping jsonb)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_order uuid;
+  v_lines integer;
+  v_distinct integer;
+  v_unavailable integer;
+begin
+  if v_user is null then
+    raise exception 'Sign in to place an order' using errcode = '42501';
+  end if;
+  if jsonb_typeof(items) is distinct from 'array'
+     or jsonb_array_length(items) not between 1 and 50 then
+    raise exception 'An order needs between 1 and 50 different books' using errcode = '22023';
+  end if;
+  if jsonb_typeof(shipping) is distinct from 'object' then
+    raise exception 'Delivery details are missing' using errcode = '22023';
+  end if;
+  if (select count(*) from public.orders where user_id = v_user and status = 'pending_payment') >= 5 then
+    raise exception 'Too many orders are awaiting payment' using errcode = 'P0001', hint = 'pending_limit';
+  end if;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity
+    from jsonb_array_elements(items) as e
+  )
+  select
+    count(*),
+    count(distinct r.book_id),
+    count(*) filter (
+      where b.id is null or not b.is_visible or r.quantity is null
+         or r.quantity not between 1 and 10 or b.stock_quantity < r.quantity
+    )
+  into v_lines, v_distinct, v_unavailable
+  from req r
+  left join public.books b on b.id = r.book_id;
+
+  if v_distinct <> v_lines then
+    raise exception 'The same book appears twice' using errcode = '22023';
+  end if;
+  if v_unavailable > 0 then
+    raise exception 'Some books are no longer available in that quantity'
+      using errcode = 'P0001', hint = 'unavailable';
+  end if;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity
+    from jsonb_array_elements(items) as e
+  )
+  insert into public.orders (
+    user_id, item_count, subtotal, mrp_total,
+    shipping_name, shipping_phone, shipping_address,
+    shipping_city, shipping_state, shipping_pincode
+  )
+  select
+    v_user, sum(r.quantity), sum(b.price * r.quantity), sum(b.mrp * r.quantity),
+    btrim(shipping ->> 'name'), btrim(shipping ->> 'phone'), btrim(shipping ->> 'address'),
+    btrim(shipping ->> 'city'), btrim(shipping ->> 'state'), btrim(shipping ->> 'pincode')
+  from req r
+  join public.books b on b.id = r.book_id
+  returning id into v_order;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity
+    from jsonb_array_elements(items) as e
+  )
+  insert into public.order_items (order_id, book_id, sku, title, image_url, unit_price, unit_mrp, quantity)
+  select v_order, b.id, b.sku, b.title, b.image_urls[1], b.price, b.mrp, r.quantity
+  from req r
+  join public.books b on b.id = r.book_id;
+
+  return v_order;
+end;
+$$;
+
+revoke execute on function public.create_order(jsonb, jsonb) from public, anon;
+grant execute on function public.create_order(jsonb, jsonb) to authenticated;
+
+-- Lets a customer cancel their own order while it is still awaiting payment.
+create or replace function public.cancel_order(p_order uuid)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.orders
+  set status = 'cancelled'
+  where id = p_order and user_id = auth.uid() and status = 'pending_payment';
+  if not found then
+    raise exception 'This order can no longer be cancelled' using errcode = 'P0001';
+  end if;
+  return 'cancelled';
+end;
+$$;
+
+revoke execute on function public.cancel_order(uuid) from public, anon;
+grant execute on function public.cancel_order(uuid) to authenticated;
+
+-- Admin-only status changes. Marking an order paid takes the books out of stock
+-- (all or nothing); cancelling a paid order puts them back.
+create or replace function public.admin_set_order_status(p_order uuid, p_status text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_current text;
+  v_short integer;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+
+  select status into v_current from public.orders where id = p_order for update;
+  if v_current is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+
+  if not (
+       (v_current = 'pending_payment' and p_status in ('paid', 'cancelled'))
+    or (v_current = 'paid' and p_status in ('shipped', 'cancelled'))
+    or (v_current = 'shipped' and p_status = 'delivered')
+  ) then
+    raise exception 'An order that is % cannot become %', v_current, p_status using errcode = '22023';
+  end if;
+
+  if p_status = 'paid' then
+    select count(*) into v_short
+    from public.order_items i
+    join public.books b on b.id = i.book_id
+    where i.order_id = p_order and b.stock_quantity < i.quantity;
+    if v_short > 0 or exists (select 1 from public.order_items where order_id = p_order and book_id is null) then
+      raise exception 'Not enough stock to mark this order paid' using errcode = 'P0001', hint = 'stock';
+    end if;
+    update public.books b
+    set stock_quantity = b.stock_quantity - i.quantity
+    from public.order_items i
+    where i.order_id = p_order and b.id = i.book_id;
+  elsif p_status = 'cancelled' and v_current = 'paid' then
+    update public.books b
+    set stock_quantity = b.stock_quantity + i.quantity
+    from public.order_items i
+    where i.order_id = p_order and b.id = i.book_id;
+  end if;
+
+  update public.orders set status = p_status where id = p_order;
+  return p_status;
+end;
+$$;
+
+revoke execute on function public.admin_set_order_status(uuid, text) from public, anon;
+grant execute on function public.admin_set_order_status(uuid, text) to authenticated;
+
+
 -- Make the website's API see the new tables immediately.
 notify pgrst, 'reload schema';
 
@@ -439,21 +736,23 @@ commit;
 
 
 -- -----------------------------------------------------------------------------
--- 7. CHECK THE RESULT
+-- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: three rows
--- (book_internal, books, users), all with rls_enabled = true.
+-- The SQL Editor shows this table after the run. Expected: six rows
+-- (book_internal, books, order_items, orders, users, wishlist_items), all with
+-- rls_enabled = true.
 select
   t.tablename as table_name,
   t.rowsecurity as rls_enabled,
   (select count(*) from pg_policies p where p.schemaname = 'public' and p.tablename = t.tablename) as policies
 from pg_tables t
-where t.schemaname = 'public' and t.tablename in ('users', 'books', 'book_internal')
+where t.schemaname = 'public'
+  and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items')
 order by t.tablename;
 
 
 -- -----------------------------------------------------------------------------
--- 8. MAKE YOURSELF AN ADMIN (optional, do it once)
+-- 11. MAKE YOURSELF AN ADMIN (optional, do it once)
 -- -----------------------------------------------------------------------------
 -- Sign up on the website first, then remove the two dashes at the start of the
 -- three lines below, put your sign-in email in place of you@example.com, select

@@ -44,7 +44,7 @@ function SignUp() {
   const google = useGoogleSignIn();
 
   if (loading) return null;
-  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+  if (isAuthenticated) return <Navigate to="/" replace />;
 
   const fieldError = (field) => (error?.field === field ? error.message : undefined);
   const setValue = (key, value) => setForm((current) => ({ ...current, [key]: value }));

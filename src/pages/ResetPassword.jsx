@@ -50,7 +50,7 @@ function ResetPassword() {
     setSubmitting(true);
     try {
       await updatePassword(password);
-      navigate('/dashboard', { replace: true });
+      navigate('/', { replace: true });
     } catch (err) {
       setError({ field: null, message: updatePasswordErrorMessage(err) });
       setSubmitting(false);

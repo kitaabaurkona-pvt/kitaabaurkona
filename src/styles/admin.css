@@ -6,7 +6,7 @@
   --admin-control: #8c93a0;
   --admin-accent: #eaa800;
   --admin-accent-wash: #fff8e6;
-  --admin-focus: #b45309;
+  --admin-focus: #111111;
   --admin-danger: #ba1a1a;
   --admin-danger-ink: #93000a;
   --admin-danger-wash: #fff1f0;
@@ -15,19 +15,19 @@
 
   width: 100%;
   max-width: 40rem;
-  margin: 0 auto;
-  padding: 2rem max(1.25rem, env(safe-area-inset-right)) 3rem max(1.25rem, env(safe-area-inset-left));
   color: var(--admin-ink);
   font-family: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
 }
 
 .admin-title {
-  margin: 0 0 1.5rem;
-  font-size: 1.625rem;
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.02em;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--admin-line);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
 }
 
 .dropzone {
@@ -40,7 +40,7 @@
   min-height: 12rem;
   padding: 2rem 1.25rem;
   border: 2px dashed var(--admin-control);
-  border-radius: 0.75rem;
+  border-radius: 0;
   background: #ffffff;
   color: var(--admin-body);
   text-align: center;
@@ -60,7 +60,8 @@
 
 .dropzone:focus-within {
   border-color: var(--admin-focus);
-  box-shadow: 0 0 0 3px rgba(234, 168, 0, 0.35);
+  outline: 2px solid var(--admin-ink);
+  outline-offset: -2px;
 }
 
 @media (hover: hover) {
@@ -105,7 +106,7 @@
   margin: 1rem 0 0;
   padding: 0.75rem 0.875rem;
   border-left: 3px solid var(--admin-line);
-  border-radius: 0.25rem;
+  border-radius: 0;
   background: #f9fafb;
   color: var(--admin-body);
   font-size: 0.875rem;
@@ -176,7 +177,7 @@
   gap: 0.25rem 0.75rem;
   padding: 0.625rem 0.875rem;
   border: 1px solid var(--admin-line);
-  border-radius: 0.5rem;
+  border-radius: 0;
   color: var(--admin-body);
   overflow-wrap: anywhere;
 }
@@ -202,7 +203,7 @@
   margin-top: 1rem;
   padding: 0 1rem;
   border: 0;
-  border-radius: 0.5rem;
+  border-radius: 0;
   background: var(--admin-accent);
   color: var(--admin-ink);
   font: inherit;

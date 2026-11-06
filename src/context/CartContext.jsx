@@ -1,64 +1,95 @@
-import { createContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
+import { isUuid } from '../services/request';
+import { MAX_CART_LINES, MAX_QUANTITY } from '../utils/storeForm';
 
 export const CartContext = createContext(null);
 
-const CART_STORAGE_KEY = 'kitaab_cart';
+const STORAGE_KEY = 'kitaab_cart_v2';
 
-function loadCart() {
+// The cart only ever holds book ids and quantities. Prices, titles and stock are
+// always read fresh from the database, so editing localStorage cannot change a price.
+function sanitize(value) {
+  const clean = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return clean;
+  for (const [id, quantity] of Object.entries(value)) {
+    if (Object.keys(clean).length >= MAX_CART_LINES) break;
+    if (isUuid(id) && Number.isInteger(quantity) && quantity >= 1) clean[id] = Math.min(quantity, MAX_QUANTITY);
+  }
+  return clean;
+}
+
+function load() {
   try {
-    const stored = localStorage.getItem(CART_STORAGE_KEY);
-    return stored ? JSON.parse(stored) : [];
+    return sanitize(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}'));
   } catch {
-    return [];
+    return {};
   }
 }
 
 export function CartProvider({ children }) {
-  const [items, setItems] = useState(loadCart);
+  const [items, setItems] = useState(load);
 
-  // Persist to localStorage on every change
   useEffect(() => {
-    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items));
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    } catch {
+      // Storage can be unavailable (private mode); the cart still works for this visit.
+    }
   }, [items]);
 
-  const addItem = useCallback((book, quantity = 1) => {
-    setItems((prev) => {
-      const existing = prev.find((item) => item.id === book.id);
-      if (existing) {
-        return prev.map((item) =>
-          item.id === book.id
-            ? { ...item, quantity: item.quantity + quantity }
-            : item
-        );
-      }
-      return [...prev, { ...book, quantity }];
+  // Keep several open tabs in step.
+  useEffect(() => {
+    const onStorage = (event) => {
+      if (event.key === STORAGE_KEY) setItems(load());
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
+  const add = useCallback((bookId, quantity = 1, max = MAX_QUANTITY) => {
+    if (!isUuid(bookId)) return;
+    setItems((current) => {
+      if (!current[bookId] && Object.keys(current).length >= MAX_CART_LINES) return current;
+      const limit = Math.max(0, Math.min(max, MAX_QUANTITY));
+      const next = Math.min((current[bookId] ?? 0) + quantity, limit);
+      if (next < 1) return current;
+      return { ...current, [bookId]: next };
     });
   }, []);
 
-  const removeItem = useCallback((bookId) => {
-    setItems((prev) => prev.filter((item) => item.id !== bookId));
+  const setQuantity = useCallback((bookId, quantity) => {
+    setItems((current) => {
+      if (!(bookId in current)) return current;
+      if (quantity < 1) {
+        const { [bookId]: _removed, ...rest } = current;
+        return rest;
+      }
+      return { ...current, [bookId]: Math.min(quantity, MAX_QUANTITY) };
+    });
   }, []);
 
-  const updateQuantity = useCallback((bookId, quantity) => {
-    if (quantity <= 0) {
-      setItems((prev) => prev.filter((item) => item.id !== bookId));
-      return;
-    }
-    setItems((prev) =>
-      prev.map((item) =>
-        item.id === bookId ? { ...item, quantity } : item
-      )
-    );
+  const remove = useCallback((bookId) => {
+    setItems((current) => {
+      const { [bookId]: _removed, ...rest } = current;
+      return rest;
+    });
   }, []);
 
-  const clearCart = useCallback(() => {
-    setItems([]);
-  }, []);
+  const clear = useCallback(() => setItems({}), []);
 
-  const itemCount = items.reduce((sum, item) => sum + item.quantity, 0);
-  const total = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-
-  const value = { items, itemCount, total, addItem, removeItem, updateQuantity, clearCart };
+  const value = useMemo(() => {
+    const ids = Object.keys(items);
+    return {
+      items,
+      ids,
+      count: ids.reduce((sum, id) => sum + items[id], 0),
+      quantityOf: (bookId) => items[bookId] ?? 0,
+      add,
+      setQuantity,
+      remove,
+      clear,
+    };
+  }, [items, add, setQuantity, remove, clear]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

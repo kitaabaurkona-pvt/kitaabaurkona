@@ -28,7 +28,7 @@ function ForgotPassword() {
   }, [cooldown]);
 
   if (loading) return null;
-  if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+  if (isAuthenticated) return <Navigate to="/" replace />;
 
   async function send(address, isResend) {
     setSubmitting(true);

@@ -119,7 +119,7 @@ export function updatePasswordErrorMessage(error) {
 }
 
 // Only same-origin absolute paths are allowed, which blocks open redirects such as //evil.com.
-export function safeRedirect(path, fallback = '/dashboard') {
+export function safeRedirect(path, fallback = '/') {
   if (typeof path !== 'string') return fallback;
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return fallback;
   if (path.startsWith('/sign-in') || path.startsWith('/sign-up')) return fallback;

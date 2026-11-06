@@ -17,6 +17,7 @@ function AuthShell({ title, backTo, backLabel, children }) {
           </svg>
         </Link>
         <Link to="/" className="auth-brand">
+          <img src="/logo-64.png" alt="" width="28" height="28" />
           Kitaabaurkona
         </Link>
       </header>
