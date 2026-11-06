@@ -24,3 +24,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Catalogue exports contain cost prices; never commit them
+/listing_*.csv
+/*.csv
+
+# Local-only project notes
+/readmeforhelp.md
+/master.md

@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Link } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminRoute from './components/AdminRoute';
@@ -13,6 +13,7 @@ import ProductDetail from './pages/ProductDetail';
 import Cart from './pages/Cart';
 import Checkout from './pages/Checkout';
 import Profile from './pages/Profile';
+import BulkUpload from './pages/admin/BulkUpload';
 
 function App() {
   return (
@@ -40,7 +41,16 @@ function App() {
 
         {/* Admin only */}
         <Route path="/admin" element={<AdminRoute />}>
-          <Route index element={<div>Admin Area</div>} />
+          <Route
+            index
+            element={
+              <div>
+                <h1>Admin Area</h1>
+                <Link to="/admin/bulk-upload">Bulk upload books</Link>
+              </div>
+            }
+          />
+          <Route path="bulk-upload" element={<BulkUpload />} />
         </Route>
       </Route>
     </Routes>
