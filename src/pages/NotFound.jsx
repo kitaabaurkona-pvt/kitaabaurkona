@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { StateBlock } from '../components/store/States';
+import { SearchIcon } from '../components/icons';
 
 function NotFound() {
   useDocumentTitle('Page not found');
@@ -9,7 +10,7 @@ function NotFound() {
       <div className="page-head">
         <h1 className="page-title">Page not found</h1>
       </div>
-      <StateBlock title="There is no page at this address.">
+      <StateBlock title="There is no page at this address." icon={SearchIcon}>
         <Link to="/" className="btn btn-dark">
           Go to the store
         </Link>

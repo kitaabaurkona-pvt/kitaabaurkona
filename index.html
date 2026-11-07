@@ -8,6 +8,17 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/logo-32.png" />
     <link rel="apple-touch-icon" href="/logo-180.png" />
     <title>Kitaabaurkona</title>
+    <script>
+      // Apply the saved theme before the first paint so dark mode never flashes white.
+      (function () {
+        try {
+          var p = JSON.parse(localStorage.getItem('kitaab_prefs') || '{}');
+          var dark = p.theme === 'dark' || (p.theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          if (p.motion === 'reduce') document.documentElement.dataset.motion = 'reduce';
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

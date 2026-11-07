@@ -1,23 +1,23 @@
 .auth-page {
-  --auth-ink: #111827;
-  --auth-body: #374151;
-  --auth-muted: #6b7280;
-  --auth-line: #e5e7eb;
-  --auth-control: #8c93a0;
-  --auth-accent: #eaa800;
-  --auth-accent-hover: #d89b00;
-  --auth-accent-active: #c98e00;
-  --auth-focus: #111827;
-  --auth-focus-halo: rgba(234, 168, 0, 0.35);
-  --auth-danger: #ba1a1a;
-  --auth-danger-ink: #93000a;
-  --auth-danger-wash: #fff1f0;
+  --auth-ink: var(--c-ink);
+  --auth-body: var(--c-body);
+  --auth-muted: var(--c-muted);
+  --auth-line: var(--c-line);
+  --auth-control: var(--c-control);
+  --auth-accent: var(--c-accent);
+  --auth-accent-hover: var(--c-accent-hover);
+  --auth-accent-active: var(--c-accent-active);
+  --auth-focus: var(--c-carbon);
+  --auth-focus-halo: transparent;
+  --auth-danger: var(--c-danger);
+  --auth-danger-ink: var(--c-danger-ink);
+  --auth-danger-wash: var(--c-danger-wash);
 
   min-height: 100vh;
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background: var(--c-surface);
   color: var(--auth-ink);
   font-family: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 1rem;
@@ -38,7 +38,7 @@
   height: calc(3.5rem + env(safe-area-inset-top, 0px));
   padding: env(safe-area-inset-top, 0px) max(1.25rem, env(safe-area-inset-right)) 0
     max(1.25rem, env(safe-area-inset-left));
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--c-surface);
   border-bottom: 1px solid var(--auth-line);
   backdrop-filter: blur(8px);
 }
@@ -168,7 +168,7 @@
   padding: 0 0.875rem;
   border: 1px solid var(--auth-control);
   border-radius: 0;
-  background: #ffffff;
+  background: var(--c-surface);
   color: var(--auth-ink);
   font: inherit;
   appearance: none;
@@ -240,7 +240,7 @@
   height: 3rem;
   border: 1px solid var(--auth-control);
   border-radius: 0;
-  background: #ffffff;
+  background: var(--c-surface);
   overflow: hidden;
   transition: border-color 0.15s ease;
 }
@@ -257,7 +257,7 @@
   align-items: center;
   padding: 0 0.875rem;
   border-right: 1px solid var(--auth-control);
-  background: #f4f4f6;
+  background: var(--c-surface-alt);
   color: var(--auth-body);
   font-weight: 500;
   user-select: none;
@@ -305,7 +305,7 @@
   padding: 0 0.75rem;
   border: 1px solid var(--auth-control);
   border-radius: 0;
-  background: #ffffff;
+  background: var(--c-surface);
   color: var(--auth-ink);
   font-size: 0.9375rem;
   font-weight: 500;
@@ -315,7 +315,7 @@
 .auth-page .choice-input:checked + .choice-pill {
   border-color: var(--auth-ink);
   background: var(--auth-ink);
-  color: #ffffff;
+  color: var(--c-on-carbon);
 }
 
 .auth-page .choice-input:focus-visible + .choice-pill {
@@ -361,7 +361,7 @@
   }
 
   .auth-page .btn-secondary:hover {
-    background: #f4f4f6;
+    background: var(--c-surface-alt);
   }
 }
 
@@ -370,7 +370,7 @@
 }
 
 .auth-page .btn-secondary:active {
-  background: #e9e9ed;
+  background: var(--c-surface-press);
 }
 
 .auth-page .btn-primary:focus-visible,
@@ -394,7 +394,7 @@
   padding: 0 1rem;
   border: 1px solid var(--auth-control);
   border-radius: 0;
-  background: #ffffff;
+  background: var(--c-surface);
   color: var(--auth-ink);
   font: inherit;
   font-weight: 600;
@@ -441,7 +441,7 @@
 .auth-page .spinner {
   width: 1rem;
   height: 1rem;
-  border: 2px solid rgba(17, 24, 39, 0.3);
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
   border-top-color: var(--auth-ink);
   border-radius: 50%;
   animation: auth-spin 0.7s linear infinite;
@@ -515,11 +515,11 @@
 
 @media (min-width: 40rem) {
   .auth-page {
-    background: #f9fafb;
+    background: var(--c-surface-alt);
   }
 
   .auth-page .auth-header {
-    background: #ffffff;
+    background: var(--c-surface);
   }
 
   .auth-page .auth-main {
@@ -532,6 +532,6 @@
     padding: 2.5rem;
     border: 1px solid var(--auth-line);
     border-radius: 0;
-    background: #ffffff;
+    background: var(--c-surface);
   }
 }

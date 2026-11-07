@@ -5,13 +5,15 @@ import { useAsync } from '../hooks/useAsync';
 import { useCart } from '../hooks/useCart';
 import { useWishlist } from '../hooks/useWishlist';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { announce } from '../utils/announce';
+import { useToast } from '../hooks/useToast';
 import { coverOf, plural, stockLevel } from '../utils/format';
 import { MAX_QUANTITY } from '../utils/storeForm';
 import BookCover from '../components/store/BookCover';
 import PriceBlock from '../components/store/PriceBlock';
 import AddToCartButton from '../components/store/AddToCartButton';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { LinesSkeleton } from '../components/store/Skeletons';
+import { BookmarkIcon } from '../components/icons';
 
 function Wishlist() {
   useDocumentTitle('Wishlist');
@@ -19,6 +21,7 @@ function Wishlist() {
   const { forget } = useWishlist();
   const { add, quantityOf } = useCart();
   const [removeFailed, setRemoveFailed] = useState(null);
+  const { show } = useToast();
   const books = data ?? [];
   const addable = books.filter((book) => book.stock_quantity > 0 && quantityOf(book.id) < Math.min(book.stock_quantity, MAX_QUANTITY));
 
@@ -28,7 +31,7 @@ function Wishlist() {
       await removeFromWishlist(book.id);
       forget(book.id);
       setData(books.filter((b) => b.id !== book.id));
-      announce(`${book.title} removed from wishlist`);
+      show({ message: `Removed “${book.title}” from your wishlist` });
     } catch {
       setRemoveFailed(book.id);
     }
@@ -36,7 +39,7 @@ function Wishlist() {
 
   function addAll() {
     for (const book of addable) add(book.id, 1, Math.min(book.stock_quantity, MAX_QUANTITY));
-    announce(`${plural(addable.length, 'book')} added to cart`);
+    show({ message: `Added ${plural(addable.length, 'book')} to your cart`, action: { label: 'View cart', to: '/cart' } });
   }
 
   return (
@@ -46,10 +49,10 @@ function Wishlist() {
         {books.length > 0 && <p className="page-meta">{plural(books.length, 'book')} saved</p>}
       </div>
 
-      {loading && !data && <Loading label="Loading your wishlist…" />}
+      {loading && !data && <LinesSkeleton label="Loading your wishlist…" />}
       {error && <LoadError onRetry={retry} what="your wishlist" />}
       {data && books.length === 0 && (
-        <StateBlock title="You haven't saved any books yet.">
+        <StateBlock title="You haven't saved any books yet." icon={BookmarkIcon}>
           <Link to="/books" className="btn btn-dark">
             Browse books
           </Link>

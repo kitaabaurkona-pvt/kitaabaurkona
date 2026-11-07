@@ -114,6 +114,9 @@ export function updatePasswordErrorMessage(error) {
   if (isRateLimited(error)) return 'Too many attempts. Try again in a few minutes.';
   if (isNetworkError(error)) return 'Unable to reach the server. Check your connection and try again.';
   if (error?.code === 'same_password') return 'Choose a password different from your current one.';
+  if (error?.code === 'reauthentication_needed' || error?.code === 'reauthentication_not_valid') {
+    return 'For security, sign out and sign in again, then change your password.';
+  }
   if (error?.code === 'weak_password') return 'Choose a stronger password.';
   return 'Unable to update your password. Try again.';
 }

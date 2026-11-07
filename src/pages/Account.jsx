@@ -7,8 +7,10 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { getProfile, updateProfile } from '../services/profileService';
 import { listOrders } from '../services/orderService';
 import { formatCount } from '../utils/format';
+import { useToast } from '../hooks/useToast';
 import { GENDER_OPTIONS, normalizeName } from '../utils/authForm';
-import { LoadError, Loading } from '../components/store/States';
+import { LoadError } from '../components/store/States';
+import { LinesSkeleton } from '../components/store/Skeletons';
 
 const GENDER_LABELS = Object.fromEntries(GENDER_OPTIONS.map((o) => [o.value, o.label]));
 
@@ -115,6 +117,7 @@ function Account() {
   const [editing, setEditing] = useState(false);
   const [notice, setNotice] = useState(null);
   const [signingOut, setSigningOut] = useState(false);
+  const { show } = useToast();
 
   async function handleSignOut() {
     if (signingOut) return;
@@ -161,7 +164,7 @@ function Account() {
           </p>
         )}
 
-        {profile.loading && <Loading label="Loading your details…" />}
+        {profile.loading && <LinesSkeleton count={2} label="Loading your details…" />}
         {profile.error && <LoadError onRetry={profile.retry} what="your details" />}
         {profile.data !== undefined && !editing && (
           <section className="stack-sm" aria-labelledby="details-heading">
@@ -191,7 +194,7 @@ function Account() {
             onSaved={(saved) => {
               profile.setData(saved);
               setEditing(false);
-              setNotice({ tone: 'ok', text: 'Your details were saved.' });
+              show({ message: 'Your details were saved.' });
             }}
           />
         )}
@@ -202,6 +205,9 @@ function Account() {
               Open admin panel
             </Link>
           )}
+          <Link to="/settings" className="btn btn-outline">
+            Settings
+          </Link>
           <button type="button" className="btn btn-outline" aria-busy={signingOut} onClick={handleSignOut}>
             {signingOut ? 'Signing out…' : 'Sign out'}
           </button>

@@ -3,6 +3,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/auth/AuthShell';
 import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
+import Splash from '../components/Splash';
 import {
   AuthDivider,
   ChoiceGroup,
@@ -43,7 +44,7 @@ function SignUp() {
   const [pendingEmail, setPendingEmail] = useState(null);
   const google = useGoogleSignIn();
 
-  if (loading) return null;
+  if (loading) return <Splash />;
   if (isAuthenticated) return <Navigate to="/" replace />;
 
   const fieldError = (field) => (error?.field === field ? error.message : undefined);

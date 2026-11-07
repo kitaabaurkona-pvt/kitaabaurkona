@@ -3,6 +3,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/auth/AuthShell';
 import { SubmitButton, TextField } from '../components/auth/fields';
+import Splash from '../components/Splash';
 import {
   RESEND_COOLDOWN_SECONDS,
   focusField,
@@ -27,7 +28,7 @@ function ForgotPassword() {
     return () => clearTimeout(timer);
   }, [cooldown]);
 
-  if (loading) return null;
+  if (loading) return <Splash />;
   if (isAuthenticated) return <Navigate to="/" replace />;
 
   async function send(address, isResend) {

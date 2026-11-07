@@ -50,6 +50,12 @@ export async function updatePassword(password) {
   await supabase.auth.signOut({ scope: 'others' });
 }
 
+// Ends every session for this account, on all devices (Supabase revokes all refresh tokens).
+export async function signOutEverywhere() {
+  const { error } = await supabase.auth.signOut({ scope: 'global' });
+  if (error) throw error;
+}
+
 export async function signOut() {
   const { error } = await supabase.auth.signOut();
   if (error) throw error;

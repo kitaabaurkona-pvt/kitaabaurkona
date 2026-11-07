@@ -3,9 +3,11 @@ import { useSearchParams } from 'react-router-dom';
 import { adminErrorMessage, adminListOrders, adminSetOrderStatus, ADMIN_PAGE_SIZE, NEXT_STATUSES } from '../../services/adminService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useToast } from '../../hooks/useToast';
 import { formatDate, formatOrderNumber, formatPrice, ORDER_STATUS_LABELS, plural } from '../../utils/format';
 import OrderStatus from '../../components/store/OrderStatus';
-import { LoadError, Loading, StateBlock } from '../../components/store/States';
+import { LoadError, StateBlock } from '../../components/store/States';
+import { LinesSkeleton } from '../../components/store/Skeletons';
 
 const ACTION_LABELS = {
   paid: 'Mark paid',
@@ -19,6 +21,7 @@ function OrderActions({ order, onChanged }) {
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [error, setError] = useState(null);
   const busy = useRef(false);
+  const { show } = useToast();
   const next = NEXT_STATUSES[order.status] ?? [];
   if (next.length === 0) return null;
 
@@ -29,6 +32,7 @@ function OrderActions({ order, onChanged }) {
     setError(null);
     try {
       await adminSetOrderStatus(order.id, status);
+      show({ message: `${formatOrderNumber(order.order_number)} is now ${ORDER_STATUS_LABELS[status].toLowerCase()}` });
       onChanged();
     } catch (err) {
       setError(adminErrorMessage(err));
@@ -100,7 +104,7 @@ function AdminOrders() {
       </div>
 
       {result.data && <p className="page-meta" aria-live="polite">{plural(total, 'order')}</p>}
-      {result.loading && !result.data && <Loading label="Loading orders…" />}
+      {result.loading && !result.data && <LinesSkeleton count={3} label="Loading orders…" />}
       {result.error && <LoadError onRetry={result.retry} what="orders" />}
       {result.data && orders.length === 0 && <StateBlock title="No orders here yet." />}
 

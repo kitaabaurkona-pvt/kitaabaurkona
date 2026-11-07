@@ -20,11 +20,22 @@ export async function uploadBooks(books) {
 }
 
 // Never shows database wording in the page; the full error goes to the console.
+// Known causes get a specific instruction; anything else shows its error code so it
+// can be looked up.
 export function uploadErrorMessage(error) {
-  if (error?.code === '42501' || error?.status === 403) return "You don't have permission to upload books.";
-  if (error?.code === 'PGRST301' || error?.status === 401) return 'Your session has expired. Sign in again, then retry the upload.';
+  const code = error?.code;
+  if (code === '42501' || error?.status === 403) return "You don't have permission to upload books.";
+  if (code === 'PGRST301' || error?.status === 401) return 'Your session has expired. Sign in again, then retry the upload.';
   if (error?.status === 0 || /fetch|network/i.test(error?.details?.message ?? '')) {
     return 'Unable to reach the server. Check your connection and try again.';
   }
-  return 'Upload failed. Please check the data format or your permissions.';
+  if (code === 'PGRST202' || code === '42883' || code === '42703' || code === 'PGRST204' || code === '42P01') {
+    return 'The database is not set up for this version of the site. Run the latest supabase/schema.sql in the Supabase SQL Editor, then upload again.';
+  }
+  if (code === '23505') return 'A Product Code in this file already belongs to a book with a different SKU. Fix the file and upload again.';
+  if (code === '23514' || code === '22P02' || code === '22023') return 'A row breaks a catalogue rule (for example a price above MRP). Fix the file and upload again.';
+  if (code === '57014') return 'The upload took too long. Split the file into smaller files.';
+  if (error?.status === 413) return 'The file is too large to send at once. Split it into smaller files.';
+  const shown = /^[A-Z0-9]{1,10}$/i.test(String(code ?? error?.status ?? '')) ? String(code ?? error?.status) : 'unknown';
+  return `Upload failed (error ${shown}). Please check the data format or your permissions.`;
 }

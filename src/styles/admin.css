@@ -1,20 +1,19 @@
 .admin-page {
-  --admin-ink: #111827;
-  --admin-body: #374151;
-  --admin-muted: #6b7280;
-  --admin-line: #e5e7eb;
-  --admin-control: #8c93a0;
-  --admin-accent: #eaa800;
-  --admin-accent-wash: #fff8e6;
-  --admin-focus: #111111;
-  --admin-danger: #ba1a1a;
-  --admin-danger-ink: #93000a;
-  --admin-danger-wash: #fff1f0;
-  --admin-ok-ink: #1d5b2c;
-  --admin-ok-wash: #edf7ef;
+  --admin-ink: var(--c-ink);
+  --admin-body: var(--c-body);
+  --admin-muted: var(--c-muted);
+  --admin-line: var(--c-line);
+  --admin-control: var(--c-control);
+  --admin-accent: var(--c-accent);
+  --admin-accent-wash: var(--c-tint);
+  --admin-focus: var(--c-carbon);
+  --admin-danger: var(--c-danger);
+  --admin-danger-ink: var(--c-danger-ink);
+  --admin-danger-wash: var(--c-danger-wash);
+  --admin-ok-ink: var(--c-ok-ink);
+  --admin-ok-wash: var(--c-ok-wash);
 
   width: 100%;
-  max-width: 40rem;
   color: var(--admin-ink);
   font-family: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
@@ -41,7 +40,7 @@
   padding: 2rem 1.25rem;
   border: 2px dashed var(--admin-control);
   border-radius: 0;
-  background: #ffffff;
+  background: var(--c-surface);
   color: var(--admin-body);
   text-align: center;
   cursor: pointer;
@@ -107,14 +106,14 @@
   padding: 0.75rem 0.875rem;
   border-left: 3px solid var(--admin-line);
   border-radius: 0;
-  background: #f9fafb;
+  background: var(--c-surface-alt);
   color: var(--admin-body);
   font-size: 0.875rem;
   overflow-wrap: anywhere;
 }
 
 .upload-status[data-tone='ok'] {
-  border-left-color: #2e7d32;
+  border-left-color: var(--c-ok);
   background: var(--admin-ok-wash);
   color: var(--admin-ok-ink);
 }
@@ -129,7 +128,7 @@
   flex: none;
   width: 1rem;
   height: 1rem;
-  border: 2px solid rgba(17, 24, 39, 0.25);
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
   border-top-color: var(--admin-ink);
   border-radius: 50%;
   animation: admin-spin 0.7s linear infinite;
@@ -216,12 +215,12 @@
 
 @media (hover: hover) {
   .admin-button:hover {
-    background: #d89b00;
+    background: var(--c-accent-hover);
   }
 }
 
 .admin-button:active {
-  background: #c98e00;
+  background: var(--c-accent-active);
 }
 
 .admin-button:focus-visible {
@@ -230,7 +229,7 @@
 }
 
 .admin-button[aria-disabled='true'] {
-  background: #d89b00;
+  background: var(--c-accent-hover);
   cursor: progress;
 }
 
@@ -253,4 +252,58 @@
   .admin-button {
     transition: none;
   }
+}
+
+.preview {
+  margin-top: 24px;
+}
+
+.preview-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--admin-line);
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.preview-table th,
+.preview-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--admin-line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.preview-table th {
+  background: var(--c-carbon);
+  color: var(--c-on-carbon);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.preview-table tbody tr:nth-child(even) {
+  background: var(--c-surface-alt);
+}
+
+.preview-table td:nth-child(2) {
+  min-width: 220px;
+}
+
+.preview-table .num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.preview-table img {
+  width: 36px;
+  height: 54px;
+  object-fit: cover;
+  border: 1px solid var(--admin-line);
+}
+
+.admin-button {
+  color: var(--c-on-accent);
 }

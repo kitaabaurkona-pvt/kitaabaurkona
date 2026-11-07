@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
+import { motion } from 'motion/react';
 import SiteHeader from './SiteHeader';
 import SiteFooter from './SiteFooter';
-import BottomNav from './BottomNav';
+import { PageSkeleton } from '../store/Skeletons';
 import '../../styles/store.css';
 
 function Layout() {
@@ -19,11 +20,18 @@ function Layout() {
       </a>
       <SiteHeader />
       <main id="main" className="site-main" tabIndex={-1}>
-        <Outlet />
+        <motion.div
+          key={pathname}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.32, ease: [0.2, 0.8, 0.2, 1] }}
+        >
+          <Suspense fallback={<PageSkeleton />}>
+            <Outlet />
+          </Suspense>
+        </motion.div>
       </main>
       <SiteFooter />
-      <BottomNav />
-      <div id="live-region" className="visually-hidden" role="status" aria-live="polite" />
     </div>
   );
 }

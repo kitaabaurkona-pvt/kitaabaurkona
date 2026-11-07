@@ -3,7 +3,8 @@ import { getAdminStats } from '../../services/adminService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { formatCount } from '../../utils/format';
-import { LoadError, Loading } from '../../components/store/States';
+import { LoadError } from '../../components/store/States';
+import { StatsSkeleton } from '../../components/store/Skeletons';
 
 function Stat({ to, value, label }) {
   return (
@@ -18,7 +19,7 @@ function AdminDashboard() {
   useDocumentTitle('Admin');
   const { data: s, loading, error, retry } = useAsync(() => getAdminStats(), []);
 
-  if (loading) return <Loading label="Loading figures…" />;
+  if (loading) return <div className="stack"><StatsSkeleton /><StatsSkeleton /></div>;
   if (error) return <LoadError onRetry={retry} what="the dashboard" />;
 
   return (

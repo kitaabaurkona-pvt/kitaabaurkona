@@ -7,9 +7,14 @@ export function Loading({ label = 'Loading…' }) {
   );
 }
 
-export function StateBlock({ title, children }) {
+export function StateBlock({ title, icon: Icon, children }) {
   return (
     <div className="state">
+      {Icon && (
+        <span className="state-icon" aria-hidden="true">
+          <Icon size={26} />
+        </span>
+      )}
       <p className="state-title">{title}</p>
       {children && <div className="state-actions">{children}</div>}
     </div>

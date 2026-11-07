@@ -10,7 +10,9 @@ import { createOrder } from '../services/orderService';
 import { formatPrice } from '../utils/format';
 import { INDIAN_STATES, normalizeShipping, orderErrorMessage, validateShipping } from '../utils/storeForm';
 import CartSummary from '../components/store/CartSummary';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { LinesSkeleton } from '../components/store/Skeletons';
+import { BagIcon } from '../components/icons';
 
 function Field({ id, label, error, children }) {
   return (
@@ -159,14 +161,14 @@ function Checkout() {
   let content;
   if (ids.length === 0) {
     content = (
-      <StateBlock title="Your cart is empty.">
+      <StateBlock title="Your cart is empty." icon={BagIcon}>
         <Link to="/books" className="btn btn-dark">
           Browse books
         </Link>
       </StateBlock>
     );
   } else if ((cart.loading && !cart.data) || profile.loading) {
-    content = <Loading label="Preparing checkout…" />;
+    content = <LinesSkeleton count={3} label="Preparing checkout…" />;
   } else if (cart.error) {
     content = <LoadError onRetry={cart.retry} what="your cart" />;
   } else if (cart.blocked || cart.totals.count === 0) {

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { useWishlist } from '../../hooks/useWishlist';
-import { announce } from '../../utils/announce';
+import { useToast } from '../../hooks/useToast';
 import { BookmarkIcon } from '../icons';
 
 // Saves a book to the signed-in user's wishlist. Visitors are taken to sign in and
@@ -13,6 +13,7 @@ function SaveButton({ bookId, title, className = 'save-button', withLabel = fals
   const navigate = useNavigate();
   const location = useLocation();
   const [failed, setFailed] = useState(false);
+  const { show } = useToast();
   const saved = has(bookId);
 
   async function handleClick() {
@@ -23,10 +24,12 @@ function SaveButton({ bookId, title, className = 'save-button', withLabel = fals
     setFailed(false);
     try {
       const nowSaved = await toggle(bookId);
-      if (nowSaved !== null) announce(nowSaved ? `${title} saved to wishlist` : `${title} removed from wishlist`);
+      if (nowSaved !== null) {
+        show(nowSaved ? { message: `Saved “${title}” to your wishlist`, action: { label: 'View', to: '/wishlist' } } : { message: `Removed “${title}” from your wishlist` });
+      }
     } catch {
       setFailed(true);
-      announce('Could not update your wishlist. Try again.');
+      show({ message: 'Could not update your wishlist. Try again.', tone: 'error' });
     }
   }
 

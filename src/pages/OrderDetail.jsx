@@ -4,10 +4,12 @@ import { cancelOrder, getOrder } from '../services/orderService';
 import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { formatDate, formatOrderNumber, formatPrice } from '../utils/format';
+import { useToast } from '../hooks/useToast';
 import BookCover from '../components/store/BookCover';
 import CartSummary from '../components/store/CartSummary';
 import OrderStatus from '../components/store/OrderStatus';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { LinesSkeleton } from '../components/store/Skeletons';
 
 function CancelOrder({ orderId, onCancelled }) {
   const [confirming, setConfirming] = useState(false);
@@ -65,12 +67,13 @@ function OrderDetail() {
   const { id } = useParams();
   const location = useLocation();
   const { data: order, loading, error, retry } = useAsync(() => getOrder(id), [id]);
+  const { show } = useToast();
   useDocumentTitle(order ? formatOrderNumber(order.order_number) : 'Order');
 
   if (loading && !order) {
     return (
       <div className="container page">
-        <Loading label="Loading order…" />
+        <LinesSkeleton count={2} label="Loading order…" />
       </div>
     );
   }
@@ -167,7 +170,15 @@ function OrderDetail() {
                 <p>This order is waiting for payment.</p>
               </div>
             )}
-            {pending && <CancelOrder orderId={order.id} onCancelled={retry} />}
+            {pending && (
+              <CancelOrder
+                orderId={order.id}
+                onCancelled={() => {
+                  show({ message: `Order ${formatOrderNumber(order.order_number)} cancelled` });
+                  retry();
+                }}
+              />
+            )}
           </CartSummary>
           <Link to="/orders" className="btn btn-outline btn-block">
             All orders

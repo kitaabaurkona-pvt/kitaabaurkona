@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { StateBlock } from '../components/store/States';
+import { ShieldIcon } from '../components/icons';
 
 function Forbidden() {
   useDocumentTitle('No access');
@@ -9,7 +10,7 @@ function Forbidden() {
       <div className="page-head">
         <h1 className="page-title">403: No access</h1>
       </div>
-      <StateBlock title="You don't have permission to view this page.">
+      <StateBlock title="You don't have permission to view this page." icon={ShieldIcon}>
         <Link to="/" className="btn btn-dark">
           Go to the store
         </Link>

@@ -6,12 +6,14 @@ import { useAuth } from '../hooks/useAuth';
 import { useCart } from '../hooks/useCart';
 import { useWishlist } from '../hooks/useWishlist';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { announce } from '../utils/announce';
+import { useToast } from '../hooks/useToast';
 import { coverOf, formatPrice, plural, stockLevel } from '../utils/format';
 import BookCover from '../components/store/BookCover';
 import PriceBlock from '../components/store/PriceBlock';
 import QuantityStepper from '../components/store/QuantityStepper';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { LinesSkeleton } from '../components/store/Skeletons';
+import { BagIcon } from '../components/icons';
 
 function CartLine({ line }) {
   const { setQuantity, remove } = useCart();
@@ -20,6 +22,7 @@ function CartLine({ line }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [saveFailed, setSaveFailed] = useState(false);
+  const { show } = useToast();
   const { book } = line;
 
   async function saveForLater() {
@@ -30,7 +33,7 @@ function CartLine({ line }) {
     try {
       if (!has(book.id)) await toggle(book.id);
       remove(book.id);
-      announce(`${book.title} moved to your wishlist`);
+      show({ message: `Moved “${book.title}” to your wishlist`, action: { label: 'View', to: '/wishlist' } });
     } catch {
       setSaveFailed(true);
     }
@@ -119,13 +122,13 @@ function Cart() {
       </div>
 
       {ids.length === 0 && (
-        <StateBlock title="Your cart is empty.">
+        <StateBlock title="Your cart is empty." icon={BagIcon}>
           <Link to="/books" className="btn btn-dark">
             Browse books
           </Link>
         </StateBlock>
       )}
-      {ids.length > 0 && loading && !data && <Loading label="Loading your cart…" />}
+      {ids.length > 0 && loading && !data && <LinesSkeleton count={Math.min(ids.length, 4)} label="Loading your cart…" />}
       {ids.length > 0 && error && <LoadError onRetry={retry} what="your cart" />}
       {ids.length > 0 && data && (
         <div className="two-col">

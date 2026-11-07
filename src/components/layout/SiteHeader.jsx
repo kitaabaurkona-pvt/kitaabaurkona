@@ -1,8 +1,10 @@
 import { Link, NavLink } from 'react-router-dom';
+import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
 import { useCart } from '../../hooks/useCart';
 import { formatCount } from '../../utils/format';
 import { BagIcon, SearchIcon, UserIcon } from '../icons';
+import MobileMenu from './MobileMenu';
 
 function SiteHeader() {
   const { isAuthenticated, role } = useAuth();
@@ -11,6 +13,7 @@ function SiteHeader() {
   return (
     <header className="site-header">
       <div className="container site-header-row">
+        <MobileMenu />
         <Link to="/" className="brand">
           <img src="/logo-64.png" alt="" width="32" height="32" />
           <span>Kitaabaurkona</span>
@@ -33,11 +36,30 @@ function SiteHeader() {
           </Link>
           <Link to="/cart" className="icon-button" aria-label={`Cart, ${count} ${count === 1 ? 'item' : 'items'}`}>
             <BagIcon />
-            {count > 0 && (
-              <span className="count-badge" aria-hidden="true">
-                {count > 99 ? '99+' : formatCount(count)}
-              </span>
-            )}
+            <AnimatePresence>
+              {count > 0 && (
+                <motion.span
+                  key="badge"
+                  className="count-badge"
+                  aria-hidden="true"
+                  initial={{ scale: 0.4, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.4, opacity: 0 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                >
+                  {/* Re-keyed on every change so the number pops, while the badge itself stays put */}
+                  <motion.span
+                    key={count}
+                    className="count-badge-value"
+                    initial={{ scale: 1.6 }}
+                    animate={{ scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 600, damping: 20 }}
+                  >
+                    {count > 99 ? '99+' : formatCount(count)}
+                  </motion.span>
+                </motion.span>
+              )}
+            </AnimatePresence>
           </Link>
           {isAuthenticated ? (
             <Link to="/account" className="icon-button" aria-label="Account">

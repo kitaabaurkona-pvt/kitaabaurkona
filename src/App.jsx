@@ -1,3 +1,4 @@
+import { lazy } from 'react';
 import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -18,11 +19,15 @@ import Wishlist from './pages/Wishlist';
 import Account from './pages/Account';
 import Forbidden from './pages/Forbidden';
 import NotFound from './pages/NotFound';
-import AdminLayout from './pages/admin/AdminLayout';
-import AdminDashboard from './pages/admin/AdminDashboard';
-import AdminBooks from './pages/admin/AdminBooks';
-import AdminOrders from './pages/admin/AdminOrders';
-import BulkUpload from './pages/admin/BulkUpload';
+
+// Pages most shoppers never open are split into their own files and loaded on demand.
+const Settings = lazy(() => import('./pages/Settings'));
+const Terms = lazy(() => import('./pages/Terms'));
+const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'));
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
+const AdminBooks = lazy(() => import('./pages/admin/AdminBooks'));
+const AdminOrders = lazy(() => import('./pages/admin/AdminOrders'));
+const BulkUpload = lazy(() => import('./pages/admin/BulkUpload'));
 
 function LegacyBookRedirect() {
   const { id } = useParams();
@@ -45,6 +50,7 @@ function App() {
         <Route path="/books/:id" element={<BookDetail />} />
         <Route path="/offers" element={<Offers />} />
         <Route path="/cart" element={<Cart />} />
+        <Route path="/terms" element={<Terms />} />
         <Route path="/403" element={<Forbidden />} />
 
         {/* Signed-in users */}
@@ -54,6 +60,7 @@ function App() {
           <Route path="/orders/:id" element={<OrderDetail />} />
           <Route path="/wishlist" element={<Wishlist />} />
           <Route path="/account" element={<Account />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
 
         {/* Admins only (the database enforces this as well) */}

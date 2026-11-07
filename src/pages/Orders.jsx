@@ -5,8 +5,10 @@ import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { formatDate, formatOrderNumber, formatPrice, ORDER_STATUS_LABELS, plural } from '../utils/format';
 import BookCover from '../components/store/BookCover';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { LinesSkeleton } from '../components/store/Skeletons';
 import OrderStatus from '../components/store/OrderStatus';
+import { ReceiptIcon } from '../components/icons';
 
 function Orders() {
   useDocumentTitle('Orders');
@@ -23,10 +25,10 @@ function Orders() {
         {orders && orders.length > 0 && <p className="page-meta">{plural(orders.length, 'order')}</p>}
       </div>
 
-      {loading && <Loading label="Loading your orders…" />}
+      {loading && <LinesSkeleton label="Loading your orders…" />}
       {error && <LoadError onRetry={retry} what="your orders" />}
       {orders && orders.length === 0 && (
-        <StateBlock title="You haven't placed any orders yet.">
+        <StateBlock title="You haven't placed any orders yet." icon={ReceiptIcon}>
           <Link to="/books" className="btn btn-dark">
             Browse books
           </Link>

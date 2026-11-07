@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import Papa from 'papaparse';
+import { parseCsvFile } from '../../utils/parseCsvFile';
 import { REQUIRED_COLUMNS, sanitizeCatalogue } from '../../utils/catalogueSanitizer';
 import { MAX_BOOKS_PER_UPLOAD, uploadBooks, uploadErrorMessage } from '../../services/catalogueService';
 import '../../styles/admin.css';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { formatPrice } from '../../utils/format';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 // Browsers report CSV files under several MIME types (and Windows often reports none).
 const ACCEPTED_TYPES = ['text/csv', 'application/vnd.ms-excel', 'text/plain', ''];
 const MAX_LISTED_SKIPS = 50;
+const PREVIEW_ROWS = 8;
 
 function validateFile(file) {
   if (!/\.csv$/i.test(file.name) || !ACCEPTED_TYPES.includes(file.type)) return 'Choose a .csv file.';
@@ -123,21 +125,23 @@ function BulkUpload() {
     const id = ++parseId.current;
     setStatus({ state: 'working', message: `Reading ${file.name}…` });
 
-    Papa.parse(file, {
-      worker: true,
-      header: false,
-      skipEmptyLines: 'greedy',
-      complete: (results) => {
+    parseCsvFile(file)
+      .then((data) => {
         if (id !== parseId.current) return;
-        processRows(id, file.name, results.data).catch(() => {
+        return processRows(id, file.name, data).catch(() => {
           if (id === parseId.current) setStatus({ state: 'error', message: `Unable to check ${file.name}.` });
         });
-      },
-      error: () => {
+      })
+      .catch((error) => {
         if (id !== parseId.current) return;
-        setStatus({ state: 'error', message: `Unable to read ${file.name}.` });
-      },
-    });
+        setStatus({
+          state: 'error',
+          message:
+            error?.message === 'timeout'
+              ? `Reading ${file.name} took too long. Try a smaller file.`
+              : `Unable to read ${file.name}. Check that it is a valid CSV file.`,
+        });
+      });
   }
 
   async function handleBulkUpload() {
@@ -263,6 +267,48 @@ function BulkUpload() {
           {isUploading && <span className="upload-spinner" aria-hidden="true" />}
           {isUploading ? 'Uploading…' : `Upload ${plural(books.length, 'book')}`}
         </button>
+      )}
+
+      {books && (
+        <section className="preview" aria-labelledby="preview-heading">
+          <h3 id="preview-heading" className="skipped-title">
+            Preview {books.length > PREVIEW_ROWS ? `(first ${PREVIEW_ROWS} of ${plural(books.length, 'book')})` : ''}
+          </h3>
+          <div className="preview-scroll">
+            <table className="preview-table">
+              <thead>
+                <tr>
+                  <th scope="col">Cover</th>
+                  <th scope="col">Title</th>
+                  <th scope="col">SKU</th>
+                  <th scope="col">Price</th>
+                  <th scope="col">MRP</th>
+                  <th scope="col">Stock</th>
+                  <th scope="col">Images</th>
+                </tr>
+              </thead>
+              <tbody>
+                {books.slice(0, PREVIEW_ROWS).map((book) => (
+                  <tr key={book.sku}>
+                    <td>
+                      {book.image_urls[0] ? (
+                        <img src={book.image_urls[0]} alt="" width="36" height="54" loading="lazy" referrerPolicy="no-referrer" />
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td>{book.title}</td>
+                    <td>{book.sku}</td>
+                    <td className="num">{formatPrice(book.price)}</td>
+                    <td className="num">{formatPrice(book.mrp)}</td>
+                    <td className="num">{book.stock_quantity}</td>
+                    <td className="num">{book.image_urls.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {uploadStatus && (

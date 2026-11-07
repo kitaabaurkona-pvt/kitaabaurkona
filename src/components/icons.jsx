@@ -93,3 +93,47 @@ export const ArrowLeftIcon = (p) => (
     <path d="M19 12H5M11 6l-6 6 6 6" />
   </Icon>
 );
+
+export const MenuIcon = (p) => (
+  <Icon {...p}>
+    <path d="M3.5 6.5h17M3.5 12h17M3.5 17.5h17" />
+  </Icon>
+);
+
+export const CloseIcon = (p) => (
+  <Icon {...p}>
+    <path d="M6 6l12 12M18 6L6 18" />
+  </Icon>
+);
+
+export const SettingsIcon = (p) => (
+  <Icon {...p}>
+    <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+    <path d="M14 4.5v5h4v-5zM6 14.5v5h4v-5z" />
+  </Icon>
+);
+
+export const FileIcon = (p) => (
+  <Icon {...p}>
+    <path d="M5.5 3.5h9l4 4v13h-13z" />
+    <path d="M14.5 3.5v4h4M8.5 12.5h7M8.5 16h7" />
+  </Icon>
+);
+
+export const ShieldIcon = (p) => (
+  <Icon {...p}>
+    <path d="M12 3.5l7.5 3v6c0 4-3.2 7-7.5 8.5-4.3-1.5-7.5-4.5-7.5-8.5v-6z" />
+  </Icon>
+);
+
+export const LogoutIcon = (p) => (
+  <Icon {...p}>
+    <path d="M13.5 4.5h-8v15h8M10 12h10.5M17 8.5l3.5 3.5-3.5 3.5" />
+  </Icon>
+);
+
+export const UploadIcon = (p) => (
+  <Icon {...p}>
+    <path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M4.5 15v4.5h15V15" />
+  </Icon>
+);

@@ -5,7 +5,9 @@ import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { plural } from '../utils/format';
 import BookCard from '../components/store/BookCard';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { BookGridSkeleton } from '../components/store/Skeletons';
+import { SearchIcon } from '../components/icons';
 
 function Books() {
   useDocumentTitle('Books');
@@ -155,10 +157,10 @@ function Books() {
       )}
 
       <div className="results">
-        {first.loading && <Loading label="Loading books…" />}
+        {first.loading && <BookGridSkeleton />}
         {first.error && <LoadError onRetry={first.retry} what="books" />}
         {first.data && books.length === 0 && (
-          <StateBlock title={filtered ? 'No books match these filters.' : 'There are no books in the store yet.'}>
+          <StateBlock title={filtered ? 'No books match these filters.' : 'There are no books in the store yet.'} icon={filtered ? SearchIcon : undefined}>
             {filtered && (
               <button type="button" className="btn btn-dark" onClick={() => setParams({}, { replace: true })}>
                 Clear filters
@@ -169,7 +171,7 @@ function Books() {
         {books.length > 0 && !first.loading && (
           <ul className="book-grid">
             {books.map((book, index) => (
-              <li key={book.id}>
+              <li key={book.id} className="rise" style={{ '--i': index % 24 }}>
                 <BookCard book={book} eager={index < 4} />
               </li>
             ))}

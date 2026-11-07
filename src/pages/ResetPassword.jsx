@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import AuthShell from '../components/auth/AuthShell';
 import { PasswordField, SubmitButton } from '../components/auth/fields';
+import Splash from '../components/Splash';
 import {
   PASSWORD_MAX_LENGTH,
   focusField,
@@ -18,7 +19,7 @@ function ResetPassword() {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  if (loading) return null;
+  if (loading) return <Splash />;
 
   // The emailed link signs the user in with a short-lived recovery session; without
   // one there is nothing to authorize a password change, so the form is not shown.

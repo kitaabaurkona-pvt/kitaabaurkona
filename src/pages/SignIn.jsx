@@ -10,6 +10,7 @@ import {
   TextField,
 } from '../components/auth/fields';
 import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
+import Splash from '../components/Splash';
 import {
   focusField,
   normalizeEmail,
@@ -27,7 +28,7 @@ function SignIn() {
   const [submitting, setSubmitting] = useState(false);
   const google = useGoogleSignIn(location.state?.from);
 
-  if (loading) return null;
+  if (loading) return <Splash />;
   if (isAuthenticated) return <Navigate to={safeRedirect(location.state?.from)} replace />;
 
   const fieldError = (field) => (error?.field === field ? error.message : undefined);

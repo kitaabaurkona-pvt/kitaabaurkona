@@ -3,10 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { adminErrorMessage, adminListBooks, adminListCategories, adminUpdateBook, ADMIN_PAGE_SIZE } from '../../services/adminService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useToast } from '../../hooks/useToast';
 import { coverOf, formatPrice, plural } from '../../utils/format';
 import { cleanText, parseAmount } from '../../utils/catalogueSanitizer';
 import BookCover from '../../components/store/BookCover';
-import { LoadError, Loading, StateBlock } from '../../components/store/States';
+import { LoadError, StateBlock } from '../../components/store/States';
+import { LinesSkeleton } from '../../components/store/Skeletons';
 
 const FILTERS = [
   ['all', 'All'],
@@ -121,6 +123,7 @@ function AdminBooks() {
   const [savedId, setSavedId] = useState(null);
   const result = useAsync(() => adminListBooks({ search: q, filter, page }), [q, filter, page]);
   const categories = useAsync(() => adminListCategories(), []);
+  const { show } = useToast();
 
   useEffect(() => {
     const wanted = term.trim();
@@ -165,7 +168,7 @@ function AdminBooks() {
       </div>
 
       {result.data && <p className="page-meta" aria-live="polite">{plural(total, 'book')}</p>}
-      {result.loading && !result.data && <Loading label="Loading books…" />}
+      {result.loading && !result.data && <LinesSkeleton count={5} label="Loading books…" />}
       {result.error && <LoadError onRetry={result.retry} what="books" />}
       {result.data && books.length === 0 && (
         <StateBlock title={q || filter !== 'all' ? 'No books match.' : 'There are no books yet.'}>
@@ -207,6 +210,7 @@ function AdminBooks() {
                       result.setData({ ...result.data, books: books.map((b) => (b.id === updated.id ? updated : b)) });
                       setEditing(null);
                       setSavedId(updated.id);
+                      show({ message: `Saved “${updated.title}”` });
                       categories.retry();
                     }}
                   />

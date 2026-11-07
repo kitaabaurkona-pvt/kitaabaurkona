@@ -1,4 +1,6 @@
+import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import { LinesSkeleton } from '../../components/store/Skeletons';
 
 function AdminLayout() {
   return (
@@ -20,7 +22,10 @@ function AdminLayout() {
           Bulk upload
         </NavLink>
       </nav>
-      <Outlet />
+      {/* Keeps the admin tabs on screen while the next section loads */}
+      <Suspense fallback={<LinesSkeleton />}>
+        <Outlet />
+      </Suspense>
     </div>
   );
 }

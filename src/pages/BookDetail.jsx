@@ -11,7 +11,8 @@ import PriceBlock from '../components/store/PriceBlock';
 import QuantityStepper from '../components/store/QuantityStepper';
 import AddToCartButton from '../components/store/AddToCartButton';
 import SaveButton from '../components/store/SaveButton';
-import { LoadError, Loading, StateBlock } from '../components/store/States';
+import { LoadError, StateBlock } from '../components/store/States';
+import { DetailSkeleton } from '../components/store/Skeletons';
 
 const ATTRIBUTE_LABELS = [
   ['genre', 'Genre'],
@@ -69,7 +70,7 @@ function BookView({ book }) {
       </nav>
 
       <div className="detail">
-        <div>
+        <div className="detail-media">
           <div className="gallery-main">
             <BookCover src={images[active]} title={book.title} eager />
           </div>
@@ -161,13 +162,7 @@ function BookDetail() {
   const { id } = useParams();
   const { data: book, loading, error, retry } = useAsync(() => getBook(id), [id]);
 
-  if (loading) {
-    return (
-      <div className="container page">
-        <Loading label="Loading book…" />
-      </div>
-    );
-  }
+  if (loading) return <DetailSkeleton />;
   if (error) {
     return (
       <div className="container page">

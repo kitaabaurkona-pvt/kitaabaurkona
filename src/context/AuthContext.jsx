@@ -49,6 +49,7 @@ export function AuthProvider({ children }) {
       signUp: authService.signUp,
       signInWithGoogle: authService.signInWithGoogle,
       signOut: authService.signOut,
+      signOutEverywhere: authService.signOutEverywhere,
       requestPasswordReset: authService.requestPasswordReset,
       updatePassword: authService.updatePassword,
     }),
