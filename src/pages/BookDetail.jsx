@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getBook } from '../services/bookService';
 import { useAsync } from '../hooks/useAsync';
@@ -22,15 +23,13 @@ const ATTRIBUTE_LABELS = [
   ['pack_of', 'Pack of'],
 ];
 
+// Only details that help a shopper choose. Marketplace and shipping data (SKU, package
+// size, shipping weight) stay in the database for the admin side.
 function specRows(book) {
-  const rows = [['SKU', book.sku]];
+  const rows = [];
   if (book.category) rows.push(['Category', book.category]);
   for (const [key, label] of ATTRIBUTE_LABELS) {
     if (book.attributes?.[key]) rows.push([label, book.attributes[key]]);
-  }
-  if (book.weight_kg) rows.push(['Shipping weight', `${Number(book.weight_kg)} kg`]);
-  if (book.length_cm && book.breadth_cm && book.height_cm) {
-    rows.push(['Package size', `${Number(book.length_cm)} × ${Number(book.breadth_cm)} × ${Number(book.height_cm)} cm`]);
   }
   return rows;
 }
@@ -47,6 +46,7 @@ function BookView({ book }) {
   const qty = Math.max(1, Math.min(quantity, room || 1));
   const stock = stockLevel(book.stock_quantity);
   const saving = Number(book.mrp) - Number(book.price);
+  const specs = specRows(book);
 
   // If the book is already in the cart, go straight there instead of adding it twice.
   function buyNow() {
@@ -72,7 +72,18 @@ function BookView({ book }) {
       <div className="detail">
         <div className="detail-media">
           <div className="gallery-main">
-            <BookCover src={images[active]} title={book.title} eager />
+            <AnimatePresence initial={false} mode="popLayout">
+              <motion.div
+                key={images[active] ?? 'none'}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15, ease: 'linear' }}
+              >
+                <BookCover src={images[active]} title={book.title} eager />
+              </motion.div>
+            </AnimatePresence>
+            {book.discount_percent > 0 && <span className="cover-tag">−{book.discount_percent}%</span>}
           </div>
           {images.length > 1 && (
             <ul className="gallery-thumbs" aria-label="Book images">
@@ -98,33 +109,29 @@ function BookView({ book }) {
           <div className="detail-buy">
             <div>
               <PriceBlock price={book.price} mrp={book.mrp} large />
-              {saving > 0 && (
-                <p className="stock-line saving">
-                  You save {formatPrice(saving)} ({book.discount_percent}%)
-                </p>
-              )}
+              {saving > 0 && <p className="detail-saving">You save {formatPrice(saving)}</p>}
               <p className="stock-line" data-level={stock.level}>
                 {stock.label}
               </p>
             </div>
-            {stock.level !== 'out' && room > 0 && (
+            {stock.level !== 'out' && room > 0 ? (
               <div className="buy-row">
                 <QuantityStepper value={qty} max={room} onChange={setQuantity} label="Quantity" />
                 <AddToCartButton book={book} quantity={qty} />
-                <SaveButton bookId={book.id} title={book.title} className="save-button save-button-lg" />
               </div>
-            )}
-            {(stock.level === 'out' || room === 0) && (
+            ) : (
               <div className="buy-row buy-row-single">
                 <AddToCartButton book={book} />
-                <SaveButton bookId={book.id} title={book.title} className="save-button save-button-lg" />
               </div>
             )}
-            {stock.level !== 'out' && (
-              <button type="button" className="btn btn-dark btn-block" onClick={buyNow}>
-                Buy now
-              </button>
-            )}
+            <div className="buy-secondary">
+              {stock.level !== 'out' && (
+                <button type="button" className="btn btn-outline" onClick={buyNow}>
+                  Buy now
+                </button>
+              )}
+              <SaveButton bookId={book.id} title={book.title} className="btn btn-outline" withLabel />
+            </div>
           </div>
 
           {book.description && (
@@ -134,17 +141,19 @@ function BookView({ book }) {
             </section>
           )}
 
-          <section className="detail-section" aria-labelledby="details-heading">
-            <h2 id="details-heading">Details</h2>
-            <dl className="spec-list">
-              {specRows(book).map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
+          {specs.length > 0 && (
+            <section className="detail-section" aria-labelledby="details-heading">
+              <h2 id="details-heading">Details</h2>
+              <dl className="spec-list">
+                {specs.map(([label, value]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
 
           {book.video_url && (
             <section className="detail-section" aria-labelledby="video-heading">

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useCart } from '../hooks/useCart';
@@ -157,6 +157,12 @@ function Checkout() {
   const { ids } = useCart();
   const cart = useCartLines();
   const profile = useAsync(() => getProfile(user.id), [user.id]);
+  const { retry: refreshCart } = cart;
+
+  // Checkout always starts from freshly read prices and stock.
+  useEffect(() => {
+    refreshCart();
+  }, [refreshCart]);
 
   let content;
   if (ids.length === 0) {

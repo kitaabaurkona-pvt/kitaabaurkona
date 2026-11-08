@@ -44,7 +44,13 @@ function CancelOrder({ orderId, onCancelled }) {
         <div className="stack-sm" role="group" aria-label="Confirm cancellation">
           <p className="notice">Cancel this order? This can't be undone.</p>
           <div className="inline-actions">
-            <button type="button" className="btn btn-danger" aria-busy={working} aria-disabled={working || undefined} onClick={confirm}>
+            <button
+              type="button"
+              className="btn btn-danger"
+              aria-busy={working}
+              aria-disabled={working || undefined}
+              onClick={confirm}
+            >
               {working && <span className="spinner" aria-hidden="true" />}
               {working ? 'Cancelling…' : 'Yes, cancel order'}
             </button>
@@ -128,18 +134,20 @@ function OrderDetail() {
           <ul className="line-list">
             {order.order_items.map((item) => (
               <li key={item.sku} className="line">
-                <div className="line-cover">
-                  <BookCover src={item.image_url} title={item.title} />
-                </div>
-                <div className="line-body">
-                  <h2 className="line-title">
-                    {item.book_id ? <Link to={`/books/${item.book_id}`}>{item.title}</Link> : item.title}
-                  </h2>
-                  <div className="order-total-row">
-                    <span className="page-meta">
-                      {formatPrice(item.unit_price)} × {item.quantity}
-                    </span>
-                    <span className="line-total">{formatPrice(Number(item.unit_price) * item.quantity)}</span>
+                <div className="line-inner">
+                  <div className="line-cover">
+                    <BookCover src={item.image_url} title={item.title} />
+                  </div>
+                  <div className="line-body">
+                    <h2 className="line-title">
+                      {item.book_id ? <Link to={`/books/${item.book_id}`}>{item.title}</Link> : item.title}
+                    </h2>
+                    <div className="order-total-row">
+                      <span className="page-meta">
+                        {formatPrice(item.unit_price)} × {item.quantity}
+                      </span>
+                      <span className="line-total">{formatPrice(Number(item.unit_price) * item.quantity)}</span>
+                    </div>
                   </div>
                 </div>
               </li>

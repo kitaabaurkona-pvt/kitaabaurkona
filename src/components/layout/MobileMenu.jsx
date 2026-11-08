@@ -19,7 +19,6 @@ import {
   SettingsIcon,
   ShieldIcon,
   StoreIcon,
-  TagIcon,
   UploadIcon,
   UserIcon,
 } from '../icons';
@@ -75,12 +74,12 @@ function MobileMenu() {
                 initial={{ x: '-100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '-100%' }}
-                transition={{ type: 'spring', stiffness: 380, damping: 38 }}
+                transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
               >
                 <div className="drawer-head">
                   <Dialog.Title asChild>
                     <span className="brand">
-                      <img src="/logo-64.png" alt="" width="32" height="32" />
+                      <img src="/logo-64.png" alt="" width="28" height="28" />
                       <span>Menu</span>
                     </span>
                   </Dialog.Title>
@@ -102,7 +101,6 @@ function MobileMenu() {
                   <h2>Shop</h2>
                   {item('/', 'Store', StoreIcon, { end: true })}
                   {item('/books', 'Books', BookIcon)}
-                  {item('/offers', 'Offers', TagIcon)}
                   {item('/cart', 'Cart', BagIcon, { count: cartCount })}
                 </nav>
 

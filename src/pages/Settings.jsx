@@ -7,15 +7,6 @@ import { useToast } from '../hooks/useToast';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { PASSWORD_MAX_LENGTH, updatePasswordErrorMessage, validatePasswordPair } from '../utils/authForm';
 import { plural } from '../utils/format';
-import { Reveal } from '../components/motion/Reveal';
-
-const SECTIONS = [
-  ['appearance', 'Appearance'],
-  ['security', 'Password'],
-  ['sessions', 'Sessions'],
-  ['cart', 'Cart'],
-  ['more', 'More'],
-];
 
 function OptionGroup({ name, legend, value, options, onChange }) {
   return (
@@ -92,7 +83,11 @@ function ChangePassword() {
           onChange={(e) => setPassword(e.target.value)}
           aria-invalid={fieldError('password') ? 'true' : undefined}
         />
-        {fieldError('password') && <p className="field-message" role="alert">{fieldError('password')}</p>}
+        {fieldError('password') && (
+          <p className="field-message" role="alert">
+            {fieldError('password')}
+          </p>
+        )}
       </div>
       <div>
         <label className="label" htmlFor="new-password-confirm">
@@ -108,7 +103,11 @@ function ChangePassword() {
           onChange={(e) => setConfirm(e.target.value)}
           aria-invalid={fieldError('confirm-password') ? 'true' : undefined}
         />
-        {fieldError('confirm-password') && <p className="field-message" role="alert">{fieldError('confirm-password')}</p>}
+        {fieldError('confirm-password') && (
+          <p className="field-message" role="alert">
+            {fieldError('confirm-password')}
+          </p>
+        )}
       </div>
       {error && !error.field && (
         <p className="notice span-2" data-tone="error" role="alert">
@@ -159,116 +158,102 @@ function Settings() {
         <h1 className="page-title">Settings</h1>
       </div>
 
-      <div className="settings-grid">
-        <nav className="settings-nav" aria-label="Settings sections">
-          <ul>
-            {SECTIONS.map(([id, label]) => (
-              <li key={id}>
-                <a className="chip" href={`#${id}`}>
-                  {label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
-
-        <div className="stack">
-          <Reveal as="section" id="appearance" className="panel settings-section" aria-labelledby="appearance-heading">
-            <h2 id="appearance-heading" className="panel-title">
-              Appearance
-            </h2>
-            <div className="stack-sm">
-              <OptionGroup
-                name="theme"
-                legend="Theme"
-                value={theme}
-                onChange={setTheme}
-                options={[
-                  ['system', 'System'],
-                  ['light', 'Light'],
-                  ['dark', 'Dark'],
-                ]}
+      <div className="settings-stack">
+        <section id="appearance" className="panel settings-section" aria-labelledby="appearance-heading">
+          <h2 id="appearance-heading" className="panel-title">
+            Appearance
+          </h2>
+          <div className="stack-sm">
+            <OptionGroup
+              name="theme"
+              legend="Theme"
+              value={theme}
+              onChange={setTheme}
+              options={[
+                ['system', 'System'],
+                ['light', 'Light'],
+                ['dark', 'Dark'],
+              ]}
+            />
+            <div className="setting-row">
+              <div>
+                <h3 id="motion-label">Reduce animations</h3>
+                <p>Turns off page, card and menu animations on this device.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                className="switch"
+                aria-checked={motion === 'reduce'}
+                aria-labelledby="motion-label"
+                onClick={() => setMotion(motion === 'reduce' ? 'system' : 'reduce')}
               />
-              <div className="setting-row">
-                <div>
-                  <h3 id="motion-label">Reduce animations</h3>
-                  <p>Turns off page, card and menu animations on this device.</p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  className="switch"
-                  aria-checked={motion === 'reduce'}
-                  aria-labelledby="motion-label"
-                  onClick={() => setMotion(motion === 'reduce' ? 'system' : 'reduce')}
-                />
-              </div>
             </div>
-          </Reveal>
+          </div>
+        </section>
 
-          <Reveal as="section" id="security" className="panel settings-section" aria-labelledby="security-heading">
-            <h2 id="security-heading" className="panel-title">
-              Password
-            </h2>
-            <ChangePassword />
-          </Reveal>
+        <section id="security" className="panel settings-section" aria-labelledby="security-heading">
+          <h2 id="security-heading" className="panel-title">
+            Password
+          </h2>
+          <ChangePassword />
+        </section>
 
-          <Reveal as="section" id="sessions" className="panel settings-section" aria-labelledby="sessions-heading">
-            <h2 id="sessions-heading" className="panel-title">
-              Sessions
-            </h2>
-            <div className="setting-row">
-              <div>
-                <h3>Sign out of all devices</h3>
-                <p>Ends every session for your account, including this one.</p>
-              </div>
-              <button type="button" className="btn btn-outline" aria-busy={signingOut} onClick={handleSignOutEverywhere}>
-                {signingOut ? 'Signing out…' : 'Sign out everywhere'}
+        <section id="sessions" className="panel settings-section" aria-labelledby="sessions-heading">
+          <h2 id="sessions-heading" className="panel-title">
+            Sessions
+          </h2>
+          <div className="setting-row">
+            <div>
+              <h3>Sign out of all devices</h3>
+              <p>Ends every session for your account, including this one.</p>
+            </div>
+            <button type="button" className="btn btn-outline" aria-busy={signingOut} onClick={handleSignOutEverywhere}>
+              {signingOut ? 'Signing out…' : 'Sign out everywhere'}
+            </button>
+          </div>
+        </section>
+
+        <section id="cart" className="panel settings-section" aria-labelledby="cart-heading">
+          <h2 id="cart-heading" className="panel-title">
+            Cart
+          </h2>
+          <div className="setting-row">
+            <div>
+              <h3>Clear cart</h3>
+              <p>{count > 0 ? `${plural(count, 'item')} saved in this browser.` : 'Your cart is empty.'}</p>
+            </div>
+            {count > 0 && !confirmClear && (
+              <button type="button" className="btn btn-danger" onClick={() => setConfirmClear(true)}>
+                Clear cart
               </button>
-            </div>
-          </Reveal>
-
-          <Reveal as="section" id="cart" className="panel settings-section" aria-labelledby="cart-heading">
-            <h2 id="cart-heading" className="panel-title">
-              Cart
-            </h2>
-            <div className="setting-row">
-              <div>
-                <h3>Clear cart</h3>
-                <p>{count > 0 ? `${plural(count, 'item')} saved in this browser.` : 'Your cart is empty.'}</p>
-              </div>
-              {count > 0 && !confirmClear && (
-                <button type="button" className="btn btn-danger" onClick={() => setConfirmClear(true)}>
-                  Clear cart
+            )}
+            {count > 0 && confirmClear && (
+              <div className="inline-actions">
+                <button type="button" className="btn btn-danger" onClick={handleClearCart}>
+                  Yes, clear cart
                 </button>
-              )}
-              {count > 0 && confirmClear && (
-                <div className="inline-actions">
-                  <button type="button" className="btn btn-danger" onClick={handleClearCart}>
-                    Yes, clear cart
-                  </button>
-                  <button type="button" className="btn btn-outline" onClick={() => setConfirmClear(false)}>
-                    Keep items
-                  </button>
-                </div>
-              )}
-            </div>
-          </Reveal>
+                <button type="button" className="btn btn-outline" onClick={() => setConfirmClear(false)}>
+                  Keep items
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
 
-          <Reveal as="section" id="more" className="panel settings-section" aria-labelledby="more-heading">
-            <h2 id="more-heading" className="panel-title">
-              More
-            </h2>
-            <div className="inline-actions">
-              <Link to="/account" className="btn btn-outline">
-                Edit account details
-              </Link>
-              <Link to="/terms" className="btn btn-outline">
-                Terms and conditions
-              </Link>
-            </div>
-          </Reveal>
-        </div>
+        <section id="more" className="panel settings-section" aria-labelledby="more-heading">
+          <h2 id="more-heading" className="panel-title">
+            More
+          </h2>
+          <div className="inline-actions">
+            <Link to="/account" className="btn btn-outline">
+              Edit account details
+            </Link>
+            <Link to="/terms" className="btn btn-outline">
+              Terms and conditions
+            </Link>
+          </div>
+        </section>
       </div>
     </div>
   );

@@ -1,42 +1,59 @@
-/* Kitaabaurkona design system ("Kinetic Ledger" from Stitch): sharp 0px corners,
-   no drop shadows, 1px hairline structure, carbon for structure, amber reserved for
-   primary actions, Inter with tabular figures, 8px rhythm. Light and dark themes. */
+/* Kitaabaurkona design system, "Ledger refined": warm paper page, white surfaces,
+   ink text, 1px hairlines, no shadows or gradients. 0px corners on structure, 2px on
+   controls. Amber only for the one primary action on a screen, the focus ring and
+   the cart count. Inter for interface, Source Serif 4 for titles. 8px rhythm.
+   Light and dark themes share every rule; only the tokens change. */
 
 :root {
   color-scheme: light;
-  --c-ink: #0a0a0a;
+  --c-paper: #faf9f6;
+  --c-ink: #111111;
   --c-carbon: #111111;
-  --c-carbon-hover: #27272a;
+  --c-carbon-hover: #2b2b2b;
   --c-on-carbon: #ffffff;
-  --c-body: #3f3f46;
-  --c-muted: #52525b;
-  --c-placeholder: #71717a;
+  --c-body: #374151;
+  --c-muted: #6b7280;
+  --c-placeholder: #8a8f98;
   --c-line: #e5e7eb;
-  --c-control: #8c93a0;
+  --c-line-strong: #d1d5db;
+  --c-control: #8a919c;
   --c-surface: #ffffff;
-  --c-surface-alt: #f8f9fa;
-  --c-surface-press: #f1f3f5;
-  --c-band: #111111;
-  --c-on-band: #ffffff;
-  --c-on-band-muted: #a1a1aa;
-  --c-tint: #fff8e6;
+  --c-surface-alt: #f3f2ee;
+  --c-surface-press: #ecebe6;
+  --c-band: #faf9f6;
+  --c-on-band: #111111;
+  --c-on-band-muted: #6b7280;
+  --c-tint: #f3f2ee;
+  --c-tag: #111111;
+  --c-on-tag: #ffffff;
   --c-accent: #eaa800;
   --c-accent-hover: #d99b00;
   --c-accent-active: #ca8a04;
   --c-on-accent: #111111;
-  --c-accent-ink: #8a5300;
-  --c-danger: #ba1a1a;
-  --c-danger-ink: #93000a;
-  --c-danger-wash: #fff1f0;
+  --c-accent-ink: #7a4b00;
+  --c-danger: #b42318;
+  --c-danger-ink: #912018;
+  --c-danger-wash: #fef3f2;
   --c-ok: #2e7d32;
   --c-ok-ink: #1d5b2c;
   --c-ok-wash: #edf7ef;
-  --c-skeleton: #eceef1;
-  --c-skeleton-shine: #f7f8f9;
-  --c-scrim: rgba(0, 0, 0, 0.4);
+  --c-skeleton: #eeede8;
+  --c-skeleton-shine: #f7f6f2;
+  --c-scrim: rgba(17, 17, 17, 0.4);
 
   --font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, 'Times New Roman', serif;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --radius-control: 2px;
+
+  /* Type scale: 12 · 14 · 16 · 20 · 28 · 36, 56 for the featured title */
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.875rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.25rem;
+  --fs-xl: 1.75rem;
+  --fs-2xl: 2.25rem;
+  --fs-display: 3.5rem;
 
   --margin: 16px;
   --gutter: 16px;
@@ -46,22 +63,26 @@
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --c-ink: #f4f4f5;
-  --c-carbon: #f4f4f5;
-  --c-carbon-hover: #d4d4d8;
+  --c-paper: #0f0f0e;
+  --c-ink: #f5f5f4;
+  --c-carbon: #f5f5f4;
+  --c-carbon-hover: #d6d3d1;
   --c-on-carbon: #111111;
-  --c-body: #d4d4d8;
+  --c-body: #d6d3d1;
   --c-muted: #a1a1aa;
   --c-placeholder: #8b8b94;
-  --c-line: #2c2c31;
-  --c-control: #62626b;
-  --c-surface: #131315;
-  --c-surface-alt: #1b1b1e;
-  --c-surface-press: #26262a;
-  --c-band: #1b1b1e;
-  --c-on-band: #f4f4f5;
+  --c-line: #2a2a28;
+  --c-line-strong: #3a3a37;
+  --c-control: #6e6e69;
+  --c-surface: #171716;
+  --c-surface-alt: #1f1f1d;
+  --c-surface-press: #282826;
+  --c-band: #0f0f0e;
+  --c-on-band: #f5f5f4;
   --c-on-band-muted: #a1a1aa;
-  --c-tint: #221a08;
+  --c-tint: #1f1f1d;
+  --c-tag: #f5f5f4;
+  --c-on-tag: #111111;
   --c-accent-ink: #f5c451;
   --c-danger: #ff8a80;
   --c-danger-ink: #ffb4ab;
@@ -69,8 +90,8 @@
   --c-ok: #6fbf73;
   --c-ok-ink: #9fdca3;
   --c-ok-wash: #12301a;
-  --c-skeleton: #222226;
-  --c-skeleton-shine: #2c2c31;
+  --c-skeleton: #1f1f1d;
+  --c-skeleton-shine: #292927;
   --c-scrim: rgba(0, 0, 0, 0.6);
 }
 
@@ -101,11 +122,11 @@ body {
 
 html {
   -webkit-text-size-adjust: 100%;
-  background: var(--c-surface);
+  background: var(--c-paper);
 }
 
 body {
-  background: var(--c-surface);
+  background: var(--c-paper);
   color: var(--c-ink);
   font-family: var(--font);
   font-size: 1rem;
@@ -139,7 +160,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--c-carbon);
+  outline: 2px solid var(--c-accent);
   outline-offset: 2px;
 }
 
@@ -159,6 +180,11 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+.serif {
+  font-family: var(--font-serif);
+  font-optical-sizing: auto;
+}
+
 /* ---------- Buttons ---------- */
 
 .btn {
@@ -169,10 +195,10 @@ button {
   min-height: 48px;
   padding: 0 20px;
   border: 1px solid transparent;
-  border-radius: 0;
-  font-size: 0.875rem;
+  border-radius: var(--radius-control);
+  font-size: var(--fs-sm);
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   line-height: 1.25;
   text-align: center;
   text-decoration: none;
@@ -181,7 +207,7 @@ button {
 }
 
 .btn:active:not([aria-disabled='true']) {
-  transform: scale(0.97);
+  transform: translateY(1px);
 }
 
 .btn-sm {
@@ -207,9 +233,20 @@ button {
 }
 
 .btn-outline {
-  border-color: var(--c-carbon);
+  border-color: var(--c-line-strong);
+  background: var(--c-surface);
+  color: var(--c-ink);
+}
+
+/* Small neutral action used on book cards: present, but never louder than the book. */
+.btn-quiet {
+  min-height: 36px;
+  padding: 0 12px;
+  border-color: var(--c-line-strong);
   background: transparent;
-  color: var(--c-carbon);
+  color: var(--c-ink);
+  font-size: 0.8125rem;
+  font-weight: 500;
 }
 
 .btn-danger {
@@ -242,8 +279,9 @@ button {
     background: var(--c-carbon-hover);
   }
 
-  .btn-outline:hover {
-    background: var(--c-surface-press);
+  .btn-outline:hover,
+  .btn-quiet:hover {
+    border-color: var(--c-ink);
   }
 
   .btn-danger:hover {
@@ -280,7 +318,7 @@ button {
   min-height: 48px;
   padding: 0 16px;
   border: 1px solid var(--c-control);
-  border-radius: 0;
+  border-radius: var(--radius-control);
   background: var(--c-surface);
   color: var(--c-ink);
   font-size: 1rem;
@@ -311,9 +349,9 @@ button {
 .input:focus,
 .select:focus,
 .textarea:focus {
-  outline: 2px solid var(--c-carbon);
-  outline-offset: -1px;
-  border-color: var(--c-carbon);
+  outline: 2px solid var(--c-accent);
+  outline-offset: 0;
+  border-color: var(--c-ink);
 }
 
 .input[aria-invalid='true'],
@@ -327,7 +365,7 @@ button {
   margin-bottom: 6px;
   color: var(--c-body);
   font-size: 0.8125rem;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .field-message {
@@ -344,12 +382,12 @@ button {
   gap: 6px;
   min-height: 36px;
   padding: 0 14px;
-  border: 1px solid var(--c-line);
-  background: var(--c-surface-alt);
+  border: 1px solid var(--c-line-strong);
+  border-radius: var(--radius-control);
+  background: var(--c-surface);
   color: var(--c-ink);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 0.8125rem;
+  font-weight: 500;
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
@@ -358,9 +396,9 @@ button {
 
 .chip[aria-pressed='true'],
 .chip[aria-current='page'] {
-  border-color: var(--c-carbon);
-  background: var(--c-carbon);
-  color: var(--c-on-carbon);
+  border-color: var(--c-ink);
+  background: var(--c-ink);
+  color: var(--c-paper);
 }
 
 @media (hover: hover) {
@@ -374,8 +412,9 @@ button {
 .notice {
   margin: 0;
   padding: 12px 16px;
-  border-left: 3px solid var(--c-line);
-  background: var(--c-surface-alt);
+  border: 1px solid var(--c-line);
+  border-left: 2px solid var(--c-line-strong);
+  background: var(--c-surface);
   color: var(--c-body);
   font-size: 0.875rem;
 }

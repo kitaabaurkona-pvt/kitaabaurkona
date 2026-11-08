@@ -1,6 +1,6 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import Splash from './Splash';
+import { PageSkeleton } from './store/Skeletons';
 
 /**
  * Blocks access to nested routes unless the signed-in user has role 'admin'
@@ -9,7 +9,7 @@ import Splash from './Splash';
 function AdminRoute() {
   const { isAuthenticated, role, loading } = useAuth();
 
-  if (loading) return <Splash />;
+  if (loading) return <PageSkeleton />;
 
   if (!isAuthenticated) {
     return <Navigate to="/sign-in" replace />;

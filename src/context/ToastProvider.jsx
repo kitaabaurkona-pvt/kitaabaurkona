@@ -53,16 +53,28 @@ export function ToastProvider({ children }) {
               className="toast"
               data-tone={toast.tone}
               role={toast.tone === 'error' ? 'alert' : 'status'}
-              initial={{ opacity: 0, y: 24, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 40, transition: { duration: 0.18 } }}
-              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, transition: { duration: 0.15 } }}
+              transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
             >
               <span className="toast-text">{toast.message}</span>
-              {toast.action && (
+              {toast.action?.to && (
                 <Link to={toast.action.to} onClick={() => dismiss(toast.id)}>
                   {toast.action.label}
                 </Link>
+              )}
+              {toast.action?.onClick && (
+                <button
+                  type="button"
+                  className="toast-action"
+                  onClick={() => {
+                    dismiss(toast.id);
+                    toast.action.onClick();
+                  }}
+                >
+                  {toast.action.label}
+                </button>
               )}
               <button type="button" className="toast-close" aria-label="Dismiss notification" onClick={() => dismiss(toast.id)}>
                 <CloseIcon size={18} />

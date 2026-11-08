@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import SiteHeader from './SiteHeader';
 import SiteFooter from './SiteFooter';
 import { PageSkeleton } from '../store/Skeletons';
+import CartPanel from '../cart/CartPanel';
 import '../../styles/store.css';
 
 function Layout() {
@@ -22,9 +23,9 @@ function Layout() {
       <main id="main" className="site-main" tabIndex={-1}>
         <motion.div
           key={pathname}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.32, ease: [0.2, 0.8, 0.2, 1] }}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.12, ease: 'linear' }}
         >
           <Suspense fallback={<PageSkeleton />}>
             <Outlet />
@@ -32,6 +33,7 @@ function Layout() {
         </motion.div>
       </main>
       <SiteFooter />
+      <CartPanel />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import BookCard from '../components/store/BookCard';
 import { LoadError, StateBlock } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
 import { SearchIcon } from '../components/icons';
+import { FadeIn } from '../components/motion/FadeIn';
 
 function Books() {
   useDocumentTitle('Books');
@@ -169,13 +170,13 @@ function Books() {
           </StateBlock>
         )}
         {books.length > 0 && !first.loading && (
-          <ul className="book-grid">
+          <FadeIn as="ul" className="book-grid">
             {books.map((book, index) => (
-              <li key={book.id} className="rise" style={{ '--i': index % 24 }}>
+              <li key={book.id}>
                 <BookCard book={book} eager={index < 4} />
               </li>
             ))}
-          </ul>
+          </FadeIn>
         )}
         {first.data && books.length < total && (
           <div className="load-more">

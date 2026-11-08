@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCart } from '../../hooks/useCart';
 import { useToast } from '../../hooks/useToast';
+import { useCartLines } from '../../hooks/useCartLines';
 import { MAX_QUANTITY } from '../../utils/storeForm';
 import { CheckIcon, PlusIcon } from '../icons';
 
 function AddToCartButton({ book, quantity = 1, className = 'btn btn-primary', label = 'Add to cart' }) {
   const { add, quantityOf } = useCart();
   const { show } = useToast();
+  const { openCart } = useCartLines();
   const [justAdded, setJustAdded] = useState(false);
   const timer = useRef(null);
 
@@ -21,7 +23,7 @@ function AddToCartButton({ book, quantity = 1, className = 'btn btn-primary', la
   function handleClick() {
     if (blocked) return;
     add(book.id, quantity, limit);
-    show({ message: `Added “${book.title}” to your cart`, action: { label: 'View cart', to: '/cart' } });
+    show({ message: `Added “${book.title}” to your cart`, action: { label: 'View cart', onClick: openCart } });
     setJustAdded(true);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setJustAdded(false), 1500);

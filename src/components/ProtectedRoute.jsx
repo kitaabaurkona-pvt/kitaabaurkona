@@ -1,6 +1,6 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import Splash from './Splash';
+import { PageSkeleton } from './store/Skeletons';
 
 /**
  * Blocks unauthenticated access to nested routes, redirecting to /sign-in
@@ -10,7 +10,7 @@ function ProtectedRoute() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
 
-  if (loading) return <Splash />;
+  if (loading) return <PageSkeleton />;
 
   if (!isAuthenticated) {
     return (

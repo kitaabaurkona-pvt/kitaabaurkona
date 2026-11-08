@@ -32,3 +32,6 @@ dist-ssr
 # Local-only project notes
 /readmeforhelp.md
 /master.md
+
+# Browser test screenshots
+e2e/shots/

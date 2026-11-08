@@ -1,118 +1,25 @@
-import { useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { AnimatePresence } from 'motion/react';
 import { useCartLines } from '../hooks/useCartLines';
 import CartSummary from '../components/store/CartSummary';
-import { useAuth } from '../hooks/useAuth';
+import CartLine from '../components/cart/CartLine';
 import { useCart } from '../hooks/useCart';
-import { useWishlist } from '../hooks/useWishlist';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { useToast } from '../hooks/useToast';
-import { coverOf, formatPrice, plural, stockLevel } from '../utils/format';
-import BookCover from '../components/store/BookCover';
-import PriceBlock from '../components/store/PriceBlock';
-import QuantityStepper from '../components/store/QuantityStepper';
+import { plural } from '../utils/format';
 import { LoadError, StateBlock } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 import { BagIcon } from '../components/icons';
 
-function CartLine({ line }) {
-  const { setQuantity, remove } = useCart();
-  const { isAuthenticated } = useAuth();
-  const { has, toggle } = useWishlist();
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [saveFailed, setSaveFailed] = useState(false);
-  const { show } = useToast();
-  const { book } = line;
-
-  async function saveForLater() {
-    if (!isAuthenticated) {
-      navigate('/sign-in', { state: { from: location.pathname } });
-      return;
-    }
-    try {
-      if (!has(book.id)) await toggle(book.id);
-      remove(book.id);
-      show({ message: `Moved “${book.title}” to your wishlist`, action: { label: 'View', to: '/wishlist' } });
-    } catch {
-      setSaveFailed(true);
-    }
-  }
-
-  if (!book) {
-    return (
-      <li className="line">
-        <div className="line-cover">
-          <BookCover src={null} title="Unavailable" />
-        </div>
-        <div className="line-body">
-          <p className="line-title">This book is no longer available.</p>
-          <div className="line-actions">
-            <button type="button" className="btn-link" onClick={() => remove(line.id)}>
-              Remove
-            </button>
-          </div>
-        </div>
-      </li>
-    );
-  }
-
-  const stock = stockLevel(book.stock_quantity);
-  const { quantity } = line;
-  return (
-    <li className="line">
-      <Link to={`/books/${book.id}`} className="line-cover" tabIndex={-1} aria-hidden="true">
-        <BookCover src={coverOf(book)} title={book.title} />
-      </Link>
-      <div className="line-body">
-        <h2 className="line-title">
-          <Link to={`/books/${book.id}`}>{book.title}</Link>
-        </h2>
-        <PriceBlock price={book.price} mrp={book.mrp} />
-        {stock.level !== 'in' && (
-          <p className="stock-line" data-level={stock.level}>
-            {stock.label}
-          </p>
-        )}
-        <div className="line-actions">
-          {line.available && (
-            <QuantityStepper
-              small
-              value={quantity}
-              max={line.limit}
-              label={`Quantity of ${book.title}`}
-              onChange={(value) => setQuantity(book.id, value)}
-            />
-          )}
-          <button type="button" className="btn-link" onClick={() => remove(book.id)}>
-            Remove
-          </button>
-          <button type="button" className="btn-link" onClick={saveForLater}>
-            Save for later
-          </button>
-          {line.available && <span className="line-total">{formatPrice(Number(book.price) * quantity)}</span>}
-        </div>
-        {saveFailed && (
-          <p className="field-message" role="alert">
-            Couldn't save this book. Try again.
-          </p>
-        )}
-      </div>
-    </li>
-  );
-}
-
 function Cart() {
   useDocumentTitle('Cart');
-  const { ids, items, setQuantity } = useCart();
+  const { ids } = useCart();
   const { lines, totals, blocked, data, loading, error, retry } = useCartLines();
 
-  // If stock dropped since the book was added, bring the quantity down to what exists.
+  // Re-read prices and stock whenever the cart page is opened.
   useEffect(() => {
-    for (const line of lines) {
-      if (line.available && items[line.id] > line.limit) setQuantity(line.id, line.limit);
-    }
-  }, [lines, items, setQuantity]);
+    retry();
+  }, [retry]);
 
   return (
     <div className="container page">
@@ -133,9 +40,11 @@ function Cart() {
       {ids.length > 0 && data && (
         <div className="two-col">
           <ul className="line-list">
-            {lines.map((line) => (
-              <CartLine key={line.id} line={line} />
-            ))}
+            <AnimatePresence initial={false}>
+              {lines.map((line) => (
+                <CartLine key={line.id} line={line} />
+              ))}
+            </AnimatePresence>
           </ul>
           <aside>
             <CartSummary totals={totals}>

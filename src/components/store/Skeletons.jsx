@@ -13,11 +13,11 @@ function LoadingLabel({ label }) {
 export function BookCardSkeleton() {
   return (
     <div className="skeleton-card" aria-hidden="true">
-      <span className="skeleton" />
-      <span className="skeleton skeleton-text" style={{ width: '90%' }} />
+      <span className="skeleton skeleton-cover" />
+      <span className="skeleton skeleton-text" style={{ width: '90%', marginTop: 12 }} />
       <span className="skeleton skeleton-text" style={{ width: '60%' }} />
-      <span className="skeleton skeleton-text" style={{ width: '40%', height: 20 }} />
-      <span className="skeleton" style={{ height: 40, marginTop: 16 }} />
+      <span className="skeleton skeleton-text" style={{ width: '45%', height: 18, marginTop: 14 }} />
+      <span className="skeleton" style={{ height: 36, width: 72, marginTop: 12 }} />
     </div>
   );
 }
@@ -94,18 +94,38 @@ export function DetailSkeleton() {
       <LoadingLabel label="Loading book…" />
       <div className="detail" aria-hidden="true">
         <div>
-          <span className="skeleton" style={{ aspectRatio: '2 / 3' }} />
+          <span className="skeleton skeleton-cover" />
         </div>
         <div>
-          <span className="skeleton" style={{ height: 36, width: '80%' }} />
-          <span className="skeleton skeleton-text" style={{ width: '50%' }} />
-          <span className="skeleton" style={{ height: 200, marginTop: 24 }} />
-          <span className="skeleton skeleton-text" style={{ width: '95%', marginTop: 32 }} />
+          <span className="skeleton" style={{ height: 36, width: '85%' }} />
+          <span className="skeleton" style={{ height: 36, width: '55%', marginTop: 8 }} />
+          <span className="skeleton" style={{ height: 32, width: 160, marginTop: 44 }} />
+          <span className="skeleton" style={{ height: 48, marginTop: 40 }} />
+          <span className="skeleton" style={{ height: 48, marginTop: 8 }} />
+          <span className="skeleton skeleton-text" style={{ width: '95%', marginTop: 48 }} />
           <span className="skeleton skeleton-text" style={{ width: '90%' }} />
           <span className="skeleton skeleton-text" style={{ width: '70%' }} />
         </div>
       </div>
     </div>
+  );
+}
+
+export function FeaturedSkeleton() {
+  return (
+    <>
+      <LoadingLabel label="Loading featured book…" />
+      <div className="featured" aria-hidden="true">
+        <span className="skeleton featured-cover skeleton-cover" />
+        <div className="featured-body">
+          <span className="skeleton skeleton-text" style={{ width: 160, marginTop: 0 }} />
+          <span className="skeleton" style={{ height: 44, width: '90%', marginTop: 16 }} />
+          <span className="skeleton" style={{ height: 44, width: '60%', marginTop: 8 }} />
+          <span className="skeleton" style={{ height: 28, width: 180, marginTop: 24 }} />
+          <span className="skeleton" style={{ height: 48, width: 280, maxWidth: '100%', marginTop: 32 }} />
+        </div>
+      </div>
+    </>
   );
 }
 

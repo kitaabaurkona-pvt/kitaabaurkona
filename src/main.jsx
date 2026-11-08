@@ -2,11 +2,13 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import '@fontsource-variable/inter';
+import '@fontsource-variable/source-serif-4';
 import './index.css';
 import { captureAuthRedirectError } from './utils/authRedirect';
 import { PreferencesProvider } from './context/PreferencesContext';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
+import { CartLinesProvider } from './context/CartLinesProvider';
 import { WishlistProvider } from './context/WishlistContext';
 import { ToastProvider } from './context/ToastProvider';
 import App from './App.jsx';
@@ -19,11 +21,13 @@ createRoot(document.getElementById('root')).render(
       <PreferencesProvider>
         <AuthProvider>
           <CartProvider>
-            <WishlistProvider>
-              <ToastProvider>
-                <App />
-              </ToastProvider>
-            </WishlistProvider>
+            <CartLinesProvider>
+              <WishlistProvider>
+                <ToastProvider>
+                  <App />
+                </ToastProvider>
+              </WishlistProvider>
+            </CartLinesProvider>
           </CartProvider>
         </AuthProvider>
       </PreferencesProvider>
