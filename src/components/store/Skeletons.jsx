@@ -111,21 +111,43 @@ export function DetailSkeleton() {
   );
 }
 
-export function FeaturedSkeleton() {
+export function SliderSkeleton() {
   return (
     <>
-      <LoadingLabel label="Loading featured book…" />
-      <div className="featured" aria-hidden="true">
-        <span className="skeleton featured-cover skeleton-cover" />
-        <div className="featured-body">
-          <span className="skeleton skeleton-text" style={{ width: 160, marginTop: 0 }} />
-          <span className="skeleton" style={{ height: 44, width: '90%', marginTop: 16 }} />
-          <span className="skeleton" style={{ height: 44, width: '60%', marginTop: 8 }} />
-          <span className="skeleton" style={{ height: 28, width: 180, marginTop: 24 }} />
-          <span className="skeleton" style={{ height: 48, width: 280, maxWidth: '100%', marginTop: 32 }} />
+      <LoadingLabel label="Loading books…" />
+      <div className="slider" aria-hidden="true">
+        <div className="slides">
+          <div className="slide">
+            <span className="skeleton slide-media" />
+            <div className="slide-body">
+              <span className="skeleton skeleton-text" style={{ width: 180, marginTop: 0 }} />
+              <span className="skeleton" style={{ height: 44, width: '90%', marginTop: 16 }} />
+              <span className="skeleton" style={{ height: 44, width: '60%', marginTop: 8 }} />
+              <span className="skeleton" style={{ height: 28, width: 180, marginTop: 24 }} />
+              <span className="skeleton" style={{ height: 48, width: 280, maxWidth: '100%', marginTop: 32 }} />
+            </div>
+          </div>
         </div>
+        <div className="slider-controls" />
       </div>
     </>
+  );
+}
+
+export function TilesSkeleton({ count = 8 }) {
+  return (
+    <div className="section tiles-section" aria-hidden="true">
+      <div className="section-head">
+        <span className="skeleton" style={{ height: 24, width: 100 }} />
+      </div>
+      <ul className="tiles">
+        {Array.from({ length: count }, (_, i) => (
+          <li key={i}>
+            <span className="skeleton tile" />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

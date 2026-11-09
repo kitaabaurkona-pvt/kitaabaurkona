@@ -1,4 +1,5 @@
-import { Link, NavLink } from 'react-router-dom';
+import { useState } from 'react';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
 import { useCart } from '../../hooks/useCart';
@@ -6,6 +7,7 @@ import { useCartLines } from '../../hooks/useCartLines';
 import { formatCount, formatPrice } from '../../utils/format';
 import { BagIcon, SearchIcon, UserIcon } from '../icons';
 import MobileMenu from './MobileMenu';
+import BooksMenu from './BooksMenu';
 
 const fade = {
   initial: { opacity: 0 },
@@ -21,6 +23,16 @@ function SiteHeader() {
   // The count is instant (it lives in this browser); the subtotal waits for fresh prices
   // so it never shows a figure worked out from an older cart.
   const showSubtotal = count > 0 && Boolean(data) && !loading;
+  const navigate = useNavigate();
+  const [term, setTerm] = useState('');
+
+  function handleSearch(event) {
+    event.preventDefault();
+    const q = term.trim().slice(0, 100);
+    navigate(q ? `/books?q=${encodeURIComponent(q)}` : '/books', { state: { focusSearch: !q } });
+    setTerm('');
+  }
+
   const label = `Cart, ${count} ${count === 1 ? 'item' : 'items'}${showSubtotal ? `, subtotal ${formatPrice(totals.subtotal)}` : ''}`;
 
   return (
@@ -36,14 +48,28 @@ function SiteHeader() {
           <NavLink to="/" end>
             Store
           </NavLink>
-          <NavLink to="/books">Books</NavLink>
+          <BooksMenu />
           <NavLink to="/wishlist">Wishlist</NavLink>
           <NavLink to="/orders">Orders</NavLink>
           {role === 'admin' && <NavLink to="/admin">Admin</NavLink>}
         </nav>
 
         <div className="header-actions">
-          <Link to="/books" state={{ focusSearch: true }} className="icon-button" aria-label="Search books">
+          <form className="header-search" role="search" onSubmit={handleSearch}>
+            <label htmlFor="header-search" className="visually-hidden">
+              Search books by title
+            </label>
+            <SearchIcon size={18} />
+            <input
+              id="header-search"
+              type="search"
+              placeholder="Search books"
+              maxLength={100}
+              value={term}
+              onChange={(event) => setTerm(event.target.value)}
+            />
+          </form>
+          <Link to="/books" state={{ focusSearch: true }} className="icon-button header-search-icon" aria-label="Search books">
             <SearchIcon />
           </Link>
           {isAuthenticated ? (

@@ -137,3 +137,27 @@ export const UploadIcon = (p) => (
     <path d="M12 15.5V4.5M7.5 9L12 4.5 16.5 9M4.5 15v4.5h15V15" />
   </Icon>
 );
+
+export const ArrowRightIcon = (p) => (
+  <Icon {...p}>
+    <path d="M5 12h14M13 6l6 6-6 6" />
+  </Icon>
+);
+
+export const ChevronLeftIcon = (p) => (
+  <Icon {...p}>
+    <path d="M15 5l-7 7 7 7" />
+  </Icon>
+);
+
+export const ChevronRightIcon = (p) => (
+  <Icon {...p}>
+    <path d="M9 5l7 7-7 7" />
+  </Icon>
+);
+
+export const ChevronDownIcon = (p) => (
+  <Icon {...p}>
+    <path d="M5 9l7 7 7-7" />
+  </Icon>
+);

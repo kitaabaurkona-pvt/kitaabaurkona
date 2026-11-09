@@ -1,6 +1,7 @@
 import { supabase } from '../clients/supabase';
 import { escapeLike } from '../utils/storeForm';
 import { isUuid, unwrap } from './request';
+import { COLLECTIONS } from '../utils/categories';
 
 export const LIST_FIELDS = 'id, title, price, mrp, discount_percent, stock_quantity, image_urls';
 const DETAIL_FIELDS =
@@ -15,13 +16,26 @@ export const SORTS = {
   discount: { label: 'Biggest discount', column: 'discount_percent', ascending: false },
 };
 
-export async function listBooks({ search = '', sort = 'title', inStock = false, category = '', page = 0, pageSize = PAGE_SIZE } = {}) {
+export async function listBooks({
+  search = '',
+  sort = 'title',
+  inStock = false,
+  category = '',
+  maxPrice = null,
+  collection = '',
+  page = 0,
+  pageSize = PAGE_SIZE,
+} = {}) {
   const order = SORTS[sort] ?? SORTS.title;
   let query = supabase.from('books').select(LIST_FIELDS, { count: 'exact' }).eq('is_visible', true);
   const term = search.trim().slice(0, 100);
   if (term) query = query.ilike('title', `%${escapeLike(term)}%`);
   if (inStock) query = query.gt('stock_quantity', 0);
   if (category) query = query.eq('category', category);
+  if (Number.isFinite(maxPrice) && maxPrice > 0) query = query.lte('price', maxPrice);
+  // Fixed, code-defined title patterns only; nothing from the URL reaches the filter text.
+  const languages = COLLECTIONS[collection]?.languages;
+  if (languages) query = query.or(languages.map((word) => `title.ilike.%${word}%`).join(','));
   const from = page * pageSize;
   const { data, count } = unwrap(
     await query
@@ -44,6 +58,16 @@ export async function getBooksByIds(ids) {
   if (valid.length === 0) return [];
   const { data } = unwrap(await supabase.from('books').select(`${LIST_FIELDS}, is_visible`).in('id', valid));
   return (data ?? []).filter((book) => book.is_visible);
+}
+
+// How many visible books each category has, e.g. { 'Self-Help': 61 }.
+export async function listCategoryCounts() {
+  const { data } = unwrap(
+    await supabase.from('books').select('category').eq('is_visible', true).not('category', 'is', null).limit(1000),
+  );
+  const counts = {};
+  for (const row of data ?? []) counts[row.category] = (counts[row.category] ?? 0) + 1;
+  return counts;
 }
 
 export async function listCategories() {

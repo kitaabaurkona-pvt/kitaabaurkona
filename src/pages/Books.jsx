@@ -3,7 +3,8 @@ import { useLocation, useSearchParams } from 'react-router-dom';
 import { listBooks, listCategories, SORTS } from '../services/bookService';
 import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { plural } from '../utils/format';
+import { formatPrice, plural } from '../utils/format';
+import { COLLECTIONS, UNDER_PRICE, orderCategories } from '../utils/categories';
 import BookCard from '../components/store/BookCard';
 import { LoadError, StateBlock } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
@@ -18,7 +19,10 @@ function Books() {
   const sort = SORTS[params.get('sort')] ? params.get('sort') : 'title';
   const inStock = params.get('stock') === '1';
   const category = params.get('category') ?? '';
-  const filterKey = `${q}|${sort}|${inStock}|${category}`;
+  // Only known values are honoured, so a hand-edited URL cannot build other filters.
+  const maxPrice = Number(params.get('max')) === UNDER_PRICE ? UNDER_PRICE : null;
+  const collection = COLLECTIONS[params.get('collection')] ? params.get('collection') : '';
+  const filterKey = `${q}|${sort}|${inStock}|${category}|${maxPrice}|${collection}`;
 
   const [term, setTerm] = useState(q);
   const [prevQ, setPrevQ] = useState(q);
@@ -54,7 +58,7 @@ function Books() {
     return () => clearTimeout(timer);
   }, [term, q, setParams]);
 
-  const first = useAsync(() => listBooks({ search: q, sort, inStock, category }), [filterKey]);
+  const first = useAsync(() => listBooks({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey]);
   const categories = useAsync(() => listCategories(), []);
 
   const [more, setMore] = useState({ key: '', books: [], page: 0 });
@@ -70,7 +74,7 @@ function Books() {
     const key = filterKey;
     setMoreState({ loading: true, error: false });
     try {
-      const next = await listBooks({ search: q, sort, inStock, category, page: extra.page + 1 });
+      const next = await listBooks({ search: q, sort, inStock, category, maxPrice, collection, page: extra.page + 1 });
       if (keyRef.current !== key) return;
       setMore({ key, books: [...extra.books, ...next.books], page: extra.page + 1 });
       setMoreState({ loading: false, error: false });
@@ -81,7 +85,12 @@ function Books() {
 
   const books = first.data ? [...first.data.books, ...extra.books] : [];
   const total = first.data?.total ?? 0;
-  const filtered = Boolean(q || inStock || category);
+  const filtered = Boolean(q || inStock || category || maxPrice || collection);
+  const describe = [
+    category,
+    maxPrice ? `up to ${formatPrice(maxPrice)}` : '',
+    collection ? COLLECTIONS[collection].label.toLowerCase() : '',
+  ].filter(Boolean);
 
   return (
     <div className="container page">
@@ -90,6 +99,7 @@ function Books() {
         {first.data && (
           <p className="page-meta" aria-live="polite">
             {plural(total, 'book')}
+            {describe.length > 0 ? ` · ${describe.join(' · ')}` : ''}
             {q ? ` matching “${q}”` : ''}
           </p>
         )}
@@ -135,6 +145,22 @@ function Books() {
           >
             In stock only
           </button>
+          <button
+            type="button"
+            className="chip"
+            aria-pressed={Boolean(maxPrice)}
+            onClick={() => update({ max: maxPrice ? null : String(UNDER_PRICE) })}
+          >
+            Up to {formatPrice(UNDER_PRICE)}
+          </button>
+          <button
+            type="button"
+            className="chip"
+            aria-pressed={Boolean(collection)}
+            onClick={() => update({ collection: collection ? null : 'regional' })}
+          >
+            {COLLECTIONS.regional.label}
+          </button>
         </div>
       </div>
 
@@ -143,7 +169,7 @@ function Books() {
           <button type="button" className="chip" aria-pressed={!category} onClick={() => update({ category: null })}>
             All categories
           </button>
-          {categories.data.map((name) => (
+          {orderCategories(categories.data).map((name) => (
             <button
               key={name}
               type="button"

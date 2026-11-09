@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -7,6 +7,18 @@ import { useCart } from '../../hooks/useCart';
 import { useWishlist } from '../../hooks/useWishlist';
 import { usePreferences } from '../../hooks/usePreferences';
 import { useToast } from '../../hooks/useToast';
+import { useAsync } from '../../hooks/useAsync';
+import { listCategories } from '../../services/bookService';
+import {
+  COLLECTIONS,
+  UNDER_PRICE,
+  categoryHref,
+  orderCategories,
+  regionalHref,
+  tintFor,
+  underPriceHref,
+} from '../../utils/categories';
+import { formatPrice } from '../../utils/format';
 import {
   BagIcon,
   BookIcon,
@@ -34,6 +46,7 @@ function MobileMenu() {
   const { show } = useToast();
   const navigate = useNavigate();
   const close = () => setOpen(false);
+  const categories = useAsync(() => listCategories(), []);
 
   const item = (to, label, Icon, { end = false, count = 0 } = {}) => (
     <NavLink to={to} end={end} className="drawer-link" onClick={close}>
@@ -103,6 +116,26 @@ function MobileMenu() {
                   {item('/books', 'Books', BookIcon)}
                   {item('/cart', 'Cart', BagIcon, { count: cartCount })}
                 </nav>
+
+                {categories.data?.length > 0 && (
+                  <nav aria-label="Categories" className="drawer-section">
+                    <h2>Categories</h2>
+                    {orderCategories(categories.data).map((name) => (
+                      <Link key={name} to={categoryHref(name)} className="drawer-link" onClick={close}>
+                        <span className="swatch" data-tint={tintFor(name)} aria-hidden="true" />
+                        {name}
+                      </Link>
+                    ))}
+                    <Link to={underPriceHref} className="drawer-link" onClick={close}>
+                      <span className="swatch" data-tint="sand" aria-hidden="true" />
+                      Up to {formatPrice(UNDER_PRICE)}
+                    </Link>
+                    <Link to={regionalHref} className="drawer-link" onClick={close}>
+                      <span className="swatch" data-tint="sky" aria-hidden="true" />
+                      {COLLECTIONS.regional.label}
+                    </Link>
+                  </nav>
+                )}
 
                 <nav aria-label="Your account" className="drawer-section">
                   <h2>Your account</h2>

@@ -41,6 +41,18 @@
   --c-skeleton-shine: #f7f6f2;
   --c-scrim: rgba(17, 17, 17, 0.4);
 
+  /* Soft flat tints for categories, collections and shelf headers (never gradients). */
+  --tint-sand: #f3ebdd;
+  --tint-sand-strong: #eadcc5;
+  --tint-sage: #e3ebdf;
+  --tint-sage-strong: #d4e0ce;
+  --tint-rose: #f3e3e1;
+  --tint-rose-strong: #ead2cf;
+  --tint-sky: #e0eaf2;
+  --tint-sky-strong: #cfdeeb;
+  --tint-lilac: #e9e4f2;
+  --tint-lilac-strong: #dcd4ec;
+
   --font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, 'Times New Roman', serif;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -93,6 +105,17 @@
   --c-skeleton: #1f1f1d;
   --c-skeleton-shine: #292927;
   --c-scrim: rgba(0, 0, 0, 0.6);
+
+  --tint-sand: #27221a;
+  --tint-sand-strong: #322b20;
+  --tint-sage: #1d241e;
+  --tint-sage-strong: #252f27;
+  --tint-rose: #291f1f;
+  --tint-rose-strong: #342727;
+  --tint-sky: #1b2228;
+  --tint-sky-strong: #222b33;
+  --tint-lilac: #221f29;
+  --tint-lilac-strong: #2b2734;
 }
 
 @media (min-width: 768px) {

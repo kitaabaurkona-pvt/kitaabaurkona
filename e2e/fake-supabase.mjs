@@ -143,6 +143,15 @@ export async function createBackend({ schemaPath, books }) {
   await asRole(db, { role: 'authenticated', sub: USERS['admin@example.com'].id }, (tx) =>
     tx.query('select * from public.admin_upsert_books($1::jsonb)', [JSON.stringify(payload)]),
   );
+  // Categories are set separately from uploads, so copy them over from the live data.
+  const categories = books.filter((b) => b.category).map((b) => ({ sku: b.sku, category: b.category }));
+  if (categories.length) {
+    await db.query(
+      `update public.books b set category = c.category
+       from jsonb_to_recordset($1::jsonb) as c(sku text, category text) where b.sku = c.sku`,
+      [JSON.stringify(categories)],
+    );
+  }
   return db;
 }
 

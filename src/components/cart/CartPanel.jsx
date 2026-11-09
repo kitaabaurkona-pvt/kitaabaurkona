@@ -133,12 +133,13 @@ function CartPanel() {
                       </button>
                     ) : (
                       <Link to="/checkout" className="btn btn-primary btn-block">
-                        Checkout
+                        Checkout <span aria-hidden="true">•</span> {formatPrice(totals.subtotal)}
                       </Link>
                     )}
-                    <Link to="/cart" className="btn btn-outline btn-block">
-                      View cart
-                    </Link>
+                    <div className="cart-panel-links">
+                      <Link to="/books">Continue browsing</Link>
+                      <Link to="/cart">View cart</Link>
+                    </div>
                   </div>
                 )}
               </motion.div>
