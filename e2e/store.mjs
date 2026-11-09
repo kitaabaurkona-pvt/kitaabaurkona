@@ -200,7 +200,16 @@ try {
     check('cards: green "% OFF" in the price row', (await page.$eval('.book-card .price-off', (e) => getComputedStyle(e).color).catch(() => null)) === GREEN);
     check('cards: framed with a 1px border', (await page.$eval('.book-card', (e) => getComputedStyle(e).borderTopWidth)) === '1px');
     check('header: Offers removed from navigation', (await page.$('header a[href="/offers"]')) === null);
-    check('header: logo centred between search and icons', await page.$eval('.brand-logo', (l) => Math.abs(l.getBoundingClientRect().left + l.getBoundingClientRect().width / 2 - window.innerWidth / 2) < 2));
+    check(
+      'header: logo and name on the left, search in the middle',
+      await page.evaluate(() => {
+        const logo = document.querySelector('.brand-logo').getBoundingClientRect();
+        const search = document.querySelector('.header-search').getBoundingClientRect();
+        return logo.left < 60 && /kitaabaurkona/i.test(document.querySelector('.brand-word').textContent) && Math.abs(search.left + search.width / 2 - window.innerWidth / 2) < 60;
+      }),
+    );
+    check('home: rows alternate cream and white bands', (await page.$$('.band[data-tone="cream"]')).length >= 2 && (await page.$$('.band:not([data-tone])')).length >= 2);
+    check('home: a category ribbon links every category', (await page.$$('.ribbon ul:not([aria-hidden]) a[href*="category="]')).length >= 5);
     check('header: no count badge while the cart is empty', (await page.$('.cart-count')) === null);
     const footer = await page.$eval('.site-footer', (f) => f.innerText);
     check('footer: contact details from the owner', footer.includes('Kitaabaurkona@gmail.com') && footer.includes('8690965448') && /udaipur/i.test(footer));
@@ -328,10 +337,12 @@ try {
     if (card) {
       await card.evaluate((c) => c.scrollIntoView({ block: 'center' }));
       await sleep(300);
+      await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 }).catch(() => {});
       const media = await card.$('.card-media');
       await media.hover();
+      // The extra photos are about 1 MB each and only start loading on the first hover.
       const swapped = await card
-        .waitForSelector('.card-photo-extra[data-shown]', { timeout: 5000 })
+        .waitForSelector('.card-photo-extra[data-shown]', { timeout: 15000 })
         .then(() => true)
         .catch(() => false);
       check('cards: hovering a card fades in its next photo', swapped);
@@ -611,7 +622,7 @@ try {
     check('admin orders: the label link points to the courier file host', /^https:\/\/xb-files\.s3\.amazonaws\.com\//.test(await page.$eval('.parcel-admin a[href*="labels"]', (a) => a.href).catch(() => '')));
     check('admin orders: booked parcels can be picked for a manifest', await waitSel(page, '.pick input[type=checkbox]', 3000));
     await page.click('.pick input[type=checkbox]');
-    check('admin orders: manifest button appears', /Pickup manifest for 1 order/.test(await page.$eval('main', (m) => m.innerText)));
+    check('admin orders: manifest button appears', /Pickup manifest for 1 order/i.test(await page.$eval('main', (m) => m.innerText)));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-parcel-light-1280.png'), fullPage: true });
     check('admin shipping flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
@@ -627,6 +638,8 @@ try {
     await goto(reader.page, `/orders/${placed.id}`);
     check('customer: tracking shows the courier and AWB', await reader.page.waitForFunction(() => /Tracking number/i.test(document.body.innerText) && /On the way/i.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
     check('customer: picked up, so the order is Shipped', (await one(`select status from public.orders where id = $1`, [placed.id])).status === 'shipped');
+    check('customer: the page updates the order to Shipped by itself', await reader.page.waitForFunction(() => document.querySelector('.page-head .status')?.textContent.trim() === 'Shipped', { timeout: 6000 }).then(() => true).catch(() => false));
+    check('customer: no Cancel button once the parcel has left', !/Cancel order/i.test(await reader.page.$eval('main', (m) => m.innerText)));
     check('customer: the tracking history is listed', (await reader.page.$$('.parcel-history li')).length >= 1);
     check('customer: no label or courier cost is shown', !/label|courier cost|₹90/i.test(await reader.page.$eval('main', (m) => m.innerText)));
     await reader.page.screenshot({ path: path.join(SHOTS, 'order-tracking-light-1280.png'), fullPage: true });

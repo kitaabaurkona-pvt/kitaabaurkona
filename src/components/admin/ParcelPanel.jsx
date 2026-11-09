@@ -82,7 +82,7 @@ function ParcelPanel({ order, onChanged }) {
         </div>
       ))}
 
-      {rates && (
+      {rates && canBook && (
         <div className="inline-actions">
           <label className="visually-hidden" htmlFor={`courier-${order.id}`}>
             Courier

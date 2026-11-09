@@ -699,6 +699,7 @@ create table if not exists public.shipment_events (
 );
 
 create index if not exists shipment_events_order_idx on public.shipment_events (order_id, created_at desc);
+create index if not exists shipment_events_shipment_idx on public.shipment_events (shipment_id);
 
 alter table public.shipment_events enable row level security;
 

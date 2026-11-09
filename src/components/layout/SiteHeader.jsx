@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -23,10 +23,34 @@ import NavMenu from './NavMenu';
 
 const toLinks = (names) => names.map((name) => ({ to: categoryHref(name), label: name }));
 
-// Store header like the previous store: search on the left, the logo in the middle,
-// account, wishlist and bag on the right, and an UPPERCASE nav row underneath
-// (tablets and up). Phones get the menu button and a search icon instead.
+// Slims the header once the page is scrolled. Two thresholds (on past 80px, off above
+// 20px) so it never flickers while the header itself changes height.
+function useScrolled() {
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setScrolled((was) => (was ? window.scrollY > 20 : window.scrollY > 80));
+    };
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+  return scrolled;
+}
+
+// Store header: logo and name on the left, a wide search in the middle, account,
+// wishlist and bag on the right, and an UPPERCASE nav row underneath (tablets and up).
+// Phones get the menu button and a search icon instead.
 function SiteHeader() {
+  const scrolled = useScrolled();
   const { isAuthenticated, role } = useAuth();
   const { count } = useCart();
   const { cartOpen, openCart } = useCartLines();
@@ -63,34 +87,37 @@ function SiteHeader() {
   ];
 
   return (
-    <header className="site-header">
+    <header className="site-header" data-scrolled={scrolled || undefined}>
       <div className="container header-top">
         <div className="header-left">
           <MobileMenu />
-          <form className="header-search" role="search" onSubmit={handleSearch}>
-            <label htmlFor="header-search" className="visually-hidden">
-              Search books by title
-            </label>
-            <SearchIcon size={20} />
-            <input
-              id="header-search"
-              type="search"
-              placeholder="Search"
-              maxLength={100}
-              value={term}
-              onChange={(event) => setTerm(event.target.value)}
-            />
-          </form>
-          <Link to="/books" state={{ focusSearch: true }} className="icon-button header-search-icon" aria-label="Search books">
-            <SearchIcon />
+          <Link to="/" className="brand-logo" aria-label="Kitaabaurkona home">
+            <img src="/logo-192.png" alt="" width="48" height="48" />
+            <span className="brand-word" aria-hidden="true">
+              Kitaabaurkona
+            </span>
           </Link>
         </div>
 
-        <Link to="/" className="brand-logo" aria-label="Kitaabaurkona home">
-          <img src="/logo-192.png" alt="" width="56" height="56" />
-        </Link>
+        <form className="header-search" role="search" onSubmit={handleSearch}>
+          <label htmlFor="header-search" className="visually-hidden">
+            Search books by title
+          </label>
+          <SearchIcon size={20} />
+          <input
+            id="header-search"
+            type="search"
+            placeholder="Search books by title"
+            maxLength={100}
+            value={term}
+            onChange={(event) => setTerm(event.target.value)}
+          />
+        </form>
 
         <div className="header-right">
+          <Link to="/books" state={{ focusSearch: true }} className="icon-button header-search-icon" aria-label="Search books">
+            <SearchIcon />
+          </Link>
           <Link
             to={isAuthenticated ? '/account' : '/sign-in'}
             className="icon-button header-account"

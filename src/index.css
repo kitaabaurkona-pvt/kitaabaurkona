@@ -1,7 +1,8 @@
 /* Kitaabaurkona design system, matched to the owner's previous store: white page,
    near-black ink, Inter everywhere, UPPERCASE headings and buttons, square corners,
    1px rules. Black for the main action, red for the discount tag, green for "% OFF".
-   Amber lives only in the logo. Light and dark themes share every rule; only the
+   The logo's gold is the accent (underlines, rules, icons, hovers) and warm cream bands
+   give the home page rhythm. Light and dark themes share every rule; only the
    tokens change (dark is the inverted version). */
 
 :root {
@@ -29,6 +30,11 @@
   --c-on-tag: #ffffff;
   --c-sale: #b22222;
   --c-save: #008000;
+  /* The logo's gold: underlines, rules, icons and hover states (text uses the deep tone). */
+  --c-gold: #eaa800;
+  --c-gold-deep: #8a6200;
+  --c-gold-wash: rgba(234, 168, 0, 0.18);
+  --c-cream: #fbf6ea;
   --c-accent: #000000;
   --c-accent-hover: #3d3d3d;
   --c-accent-active: #242424;
@@ -92,6 +98,10 @@
   --c-on-tag: #ffffff;
   --c-sale: #f08a8a;
   --c-save: #5cae5c;
+  --c-gold: #f0b81c;
+  --c-gold-deep: #f5c451;
+  --c-gold-wash: rgba(240, 184, 28, 0.2);
+  --c-cream: #1b1813;
   --c-accent: #ffffff;
   --c-accent-hover: #e1e1e1;
   --c-accent-active: #cccccc;
@@ -287,21 +297,42 @@ button {
   cursor: pointer;
 }
 
+/* Hover: a fill sweeps in from the left. Black buttons fill with the logo's gold (dark
+   text), outline buttons fill with ink. The sweep is a background-size transition, so
+   Reduce animations simply shows the end state. */
+.btn-primary,
+.btn-dark,
+.btn-outline,
+.btn-quiet {
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 0% 100%;
+  transition: background-size 0.35s var(--ease-out), background-color 0.15s ease, border-color 0.2s ease, color 0.2s ease,
+    transform 0.12s var(--ease-out);
+}
+
+.btn-primary,
+.btn-dark {
+  background-image: linear-gradient(var(--c-gold), var(--c-gold));
+}
+
+.btn-outline,
+.btn-quiet {
+  background-image: linear-gradient(var(--c-ink), var(--c-ink));
+}
+
 @media (hover: hover) {
-  .btn-primary:hover {
-    border-color: var(--c-accent-hover);
-    background: var(--c-accent-hover);
+  .btn-primary:not([aria-disabled='true']):hover,
+  .btn-dark:not([aria-disabled='true']):hover {
+    border-color: var(--c-gold);
+    background-size: 100% 100%;
+    color: #111111;
   }
 
-  .btn-dark:hover {
-    border-color: var(--c-carbon-hover);
-    background: var(--c-carbon-hover);
-  }
-
-  .btn-outline:hover,
-  .btn-quiet:hover {
+  .btn-outline:not([aria-disabled='true']):hover,
+  .btn-quiet:not([aria-disabled='true']):hover {
     border-color: var(--c-ink);
-    background: var(--c-ink);
+    background-size: 100% 100%;
     color: var(--c-paper);
   }
 
@@ -316,7 +347,7 @@ button {
 
 .btn-primary:active {
   border-color: var(--c-accent-active);
-  background: var(--c-accent-active);
+  background-color: var(--c-accent-active);
 }
 
 .btn[aria-disabled='true'],

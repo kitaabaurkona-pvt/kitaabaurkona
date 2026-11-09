@@ -14,6 +14,7 @@ import TrustStrip from '../components/home/TrustStrip';
 import Banner from '../components/home/Banner';
 import ProductCarousel from '../components/home/ProductCarousel';
 import SectionHead from '../components/home/SectionHead';
+import CategoryRibbon from '../components/home/CategoryRibbon';
 
 const HERO_BOOKS = 3;
 const ROW = 10;
@@ -42,9 +43,11 @@ function Home() {
         <HeroCarousel books={dealBooks.slice(0, HERO_BOOKS)} />
       </div>
 
-      <div className="container">
-        {summary.loading && !summary.data && <CirclesSkeleton />}
-        {summary.data && <CategoryCircles summary={summary.data} />}
+      <div className="band">
+        <div className="container">
+          {summary.loading && !summary.data && <CirclesSkeleton />}
+          {summary.data && <CategoryCircles summary={summary.data} />}
+        </div>
       </div>
 
       <TrustStrip />
@@ -53,26 +56,48 @@ function Home() {
         <Banner banner={BANNERS.trio} />
       </Reveal>
 
-      <div className="container">
-        <ProductCarousel id="deals" title="Amazing deals" href={dealsHref} state={dealsRow} autoplay={4000} />
-        <ProductCarousel id="under" title={`Up to ${formatPrice(UNDER_PRICE)}`} href={underPriceHref} state={under} />
-        <ProductCarousel id="combos" title={COMBOS} href={categoryHref(COMBOS)} state={combos} />
-        <ProductCarousel id="regional" title={COLLECTIONS.regional.label} href={regionalHref} state={regional} />
+      {/* Rows alternate between warm cream and white bands. */}
+      <div className="band" data-tone="cream">
+        <div className="container">
+          <ProductCarousel id="deals" title="Amazing deals" href={dealsHref} state={dealsRow} autoplay={4000} />
+        </div>
+      </div>
 
-        <section className="home-section" aria-labelledby="all-heading">
-          <SectionHead id="all-heading" title="All products" href="/books" />
-          {all.loading && !all.data && <BookGridSkeleton count={ALL} />}
-          {all.error && <LoadError onRetry={all.retry} what="books" />}
-          {all.data && (
-            <ul className="book-grid">
-              {all.data.books.map((book, index) => (
-                <Reveal as="li" key={book.id} index={index % 4}>
-                  <BookCard book={book} />
-                </Reveal>
-              ))}
-            </ul>
-          )}
-        </section>
+      {summary.data && <CategoryRibbon categories={Object.keys(summary.data)} />}
+
+      <div className="band">
+        <div className="container">
+          <ProductCarousel id="under" title={`Up to ${formatPrice(UNDER_PRICE)}`} href={underPriceHref} state={under} />
+        </div>
+      </div>
+      <div className="band" data-tone="cream">
+        <div className="container">
+          <ProductCarousel id="combos" title={COMBOS} href={categoryHref(COMBOS)} state={combos} />
+        </div>
+      </div>
+      <div className="band">
+        <div className="container">
+          <ProductCarousel id="regional" title={COLLECTIONS.regional.label} href={regionalHref} state={regional} />
+        </div>
+      </div>
+
+      <div className="band" data-tone="cream">
+        <div className="container">
+          <Reveal as="section" className="home-section" aria-labelledby="all-heading">
+            <SectionHead id="all-heading" title="All products" href="/books" />
+            {all.loading && !all.data && <BookGridSkeleton count={ALL} />}
+            {all.error && <LoadError onRetry={all.retry} what="books" />}
+            {all.data && (
+              <ul className="book-grid">
+                {all.data.books.map((book, index) => (
+                  <Reveal as="li" key={book.id} index={index % 4}>
+                    <BookCard book={book} />
+                  </Reveal>
+                ))}
+              </ul>
+            )}
+          </Reveal>
+        </div>
       </div>
     </div>
   );

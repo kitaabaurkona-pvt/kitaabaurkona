@@ -24,7 +24,10 @@ export const USERS = {
 const IDENT = /^[a-z_][a-z0-9_]*$/;
 // Embedded resources the site asks for, e.g. `orders?select=*,order_items(*)`.
 const RELATIONS = {
-  orders: { order_items: { many: true, local: 'id', remote: 'order_id' } },
+  orders: {
+    order_items: { many: true, local: 'id', remote: 'order_id' },
+    shipments: { many: true, local: 'id', remote: 'order_id' },
+  },
   wishlist_items: { books: { many: false, local: 'book_id', remote: 'id' } },
 };
 
@@ -362,9 +365,9 @@ export async function handleRest(db, { method, url, headers, body }) {
         const sets = cols.map((c, i) => `"${c}" = $${params.length + i + 1}`).join(', ');
         const r = await tx.query(`update public.${ident(table)} t set ${sets} ${where} returning t.id`, [...params, ...vals]);
         if (!prefer.includes('return=representation')) return { status: 204, body: '' };
-        const ids = r.rows.map((row) => row.id);
+        const ids = r.rows.map((row) => String(row.id));
         const sel = await tx.query(
-          `select coalesce(json_agg(r), '[]'::json) as j from (select ${selectList(table, url.searchParams.get('select'), 't')} from public.${ident(table)} t where t.id = any($1::uuid[])) r`,
+          `select coalesce(json_agg(r), '[]'::json) as j from (select ${selectList(table, url.searchParams.get('select'), 't')} from public.${ident(table)} t where t.id::text = any($1::text[])) r`,
           [ids],
         );
         const rows = sel.rows[0].j;

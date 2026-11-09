@@ -74,15 +74,22 @@
   border-bottom: 1px solid var(--c-frame);
   background: var(--c-paper);
   padding-top: env(safe-area-inset-top, 0px);
+  transition: box-shadow 0.25s ease;
 }
 
-/* Search left, logo centred, icons right. */
+.site-header[data-scrolled] {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
+/* Phones: logo left, icons right. Tablets and up: logo left, search truly centred
+   (equal side columns), icons right. */
 .header-top {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 8px 24px;
   min-height: var(--header-h);
+  transition: min-height 0.25s var(--ease-out);
 }
 
 .header-left,
@@ -98,13 +105,34 @@
 }
 
 .brand-logo {
-  display: block;
-  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--c-ink);
+  text-decoration: none;
 }
 
 .brand-logo img {
-  width: 40px;
-  height: 40px;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  transition: width 0.25s var(--ease-out), height 0.25s var(--ease-out);
+}
+
+.brand-word {
+  display: none;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@media (min-width: 360px) {
+  .brand-word {
+    display: inline;
+  }
 }
 
 /* Logo + word, used at the top of the side menu. */
@@ -190,9 +218,10 @@
   text-align: center;
 }
 
-/* Search box (wide screens); an icon below that. */
+/* Search box in the middle (tablets and up); an icon on phones. */
 .header-search {
   display: none;
+  justify-self: center;
 }
 
 .header-search input {
@@ -250,8 +279,8 @@
   right: 8px;
   bottom: 6px;
   left: 8px;
-  height: 1px;
-  background: currentColor;
+  height: 2px;
+  background: var(--c-gold);
   transform: scaleX(0);
   transform-origin: left;
   transition: transform 0.2s var(--ease-out);
@@ -303,6 +332,7 @@
 .nav-menu-link {
   display: block;
   padding: 10px 20px;
+  border-left: 2px solid transparent;
   color: var(--c-ink);
   font-size: var(--fs-sm);
   text-decoration: none;
@@ -312,6 +342,7 @@
 @media (hover: hover) {
   .nav-menu-link:hover {
     padding-left: 24px;
+    border-left-color: var(--c-gold);
     background: var(--c-surface-alt);
   }
 }
@@ -322,12 +353,21 @@
 
 @media (min-width: 768px) {
   .header-top {
-    min-height: 64px;
+    grid-template-columns: minmax(max-content, 1fr) minmax(0, 560px) minmax(max-content, 1fr);
+    min-height: 68px;
+  }
+
+  .header-search {
+    width: 100%;
   }
 
   .brand-logo img {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .brand-word {
+    font-size: 1.125rem;
   }
 
   .header-nav {
@@ -337,38 +377,52 @@
   .menu-button {
     display: none;
   }
-}
-
-@media (min-width: 1024px) {
-  .header-top {
-    min-height: 76px;
-  }
-
-  .brand-logo img {
-    width: 56px;
-    height: 56px;
-  }
 
   .header-search {
     display: flex;
     align-items: center;
     gap: 10px;
-    width: min(100%, 260px);
+    width: min(100%, 560px);
     height: 44px;
-    padding: 0 12px;
+    padding: 0 14px;
     border: 1px solid var(--c-control);
     background: var(--c-surface);
     color: var(--c-muted);
-    transition: border-color 0.15s ease;
+    transition: border-color 0.15s ease, box-shadow 0.2s ease;
   }
 
   .header-search:focus-within {
     border-color: var(--c-frame);
-    outline: 1px solid var(--c-frame);
+    box-shadow: 0 0 0 3px var(--c-gold-wash);
   }
 
   .header-search-icon {
     display: none;
+  }
+
+  /* Scrolled: a slimmer bar with a smaller logo. */
+  .site-header[data-scrolled] .header-top {
+    min-height: 56px;
+  }
+
+  .site-header[data-scrolled] .brand-logo img {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .header-top {
+    min-height: 80px;
+  }
+
+  .brand-logo img {
+    width: 52px;
+    height: 52px;
+  }
+
+  .brand-word {
+    font-size: 1.25rem;
   }
 
   .header-nav-row {
@@ -663,6 +717,7 @@
 
 @media (hover: hover) {
   .site-footer a:hover {
+    color: var(--c-gold);
     text-decoration: underline;
   }
 }
@@ -700,7 +755,7 @@
 .footer-contact h2,
 .footer-searched h2 {
   margin: 0 0 12px;
-  color: var(--c-on-band);
+  color: var(--c-gold);
   font-size: var(--fs-sm);
   font-weight: 700;
 }
@@ -1024,11 +1079,16 @@
 }
 
 /* Hero: the owner's banner and deal books, every slide the banner's shape. */
+/* Every hero slide has the banner's shape, so nothing below moves between slides. The
+   banner is a plain block; book slides keep their own two-column grid. */
 .hero-carousel .carousel-slide > * {
-  display: block;
   width: 100%;
   height: 100%;
   aspect-ratio: 1672 / 941;
+}
+
+.hero-carousel .carousel-slide > .banner {
+  display: block;
 }
 
 .hero-carousel .carousel-arrow {
@@ -1100,7 +1160,7 @@
 
 .hero-deal-eyebrow {
   margin: 0 0 4px;
-  color: var(--c-sale);
+  color: var(--c-gold-deep);
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1194,7 +1254,7 @@
 
 @media (min-width: 1280px) {
   .hero-deal {
-    padding: 48px 120px;
+    padding: 48px max(120px, calc((100vw - var(--container)) / 2 + var(--margin)));
   }
 
   .hero-deal-title {
@@ -1300,6 +1360,10 @@
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.trust-item svg {
+  color: var(--c-gold);
 }
 
 .trust-item {
@@ -1595,8 +1659,14 @@
 
 @media (hover: hover) {
   .book-card:hover {
+    border-color: var(--c-gold);
     box-shadow: var(--shadow-card);
     transform: translateY(-2px);
+  }
+
+  .book-card:hover .card-photo img,
+  .book-card:hover .card-photo-extra {
+    transform: scale(1.04);
   }
 }
 
@@ -1607,6 +1677,11 @@
 .card-media-link {
   position: relative;
   display: block;
+  overflow: hidden;
+}
+
+.card-photo img {
+  transition: transform 0.5s var(--ease-out);
 }
 
 .cover {
@@ -1639,7 +1714,7 @@
   object-fit: contain;
   background: var(--c-surface);
   opacity: 0;
-  transition: opacity 0.5s ease;
+  transition: opacity 0.5s ease, transform 0.5s var(--ease-out);
 }
 
 .card-photo-extra[data-shown] {
@@ -3310,4 +3385,184 @@
 .status[data-status='cancel_requested'] {
   border-color: var(--c-danger);
   color: var(--c-danger-ink);
+}
+
+/* ---------- More life: bands, heading rules, banner zoom, category ribbon ---------- */
+
+/* Home sections sit on alternating full-width bands (white / warm cream). */
+.band {
+  padding: 40px 0;
+}
+
+.band[data-tone='cream'] {
+  background: var(--c-cream);
+}
+
+.band > .container > .home-section:first-child,
+.band > .container > :first-child .home-section {
+  margin-top: 0;
+}
+
+.band .home-section {
+  margin-top: 0;
+}
+
+@media (min-width: 768px) {
+  .band {
+    padding: 56px 0;
+  }
+}
+
+/* The home page runs straight into the black footer. */
+.site:has(.home) .site-footer {
+  margin-top: 0;
+}
+
+/* A short gold rule under each section heading, drawn in when the section scrolls in. */
+.home-title::after {
+  content: '';
+  display: block;
+  width: 48px;
+  height: 3px;
+  margin: 10px auto 0;
+  background: var(--c-gold);
+  transform-origin: center;
+  transition: transform 0.6s var(--ease-out) 0.15s;
+}
+
+[data-reveal]:not([data-inview]) .home-title::after {
+  transform: scaleX(0);
+}
+
+/* Hero banner: a slow zoom while its slide is showing. */
+.hero-banner {
+  overflow: hidden;
+}
+
+.hero-carousel .carousel-slide:not([aria-hidden]) .hero-banner img {
+  animation: banner-zoom 6s ease-out both;
+}
+
+@keyframes banner-zoom {
+  from {
+    transform: scale(1);
+  }
+
+  to {
+    transform: scale(1.05);
+  }
+}
+
+/* A ribbon of categories that scrolls slowly across the page; pauses on hover/focus. */
+.ribbon {
+  overflow: hidden;
+  border-top: 1px solid var(--c-frame);
+  border-bottom: 1px solid var(--c-frame);
+  background: var(--c-paper);
+}
+
+.ribbon-track {
+  display: flex;
+  width: max-content;
+  animation: ribbon 45s linear infinite;
+}
+
+.ribbon:hover .ribbon-track,
+.ribbon:focus-within .ribbon-track {
+  animation-play-state: paused;
+}
+
+.ribbon ul {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ribbon li {
+  display: flex;
+  align-items: center;
+}
+
+.ribbon li::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  margin: 0 22px;
+  border-radius: 50%;
+  background: var(--c-gold);
+}
+
+.ribbon a {
+  padding: 14px 0;
+  color: var(--c-ink);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@media (hover: hover) {
+  .ribbon a:hover {
+    color: var(--c-gold-deep);
+  }
+}
+
+@keyframes ribbon {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Reduce animations: no zoom, the ribbon becomes a still, scrollable row. */
+:root[data-motion='reduce'] .hero-carousel .carousel-slide .hero-banner img {
+  animation: none;
+}
+
+:root[data-motion='reduce'] .ribbon {
+  overflow-x: auto;
+}
+
+:root[data-motion='reduce'] .ribbon-track {
+  animation: none;
+}
+
+:root[data-motion='reduce'] .ribbon ul[aria-hidden='true'] {
+  display: none;
+}
+
+:root[data-motion='reduce'] .home-title::after {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion='full']) .hero-carousel .carousel-slide .hero-banner img,
+  :root:not([data-motion='full']) .ribbon-track {
+    animation: none;
+  }
+
+  :root:not([data-motion='full']) .ribbon {
+    overflow-x: auto;
+  }
+
+  :root:not([data-motion='full']) .ribbon ul[aria-hidden='true'] {
+    display: none;
+  }
+
+  :root:not([data-motion='full']) .home-title::after {
+    transform: none;
+  }
+}
+
+/* A row with no books leaves no empty band behind. */
+.band:has(> .container:empty) {
+  display: none;
+}
+
+/* On the home page the bands set the rhythm; the strip and banner sit flush between them. */
+.home .trust-strip,
+.home .banner-wrap {
+  margin-top: 0;
 }
