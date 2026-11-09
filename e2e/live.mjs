@@ -1,5 +1,5 @@
 // Read-only smoke test against the LIVE Supabase project, as a signed-out visitor.
-// Browses home (slider, tiles, shelves, Books menu), the books filters, a book page and
+// Browses home (hero, circles, rows, nav menu), the books filters, a book page and
 // the cart panel, and fails if any request other than a read reaches Supabase. Run with
 // the dev server or a preview build up:
 //   node e2e/live.mjs            (BASE=http://localhost:5200 for a preview build)
@@ -36,13 +36,11 @@ try {
   });
 
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle2' });
-  check('live home: slider shows books from the database', await appears(page, '.slider .slide-title'));
-  const slides = await page.$$eval('.slider .slide', (els) => els.length);
-  check('live home: slider has 1 to 5 slides', slides >= 1 && slides <= 5, slides);
-  check('live home: category tiles filled', await appears(page, '.tile[href*="category="]'));
-  check('live home: deals shelf filled', (await page.$$('.shelf .book-card')).length > 0);
-  const total = await page.$eval('.home-browse', (e) => e.textContent).catch(() => '');
-  check('live home: browse link shows the catalogue size', /Browse all \d+ books/.test(total), total);
+  check('live home: hero banner shows', await appears(page, '.hero-carousel img[src="/banners/collect-the-adventure.webp"]'));
+  check('live home: hero deal books from the database', await appears(page, '.hero-deal-title'));
+  check('live home: category circles filled', await appears(page, '.circle[href*="category="]'));
+  check('live home: deals row filled', await appears(page, '[aria-labelledby="deals-heading"] .book-card'));
+  check('live home: ALL PRODUCTS grid filled', await appears(page, '[aria-labelledby="all-heading"] .book-card'));
 
   // Scroll the whole page (and every row) so lazy covers load, then look for failures.
   await page.evaluate(async () => {
@@ -51,7 +49,6 @@ try {
       window.scrollTo(0, y);
       await wait(150);
     }
-    for (const row of document.querySelectorAll('.shelf, .tiles')) row.scrollLeft = row.scrollWidth;
     await wait(2500);
   });
   const broken = await page.$$eval('img', (imgs) =>
@@ -62,8 +59,8 @@ try {
   check('live home: no broken cover images', broken.length === 0, broken.join(' '));
 
   await page.evaluate(() => window.scrollTo(0, 0));
-  await page.hover('.books-menu-button');
-  check('live books menu: opens with categories', await appears(page, '.books-menu-panel a[href*="category="]', 5000));
+  await page.hover('.nav-menu-button');
+  check('live nav menu: opens with categories', await appears(page, '.nav-menu-panel a[href*="category="]', 5000));
   await page.keyboard.press('Escape');
 
   await page.goto(`${BASE}/books?collection=regional`, { waitUntil: 'networkidle2' });
@@ -75,7 +72,7 @@ try {
 
   await page.goto(`${BASE}/books?stock=1`, { waitUntil: 'networkidle2' });
   check('live books: grid filled', await appears(page, '.book-grid .book-card'));
-  await page.$eval('.book-grid .book-card a', (a) => a.click());
+  await page.$eval('.book-grid .book-card-link', (a) => a.click());
   check('live book page: opens', await appears(page, '.detail-title'));
   check('live book page: no SKU or package details', !/\bSKU\b|Package size|Shipping weight/i.test(await page.$eval('main', (m) => m.innerText)));
 

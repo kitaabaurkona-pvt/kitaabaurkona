@@ -10,13 +10,12 @@ import { LinesSkeleton } from '../store/Skeletons';
 import { CloseIcon } from '../icons';
 import CartLine from './CartLine';
 
-const EASE = [0.2, 0.8, 0.2, 1];
 
 // Slide-out cart opened from the header. Radix Dialog traps focus, closes on Escape
 // or a click outside, and returns focus to whatever opened it.
 function CartPanel() {
   const { ids } = useCart();
-  const { cartOpen, setCartOpen, lines, totals, blocked, data, loading, error, retry } = useCartLines();
+  const { cartOpen, setCartOpen, lines, totals, blocked, pending, data, loading, error, retry } = useCartLines();
   const saving = totals.mrp - totals.subtotal;
   const empty = ids.length === 0;
   const returnTo = useRef(null);
@@ -32,7 +31,7 @@ function CartPanel() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
+                transition={{ duration: 0.3, ease: [0, 0, 0.2, 1] }}
               />
             </Dialog.Overlay>
             <Dialog.Content
@@ -59,7 +58,7 @@ function CartPanel() {
                 initial={{ x: '100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '100%' }}
-                transition={{ duration: 0.22, ease: EASE }}
+                transition={{ duration: 0.3, ease: 'easeInOut' }}
               >
                 <div className="cart-panel-head">
                   <Dialog.Title className="cart-panel-title">Your cart</Dialog.Title>
@@ -127,7 +126,7 @@ function CartPanel() {
                         </div>
                       )}
                     </dl>
-                    {blocked || totals.count === 0 ? (
+                    {blocked || pending || totals.count === 0 ? (
                       <button type="button" className="btn btn-primary btn-block" aria-disabled="true">
                         Checkout
                       </button>

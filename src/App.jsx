@@ -23,11 +23,13 @@ import NotFound from './pages/NotFound';
 // Pages most shoppers never open are split into their own files and loaded on demand.
 const Settings = lazy(() => import('./pages/Settings'));
 const Terms = lazy(() => import('./pages/Terms'));
+const PolicyPage = lazy(() => import('./pages/PolicyPage'));
 const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'));
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminBooks = lazy(() => import('./pages/admin/AdminBooks'));
 const AdminOrders = lazy(() => import('./pages/admin/AdminOrders'));
 const BulkUpload = lazy(() => import('./pages/admin/BulkUpload'));
+const AdminShipping = lazy(() => import('./pages/admin/AdminShipping'));
 
 function LegacyBookRedirect() {
   const { id } = useParams();
@@ -51,6 +53,10 @@ function App() {
         <Route path="/offers" element={<Offers />} />
         <Route path="/cart" element={<Cart />} />
         <Route path="/terms" element={<Terms />} />
+        <Route path="/about" element={<PolicyPage page="about" />} />
+        <Route path="/returns" element={<PolicyPage page="returns" />} />
+        <Route path="/shipping" element={<PolicyPage page="shipping" />} />
+        <Route path="/privacy" element={<PolicyPage page="privacy" />} />
         <Route path="/403" element={<Forbidden />} />
 
         {/* Signed-in users */}
@@ -70,6 +76,7 @@ function App() {
             <Route path="books" element={<AdminBooks />} />
             <Route path="orders" element={<AdminOrders />} />
             <Route path="bulk-upload" element={<BulkUpload />} />
+            <Route path="shipping" element={<AdminShipping />} />
           </Route>
         </Route>
 

@@ -60,14 +60,33 @@ export async function getBooksByIds(ids) {
   return (data ?? []).filter((book) => book.is_visible);
 }
 
-// How many visible books each category has, e.g. { 'Self-Help': 61 }.
-export async function listCategoryCounts() {
+// Per category: how many visible books it has and a cover to show for it (the biggest
+// in-stock discount, or any book if none is in stock), e.g.
+// { 'Self-Help': { count: 61, cover: 'https://…', bookTitle: '…' } }.
+export async function listCategorySummary() {
   const { data } = unwrap(
-    await supabase.from('books').select('category').eq('is_visible', true).not('category', 'is', null).limit(1000),
+    await supabase
+      .from('books')
+      .select('category, title, image_urls, stock_quantity')
+      .eq('is_visible', true)
+      .not('category', 'is', null)
+      .order('discount_percent', { ascending: false })
+      .order('title', { ascending: true })
+      .limit(1000),
   );
-  const counts = {};
-  for (const row of data ?? []) counts[row.category] = (counts[row.category] ?? 0) + 1;
-  return counts;
+  const summary = {};
+  for (const row of data ?? []) {
+    const entry = (summary[row.category] ??= { count: 0, cover: null, bookTitle: '', inStock: false });
+    entry.count += 1;
+    const cover = Array.isArray(row.image_urls) ? row.image_urls[0] : null;
+    const inStock = row.stock_quantity > 0;
+    if (cover && (!entry.cover || (inStock && !entry.inStock))) {
+      entry.cover = cover;
+      entry.bookTitle = row.title;
+      entry.inStock = inStock;
+    }
+  }
+  return summary;
 }
 
 export async function listCategories() {

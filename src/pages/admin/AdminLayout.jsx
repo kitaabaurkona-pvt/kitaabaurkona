@@ -18,6 +18,9 @@ function AdminLayout() {
         <NavLink to="/admin/orders" className="chip">
           Orders
         </NavLink>
+        <NavLink to="/admin/shipping" className="chip">
+          Shipping
+        </NavLink>
         <NavLink to="/admin/bulk-upload" className="chip">
           Bulk upload
         </NavLink>

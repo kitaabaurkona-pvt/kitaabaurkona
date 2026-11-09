@@ -14,17 +14,6 @@ export const COLLECTIONS = {
   },
 };
 
-const TINTS = ['sand', 'sage', 'rose', 'sky', 'lilac'];
-
-// A stable soft colour for a category, so the same genre always looks the same.
-export function tintFor(name) {
-  const index = CATEGORIES.indexOf(name);
-  if (index >= 0) return TINTS[index % TINTS.length];
-  let hash = 0;
-  for (const ch of String(name)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  return TINTS[hash % TINTS.length];
-}
-
 export const categoryHref = (name) => `/books?category=${encodeURIComponent(name)}`;
 export const underPriceHref = `/books?max=${UNDER_PRICE}&stock=1`;
 export const regionalHref = '/books?collection=regional';

@@ -32,6 +32,7 @@ const PRELUDE = `
 do $$ begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
 end $$;
 create schema if not exists auth;
 create table if not exists auth.users (
@@ -43,12 +44,19 @@ create table if not exists auth.users (
 create or replace function auth.uid() returns uuid language sql stable as $$
   select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'sub', '')::uuid
 $$;
-grant usage on schema auth to anon, authenticated;
-grant execute on function auth.uid() to anon, authenticated;
-grant usage on schema public to anon, authenticated;
+grant usage on schema auth to anon, authenticated, service_role;
+grant execute on function auth.uid() to anon, authenticated, service_role;
+grant usage on schema public to anon, authenticated, service_role;
+-- As on Supabase: the service role gets every table, sequence and function by default.
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+alter default privileges in schema public grant execute on functions to service_role;
 `;
 
 const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+
+// A stand-in for the service-role key the shipping Edge Function gets from Supabase.
+export const SERVICE_TOKEN = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role: 'service_role' })}.sig`;
 
 export function sessionFor(email) {
   const u = USERS[email];
@@ -78,6 +86,7 @@ function claimsFrom(headers) {
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
     if (payload.role === 'authenticated' && payload.sub) return { role: 'authenticated', sub: payload.sub };
+    if (payload.role === 'service_role') return { role: 'service_role', sub: null };
   } catch {
     // not a JWT we issued: treat as the anonymous key
   }
@@ -87,7 +96,8 @@ function claimsFrom(headers) {
 export async function asRole(db, { role, sub }, fn) {
   return db.transaction(async (tx) => {
     await tx.query(`select set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub, role })]);
-    await tx.exec(`set local role ${role === 'authenticated' ? 'authenticated' : 'anon'}`);
+    const pgRole = role === 'authenticated' || role === 'service_role' ? role : 'anon';
+    await tx.exec(`set local role ${pgRole}`);
     return fn(tx);
   });
 }

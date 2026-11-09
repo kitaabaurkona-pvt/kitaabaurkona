@@ -8,17 +8,20 @@ const booksCount = () => supabase.from('books').select('id', { count: 'exact', h
 const ordersCount = () => supabase.from('orders').select('id', { count: 'exact', head: true });
 
 export async function getAdminStats() {
-  const [books, hidden, outOfStock, lowStock, pending, paid, shipped, delivered] = await Promise.all([
+  const shipmentsCount = () => supabase.from('shipments').select('id', { count: 'exact', head: true });
+  const [books, hidden, outOfStock, lowStock, pending, confirmed, paid, shipped, delivered, problems] = await Promise.all([
     headCount(booksCount()),
     headCount(booksCount().eq('is_visible', false)),
     headCount(booksCount().eq('stock_quantity', 0)),
     headCount(booksCount().gt('stock_quantity', 0).lte('stock_quantity', 5)),
     headCount(ordersCount().eq('status', 'pending_payment')),
+    headCount(ordersCount().eq('status', 'confirmed')),
     headCount(ordersCount().eq('status', 'paid')),
     headCount(ordersCount().eq('status', 'shipped')),
     headCount(ordersCount().eq('status', 'delivered')),
+    headCount(shipmentsCount().in('status', ['failed', 'exception', 'rto', 'cancel_requested'])),
   ]);
-  return { books, hidden, outOfStock, lowStock, pending, paid, shipped, delivered };
+  return { books, hidden, outOfStock, lowStock, pending, confirmed, paid, shipped, delivered, problems };
 }
 
 export const ADMIN_PAGE_SIZE = 25;
@@ -62,7 +65,10 @@ export async function adminUpdateBook(id, patch) {
 export async function adminListOrders({ status = 'all', page = 0 } = {}) {
   let query = supabase
     .from('orders')
-    .select('*, order_items(sku, title, quantity, unit_price, image_url)', { count: 'exact' });
+    .select(
+      '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, status, awb_number, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at)',
+      { count: 'exact' },
+    );
   if (status !== 'all') query = query.eq('status', status);
   const from = page * ADMIN_PAGE_SIZE;
   const { data, count } = unwrap(
@@ -77,6 +83,7 @@ export async function adminSetOrderStatus(id, status) {
 
 export const NEXT_STATUSES = {
   pending_payment: ['paid', 'cancelled'],
+  confirmed: ['shipped', 'cancelled'],
   paid: ['shipped', 'cancelled'],
   shipped: ['delivered'],
   delivered: [],
@@ -86,6 +93,7 @@ export const NEXT_STATUSES = {
 export function adminErrorMessage(error) {
   if (error?.code === '42501' || error?.status === 403) return "You don't have permission to do that.";
   if (error?.hint === 'stock' || error?.details?.hint === 'stock') return 'Not enough stock to mark this order paid.';
+  if (error?.hint === 'shipped' || error?.details?.hint === 'shipped') return 'This parcel has already left with the courier, so the order cannot be cancelled now.';
   if (error?.code === '23514') return 'Those values are not allowed. Check that the price is not above the MRP and nothing is negative.';
   if (error?.status === 401 || error?.code === 'PGRST301') return 'Your session has expired. Sign in again.';
   if (error?.status === 0) return 'Unable to reach the server. Check your connection and try again.';

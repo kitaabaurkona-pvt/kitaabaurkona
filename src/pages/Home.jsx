@@ -1,59 +1,79 @@
-import { Link } from 'react-router-dom';
-import { listBooks, listCategoryCounts } from '../services/bookService';
+import { listBooks, listCategorySummary } from '../services/bookService';
 import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { formatCount, formatPrice } from '../utils/format';
+import { formatPrice } from '../utils/format';
 import { COLLECTIONS, UNDER_PRICE, categoryHref, dealsHref, regionalHref, underPriceHref } from '../utils/categories';
+import { BANNERS } from '../utils/storeInfo';
 import { LoadError } from '../components/store/States';
-import { SliderSkeleton, TilesSkeleton } from '../components/store/Skeletons';
-import HeroSlider from '../components/home/HeroSlider';
-import CollectionTiles from '../components/home/CollectionTiles';
-import Shelf from '../components/home/Shelf';
+import { BookGridSkeleton, CirclesSkeleton } from '../components/store/Skeletons';
+import BookCard from '../components/store/BookCard';
+import Reveal from '../components/motion/Reveal';
+import HeroCarousel from '../components/home/HeroCarousel';
+import CategoryCircles from '../components/home/CategoryCircles';
+import TrustStrip from '../components/home/TrustStrip';
+import Banner from '../components/home/Banner';
+import ProductCarousel from '../components/home/ProductCarousel';
+import SectionHead from '../components/home/SectionHead';
 
-const SLIDES = 5;
-const SHELF = 10;
+const HERO_BOOKS = 3;
+const ROW = 10;
+const ALL = 8;
 const COMBOS = 'Box Sets & Combos';
 
+// Laid out like the previous store: banner slider, SHOP BY CATEGORY, the black trust
+// strip, the second banner, rows of deals, then ALL PRODUCTS. Every book, count and
+// cover comes from the catalogue.
 function Home() {
   useDocumentTitle('');
-  const deals = useAsync(() => listBooks({ sort: 'discount', inStock: true, pageSize: SLIDES + SHELF }), []);
-  const under = useAsync(() => listBooks({ sort: 'discount', inStock: true, maxPrice: UNDER_PRICE, pageSize: SHELF }), []);
-  const combos = useAsync(() => listBooks({ sort: 'discount', inStock: true, category: COMBOS, pageSize: SHELF }), []);
-  const regional = useAsync(() => listBooks({ sort: 'discount', collection: 'regional', pageSize: SHELF }), []);
-  const counts = useAsync(() => listCategoryCounts(), []);
-  const all = useAsync(() => listBooks({ pageSize: 1 }), []);
+  const deals = useAsync(() => listBooks({ sort: 'discount', inStock: true, pageSize: HERO_BOOKS + ROW }), []);
+  const under = useAsync(() => listBooks({ sort: 'discount', inStock: true, maxPrice: UNDER_PRICE, pageSize: ROW }), []);
+  const combos = useAsync(() => listBooks({ sort: 'discount', inStock: true, category: COMBOS, pageSize: ROW }), []);
+  const regional = useAsync(() => listBooks({ sort: 'discount', collection: 'regional', pageSize: ROW }), []);
+  const summary = useAsync(() => listCategorySummary(), []);
+  const all = useAsync(() => listBooks({ pageSize: ALL }), []);
 
   const dealBooks = deals.data?.books ?? [];
-  const dealsShelf = deals.data ? { ...deals, data: { ...deals.data, books: dealBooks.slice(SLIDES) } } : deals;
+  const dealsRow = deals.data ? { ...deals, data: { ...deals.data, books: dealBooks.slice(HERO_BOOKS) } } : deals;
 
   return (
-    <div className="container page home">
-      {deals.loading && !deals.data && <SliderSkeleton />}
-      {deals.error && <LoadError onRetry={deals.retry} what="books" />}
-      {dealBooks.length > 0 && <HeroSlider books={dealBooks.slice(0, SLIDES)} />}
+    <div className="home">
+      <div className="hero-wrap">
+        {/* The banner shows at once; the deal slides join it when they arrive. */}
+        <HeroCarousel books={dealBooks.slice(0, HERO_BOOKS)} />
+      </div>
 
-      {counts.loading && !counts.data && <TilesSkeleton />}
-      {counts.data && (
-        <CollectionTiles
-          categoryCounts={counts.data}
-          underCount={under.data?.total ?? 0}
-          regionalCount={regional.data?.total ?? 0}
-          topDiscount={dealBooks[0]?.discount_percent ?? 0}
-        />
-      )}
+      <div className="container">
+        {summary.loading && !summary.data && <CirclesSkeleton />}
+        {summary.data && <CategoryCircles summary={summary.data} />}
+      </div>
 
-      <Shelf id="deals" title="Biggest discounts" href={dealsHref} tint="rose" state={dealsShelf} />
-      <Shelf id="under" title={`Up to ${formatPrice(UNDER_PRICE)}`} href={underPriceHref} tint="sand" state={under} />
-      <Shelf id="combos" title={COMBOS} href={categoryHref(COMBOS)} tint="lilac" state={combos} />
-      <Shelf id="regional" title={COLLECTIONS.regional.label} href={regionalHref} tint="sky" state={regional} />
+      <TrustStrip />
 
-      {all.data && all.data.total > 0 && (
-        <div className="home-browse">
-          <Link to="/books" className="btn btn-outline">
-            Browse all {formatCount(all.data.total)} books
-          </Link>
-        </div>
-      )}
+      <Reveal className="banner-wrap">
+        <Banner banner={BANNERS.trio} />
+      </Reveal>
+
+      <div className="container">
+        <ProductCarousel id="deals" title="Amazing deals" href={dealsHref} state={dealsRow} autoplay={4000} />
+        <ProductCarousel id="under" title={`Up to ${formatPrice(UNDER_PRICE)}`} href={underPriceHref} state={under} />
+        <ProductCarousel id="combos" title={COMBOS} href={categoryHref(COMBOS)} state={combos} />
+        <ProductCarousel id="regional" title={COLLECTIONS.regional.label} href={regionalHref} state={regional} />
+
+        <section className="home-section" aria-labelledby="all-heading">
+          <SectionHead id="all-heading" title="All products" href="/books" />
+          {all.loading && !all.data && <BookGridSkeleton count={ALL} />}
+          {all.error && <LoadError onRetry={all.retry} what="books" />}
+          {all.data && (
+            <ul className="book-grid">
+              {all.data.books.map((book, index) => (
+                <Reveal as="li" key={book.id} index={index % 4}>
+                  <BookCard book={book} />
+                </Reveal>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

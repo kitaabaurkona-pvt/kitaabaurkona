@@ -1,71 +1,65 @@
-/* Kitaabaurkona design system, "Ledger refined": warm paper page, white surfaces,
-   ink text, 1px hairlines, no shadows or gradients. 0px corners on structure, 2px on
-   controls. Amber only for the one primary action on a screen, the focus ring and
-   the cart count. Inter for interface, Source Serif 4 for titles. 8px rhythm.
-   Light and dark themes share every rule; only the tokens change. */
+/* Kitaabaurkona design system, matched to the owner's previous store: white page,
+   near-black ink, Inter everywhere, UPPERCASE headings and buttons, square corners,
+   1px rules. Black for the main action, red for the discount tag, green for "% OFF".
+   Amber lives only in the logo. Light and dark themes share every rule; only the
+   tokens change (dark is the inverted version). */
 
 :root {
   color-scheme: light;
-  --c-paper: #faf9f6;
-  --c-ink: #111111;
-  --c-carbon: #111111;
-  --c-carbon-hover: #2b2b2b;
+  --c-paper: #ffffff;
+  --c-ink: #1f1f1f;
+  --c-carbon: #000000;
+  --c-carbon-hover: #3d3d3d;
   --c-on-carbon: #ffffff;
-  --c-body: #374151;
-  --c-muted: #6b7280;
-  --c-placeholder: #8a8f98;
-  --c-line: #e5e7eb;
-  --c-line-strong: #d1d5db;
-  --c-control: #8a919c;
+  --c-body: #3d3d3d;
+  --c-muted: #707070;
+  --c-placeholder: #858585;
+  --c-line: #e1e1e1;
+  --c-line-strong: #b8b8b8;
+  --c-frame: #1f1f1f;
+  --c-control: #858585;
   --c-surface: #ffffff;
-  --c-surface-alt: #f3f2ee;
-  --c-surface-press: #ecebe6;
-  --c-band: #faf9f6;
-  --c-on-band: #111111;
-  --c-on-band-muted: #6b7280;
-  --c-tint: #f3f2ee;
-  --c-tag: #111111;
+  --c-surface-alt: #f5f5f5;
+  --c-surface-press: #ebebeb;
+  --c-band: #000000;
+  --c-on-band: #ffffff;
+  --c-on-band-muted: #cccccc;
+  --c-tint: #f5f5f5;
+  --c-tag: #b22222;
   --c-on-tag: #ffffff;
-  --c-accent: #eaa800;
-  --c-accent-hover: #d99b00;
-  --c-accent-active: #ca8a04;
-  --c-on-accent: #111111;
-  --c-accent-ink: #7a4b00;
-  --c-danger: #b42318;
-  --c-danger-ink: #912018;
-  --c-danger-wash: #fef3f2;
-  --c-ok: #2e7d32;
-  --c-ok-ink: #1d5b2c;
-  --c-ok-wash: #edf7ef;
-  --c-skeleton: #eeede8;
-  --c-skeleton-shine: #f7f6f2;
-  --c-scrim: rgba(17, 17, 17, 0.4);
-
-  /* Soft flat tints for categories, collections and shelf headers (never gradients). */
-  --tint-sand: #f3ebdd;
-  --tint-sand-strong: #eadcc5;
-  --tint-sage: #e3ebdf;
-  --tint-sage-strong: #d4e0ce;
-  --tint-rose: #f3e3e1;
-  --tint-rose-strong: #ead2cf;
-  --tint-sky: #e0eaf2;
-  --tint-sky-strong: #cfdeeb;
-  --tint-lilac: #e9e4f2;
-  --tint-lilac-strong: #dcd4ec;
+  --c-sale: #b22222;
+  --c-save: #008000;
+  --c-accent: #000000;
+  --c-accent-hover: #3d3d3d;
+  --c-accent-active: #242424;
+  --c-on-accent: #ffffff;
+  --c-accent-ink: #b35200;
+  --c-focus: #1f1f1f;
+  --c-danger: #b22222;
+  --c-danger-ink: #971d1d;
+  --c-danger-wash: #ffe6e6;
+  --c-ok: #008000;
+  --c-ok-ink: #006000;
+  --c-ok-wash: #e6f2e6;
+  --c-skeleton: #eeeeee;
+  --c-skeleton-shine: #f7f7f7;
+  --c-scrim: rgba(0, 0, 0, 0.8);
+  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.16);
+  --shadow-menu: 0 6px 20px rgba(0, 0, 0, 0.12);
 
   --font: 'Inter Variable', Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-serif: 'Source Serif 4 Variable', 'Source Serif 4', Georgia, 'Times New Roman', serif;
-  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --radius-control: 2px;
+  --font-serif: var(--font);
+  --ease-out: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --radius-control: 0;
 
-  /* Type scale: 12 · 14 · 16 · 20 · 28 · 36, 56 for the featured title */
+  /* Type scale: 12 · 14 · 16 · 20 · 28 · 36 · 48 */
   --fs-xs: 0.75rem;
   --fs-sm: 0.875rem;
   --fs-md: 1rem;
   --fs-lg: 1.25rem;
   --fs-xl: 1.75rem;
   --fs-2xl: 2.25rem;
-  --fs-display: 3.5rem;
+  --fs-display: 3rem;
 
   --margin: 16px;
   --gutter: 16px;
@@ -75,47 +69,46 @@
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --c-paper: #0f0f0e;
-  --c-ink: #f5f5f4;
-  --c-carbon: #f5f5f4;
-  --c-carbon-hover: #d6d3d1;
-  --c-on-carbon: #111111;
-  --c-body: #d6d3d1;
-  --c-muted: #a1a1aa;
-  --c-placeholder: #8b8b94;
-  --c-line: #2a2a28;
-  --c-line-strong: #3a3a37;
-  --c-control: #6e6e69;
-  --c-surface: #171716;
-  --c-surface-alt: #1f1f1d;
-  --c-surface-press: #282826;
-  --c-band: #0f0f0e;
-  --c-on-band: #f5f5f4;
-  --c-on-band-muted: #a1a1aa;
-  --c-tint: #1f1f1d;
-  --c-tag: #f5f5f4;
-  --c-on-tag: #111111;
-  --c-accent-ink: #f5c451;
-  --c-danger: #ff8a80;
-  --c-danger-ink: #ffb4ab;
+  --c-paper: #121212;
+  --c-ink: #f5f5f5;
+  --c-carbon: #ffffff;
+  --c-carbon-hover: #e1e1e1;
+  --c-on-carbon: #000000;
+  --c-body: #e1e1e1;
+  --c-muted: #a3a3a3;
+  --c-placeholder: #8f8f8f;
+  --c-line: #2e2e2e;
+  --c-line-strong: #4a4a4a;
+  --c-frame: #8a8a8a;
+  --c-control: #6e6e6e;
+  --c-surface: #1a1a1a;
+  --c-surface-alt: #222222;
+  --c-surface-press: #2b2b2b;
+  --c-band: #000000;
+  --c-on-band: #ffffff;
+  --c-on-band-muted: #b8b8b8;
+  --c-tint: #222222;
+  --c-tag: #cc3e3e;
+  --c-on-tag: #ffffff;
+  --c-sale: #f08a8a;
+  --c-save: #5cae5c;
+  --c-accent: #ffffff;
+  --c-accent-hover: #e1e1e1;
+  --c-accent-active: #cccccc;
+  --c-on-accent: #000000;
+  --c-accent-ink: #eba65c;
+  --c-focus: #f5f5f5;
+  --c-danger: #f08a8a;
+  --c-danger-ink: #fab8b8;
   --c-danger-wash: #3b1214;
-  --c-ok: #6fbf73;
-  --c-ok-ink: #9fdca3;
+  --c-ok: #5cae5c;
+  --c-ok-ink: #8ac58a;
   --c-ok-wash: #12301a;
-  --c-skeleton: #1f1f1d;
-  --c-skeleton-shine: #292927;
-  --c-scrim: rgba(0, 0, 0, 0.6);
-
-  --tint-sand: #27221a;
-  --tint-sand-strong: #322b20;
-  --tint-sage: #1d241e;
-  --tint-sage-strong: #252f27;
-  --tint-rose: #291f1f;
-  --tint-rose-strong: #342727;
-  --tint-sky: #1b2228;
-  --tint-sky-strong: #222b33;
-  --tint-lilac: #221f29;
-  --tint-lilac-strong: #2b2734;
+  --c-skeleton: #222222;
+  --c-skeleton-shine: #2c2c2c;
+  --c-scrim: rgba(0, 0, 0, 0.8);
+  --shadow-card: 0 1px 6px rgba(0, 0, 0, 0.6);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
 
 @media (min-width: 768px) {
@@ -183,7 +176,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--c-accent);
+  outline: 2px solid var(--c-focus);
   outline-offset: 2px;
 }
 
@@ -221,10 +214,11 @@ button {
   border-radius: var(--radius-control);
   font-size: var(--fs-sm);
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: 0.04em;
   line-height: 1.25;
   text-align: center;
   text-decoration: none;
+  text-transform: uppercase;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s var(--ease-out);
 }
@@ -256,7 +250,7 @@ button {
 }
 
 .btn-outline {
-  border-color: var(--c-line-strong);
+  border-color: var(--c-frame);
   background: var(--c-surface);
   color: var(--c-ink);
 }
@@ -283,9 +277,11 @@ button {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--c-carbon);
+  color: var(--c-ink);
   font-size: 0.875rem;
   font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -305,6 +301,8 @@ button {
   .btn-outline:hover,
   .btn-quiet:hover {
     border-color: var(--c-ink);
+    background: var(--c-ink);
+    color: var(--c-paper);
   }
 
   .btn-danger:hover {
@@ -372,9 +370,9 @@ button {
 .input:focus,
 .select:focus,
 .textarea:focus {
-  outline: 2px solid var(--c-accent);
+  outline: 1px solid var(--c-frame);
   outline-offset: 0;
-  border-color: var(--c-ink);
+  border-color: var(--c-frame);
 }
 
 .input[aria-invalid='true'],
@@ -411,6 +409,8 @@ button {
   color: var(--c-ink);
   font-size: 0.8125rem;
   font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   white-space: nowrap;
   text-decoration: none;
   cursor: pointer;

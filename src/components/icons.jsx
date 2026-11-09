@@ -161,3 +161,33 @@ export const ChevronDownIcon = (p) => (
     <path d="M5 9l7 7 7-7" />
   </Icon>
 );
+
+export const ArrowUpIcon = (p) => (
+  <Icon {...p}>
+    <path d="M12 19V5M6 11l6-6 6 6" />
+  </Icon>
+);
+
+export const TruckIcon = (p) => (
+  <Icon {...p}>
+    <path d="M2.5 6.5h11v10h-11z" />
+    <path d="M13.5 9.5h4l3 3.5v3.5h-7" />
+    <circle cx="6.5" cy="17.5" r="1.75" />
+    <circle cx="17" cy="17.5" r="1.75" />
+  </Icon>
+);
+
+export const CashIcon = (p) => (
+  <Icon {...p}>
+    <path d="M2.5 6.5h19v11h-19z" />
+    <circle cx="12" cy="12" r="2.75" />
+    <path d="M5.5 9.5v5M18.5 9.5v5" />
+  </Icon>
+);
+
+export const ReturnIcon = (p) => (
+  <Icon {...p}>
+    <path d="M8.5 5.5L4.5 9.5l4 4" />
+    <path d="M4.5 9.5h10a5 5 0 0 1 0 10h-6" />
+  </Icon>
+);

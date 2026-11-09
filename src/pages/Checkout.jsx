@@ -7,6 +7,7 @@ import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { getProfile } from '../services/profileService';
 import { createOrder } from '../services/orderService';
+import { checkPincode } from '../services/shippingService';
 import { formatPrice } from '../utils/format';
 import { INDIAN_STATES, normalizeShipping, orderErrorMessage, validateShipping } from '../utils/storeForm';
 import CartSummary from '../components/store/CartSummary';
@@ -30,6 +31,38 @@ function Field({ id, label, error, children }) {
   );
 }
 
+// Asks the courier (through the shipping function) whether it delivers to the PIN code,
+// once 6 digits are in. If the check itself cannot run, ordering is still allowed: the
+// parcel is checked again before it is booked.
+function usePincodeCheck(pincode) {
+  const [result, setResult] = useState({ pincode: '', state: 'idle' });
+  const valid = /^[1-9][0-9]{5}$/.test(pincode);
+  useEffect(() => {
+    if (!valid) return undefined;
+    let active = true;
+    const timer = setTimeout(() => {
+      checkPincode(pincode).then(
+        (r) => active && setResult({ pincode, state: !r.deliverable ? 'no' : r.cod ? 'ok' : 'nocod' }),
+        () => active && setResult({ pincode, state: 'unknown' }),
+      );
+    }, 250);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [pincode, valid]);
+  if (!valid) return 'idle';
+  return result.pincode === pincode ? result.state : 'checking';
+}
+
+const PIN_MESSAGES = {
+  checking: 'Checking delivery to this PIN code…',
+  ok: 'We deliver here. Cash on delivery is available.',
+  no: "We can't deliver to this PIN code yet.",
+  nocod: "Cash on delivery isn't available for this PIN code yet.",
+  unknown: "Couldn't check delivery right now. You can still place the order.",
+};
+
 function CheckoutForm({ initial, lines, totals }) {
   const navigate = useNavigate();
   const { clear } = useCart();
@@ -37,6 +70,8 @@ function CheckoutForm({ initial, lines, totals }) {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const busy = useRef(false);
+  const pinState = usePincodeCheck(form.pincode);
+  const pinBlocked = pinState === 'no' || pinState === 'nocod';
 
   const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   const fieldError = (id) => (error?.field === id ? error.message : undefined);
@@ -49,7 +84,10 @@ function CheckoutForm({ initial, lines, totals }) {
     event.preventDefault();
     if (busy.current) return;
     const shipping = normalizeShipping(form);
-    const problem = validateShipping(shipping);
+    const problem =
+      validateShipping(shipping) ??
+      (pinBlocked ? { field: 'ship-pincode', message: PIN_MESSAGES[pinState] } : null) ??
+      (pinState === 'checking' ? { field: 'ship-pincode', message: 'Wait a moment while we check delivery to this PIN code.' } : null);
     if (problem) {
       setError(problem);
       document.getElementById(problem.field)?.focus();
@@ -62,6 +100,7 @@ function CheckoutForm({ initial, lines, totals }) {
       const orderId = await createOrder(
         lines.map((line) => ({ bookId: line.id, quantity: line.quantity })),
         shipping,
+        'cod',
       );
       clear();
       navigate(`/orders/${orderId}`, { replace: true, state: { placed: true } });
@@ -106,6 +145,11 @@ function CheckoutForm({ initial, lines, totals }) {
             </Field>
             <Field id="ship-pincode" label="PIN code" error={fieldError('ship-pincode')}>
               <input id="ship-pincode" className="input" inputMode="numeric" autoComplete="postal-code" maxLength={6} value={form.pincode} onChange={(event) => setForm((c) => ({ ...c, pincode: event.target.value.replace(/\D/g, '').slice(0, 6) }))} required {...invalidProps('ship-pincode')} />
+              {pinState !== 'idle' && !fieldError('ship-pincode') && (
+                <p className="pin-check" data-state={pinState} role="status">
+                  {PIN_MESSAGES[pinState]}
+                </p>
+              )}
             </Field>
           </div>
         </section>
@@ -114,9 +158,9 @@ function CheckoutForm({ initial, lines, totals }) {
           <h2 id="payment-heading" className="panel-title">
             Payment
           </h2>
-          <div className="payment-placeholder">
-            <p>Online payment is not connected yet.</p>
-            <p>Your order will be saved as awaiting payment.</p>
+          <div className="payment-option">
+            <p className="payment-option-title">Cash on delivery</p>
+            <p>Pay {formatPrice(totals.subtotal)} in cash when your order arrives. Shipping is free.</p>
           </div>
         </section>
       </div>
@@ -138,7 +182,7 @@ function CheckoutForm({ initial, lines, totals }) {
               {error.message}
             </p>
           )}
-          <button type="submit" className="btn btn-primary btn-block" aria-busy={submitting} aria-disabled={submitting || undefined}>
+          <button type="submit" className="btn btn-primary btn-block" aria-busy={submitting} aria-disabled={submitting || pinBlocked || undefined}>
             {submitting && <span className="spinner" aria-hidden="true" />}
             {submitting ? 'Placing order…' : 'Place order'}
           </button>
@@ -173,7 +217,7 @@ function Checkout() {
         </Link>
       </StateBlock>
     );
-  } else if ((cart.loading && !cart.data) || profile.loading) {
+  } else if ((cart.loading && !cart.data) || cart.pending || profile.loading) {
     content = <LinesSkeleton count={3} label="Preparing checkout…" />;
   } else if (cart.error) {
     content = <LoadError onRetry={cart.retry} what="your cart" />;

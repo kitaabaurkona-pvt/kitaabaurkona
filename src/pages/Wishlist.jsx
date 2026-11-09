@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { listWishlist, removeFromWishlist } from '../services/wishlistService';
 import { useAsync } from '../hooks/useAsync';
 import { useCart } from '../hooks/useCart';
+import { useCartLines } from '../hooks/useCartLines';
 import { useWishlist } from '../hooks/useWishlist';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
@@ -20,6 +21,7 @@ function Wishlist() {
   const { data, loading, error, retry, setData } = useAsync(() => listWishlist(), []);
   const { forget } = useWishlist();
   const { add, quantityOf } = useCart();
+  const { openCart } = useCartLines();
   const [removeFailed, setRemoveFailed] = useState(null);
   const { show } = useToast();
   const books = data ?? [];
@@ -41,10 +43,7 @@ function Wishlist() {
 
   function addAll() {
     for (const book of addable) add(book.id, 1, Math.min(book.stock_quantity, MAX_QUANTITY));
-    show({
-      message: `Added ${plural(addable.length, 'book')} to your cart`,
-      action: { label: 'View cart', to: '/cart' },
-    });
+    openCart();
   }
 
   return (

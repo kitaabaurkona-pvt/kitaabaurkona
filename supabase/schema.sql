@@ -25,7 +25,11 @@
 --                           Orders and a snapshot of what was ordered. Created
 --                           only by create_order(), which prices everything from
 --                           the books table; cancel_order() for customers and
---                           admin_set_order_status() for admins.
+--                           admin_set_order_status() for admins. Payment is cash
+--                           on delivery (confirmed at once) or online.
+--   7. Shipping (Xpressbees): shipping_settings, shipments, shipment_events and
+--                           service-role-only helper tables, used by the
+--                           `shipping` Edge Function. See section 8b.
 --   Plus Row Level Security on every table, and public.is_admin(), the single
 --   check every admin-only rule uses.
 --
@@ -489,16 +493,18 @@ grant select, insert, delete on public.wishlist_items to authenticated;
 -- Orders are created ONLY by create_order() below, which reads prices and stock
 -- from the books table itself. Nothing the browser sends about prices or totals
 -- is trusted. Customers can read their own orders; admins can read all of them.
--- Status flow: pending_payment -> paid -> shipped -> delivered, and
--- pending_payment or paid -> cancelled. Stock is reserved when an order is marked
--- paid and returned if a paid order is cancelled.
+-- Status flow, online payment: pending_payment -> paid -> shipped -> delivered.
+-- Cash on delivery: confirmed -> shipped -> delivered (confirmed straight away).
+-- pending_payment, confirmed or paid -> cancelled. Stock is taken when an order is
+-- confirmed (COD) or marked paid, and returned if that order is cancelled.
 
 create table if not exists public.orders (
   id uuid primary key default gen_random_uuid(),
   order_number bigint generated always as identity unique,
   user_id uuid not null references auth.users (id) on delete cascade,
   status text not null default 'pending_payment'
-    check (status in ('pending_payment', 'paid', 'shipped', 'delivered', 'cancelled')),
+    check (status in ('pending_payment', 'confirmed', 'paid', 'shipped', 'delivered', 'cancelled')),
+  payment_method text not null default 'online' check (payment_method in ('online', 'cod')),
   item_count integer not null check (item_count between 1 and 500),
   subtotal numeric(12, 2) not null check (subtotal >= 0),
   mrp_total numeric(12, 2) not null check (mrp_total >= subtotal),
@@ -511,6 +517,14 @@ create table if not exists public.orders (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Databases set up before cash on delivery existed get the new column and status here.
+alter table public.orders add column if not exists payment_method text not null default 'online';
+alter table public.orders drop constraint if exists orders_payment_method_check;
+alter table public.orders add constraint orders_payment_method_check check (payment_method in ('online', 'cod'));
+alter table public.orders drop constraint if exists orders_status_check;
+alter table public.orders add constraint orders_status_check
+  check (status in ('pending_payment', 'confirmed', 'paid', 'shipped', 'delivered', 'cancelled'));
 
 create index if not exists orders_user_created_idx on public.orders (user_id, created_at desc);
 create index if not exists orders_status_idx on public.orders (status);
@@ -561,14 +575,188 @@ grant select on public.order_items to authenticated;
 
 
 -- -----------------------------------------------------------------------------
+-- 8b. SHIPPING (Xpressbees)
+-- -----------------------------------------------------------------------------
+-- Parcels are booked with Xpressbees by the `shipping` Edge Function, which alone holds
+-- the Xpressbees login (as a Supabase secret). The website can never write to these
+-- tables: admins read them, customers see their own parcel through
+-- get_my_shipments(), and the function changes them through the service role.
+
+-- One row of settings: the automatic booking switch, how long a new order waits before
+-- it is booked (so a customer can still cancel for free), and the pickup warehouse as
+-- registered in the Xpressbees panel. Returns go back to the same address.
+create table if not exists public.shipping_settings (
+  id boolean primary key default true check (id),
+  auto_book boolean not null default true,
+  hold_minutes integer not null default 30 check (hold_minutes between 0 and 1440),
+  warehouse_name text not null default '' check (char_length(warehouse_name) <= 100),
+  pickup_name text not null default 'Kitaabaurkona' check (char_length(pickup_name) between 2 and 80),
+  pickup_address text not null default 'hiran magri sec -5 udaipur near bsnl office'
+    check (char_length(pickup_address) between 5 and 200),
+  pickup_city text not null default 'Udaipur' check (char_length(pickup_city) between 2 and 60),
+  pickup_state text not null default 'Rajasthan' check (char_length(pickup_state) between 2 and 60),
+  pickup_pincode text not null default '313002' check (pickup_pincode ~ '^[1-9][0-9]{5}$'),
+  pickup_phone text not null default '8690965448' check (pickup_phone ~ '^[6-9][0-9]{9}$'),
+  updated_at timestamptz not null default now()
+);
+
+insert into public.shipping_settings (id) values (true) on conflict (id) do nothing;
+
+drop trigger if exists shipping_settings_set_updated_at on public.shipping_settings;
+create trigger shipping_settings_set_updated_at
+  before update on public.shipping_settings
+  for each row execute function public.set_updated_at();
+
+alter table public.shipping_settings enable row level security;
+
+drop policy if exists "Admins view shipping settings" on public.shipping_settings;
+create policy "Admins view shipping settings" on public.shipping_settings
+  for select to authenticated
+  using ((select public.is_admin()));
+
+drop policy if exists "Admins edit shipping settings" on public.shipping_settings;
+create policy "Admins edit shipping settings" on public.shipping_settings
+  for update to authenticated
+  using ((select public.is_admin()))
+  with check ((select public.is_admin()));
+
+revoke all on public.shipping_settings from anon, authenticated;
+grant select, update on public.shipping_settings to authenticated;
+
+-- A parcel. kind 'forward' goes to the customer; 'reverse' is a return pickup.
+-- Status: queued (waiting for its booking time) -> booking -> booked (AWB and label made)
+-- -> in_transit -> out_for_delivery -> delivered. While automatic booking is off, queued
+-- parcels wait for an admin's "Book now". Side roads: failed (booking kept failing; an
+-- admin retries), exception (delivery attempt failed, see NDR), rto (sent back to us),
+-- cancel_requested -> cancelled.
+create table if not exists public.shipments (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders (id) on delete cascade,
+  kind text not null default 'forward' check (kind in ('forward', 'reverse')),
+  status text not null default 'queued' check (status in (
+    'queued', 'booking', 'booked', 'in_transit', 'out_for_delivery', 'delivered',
+    'exception', 'rto', 'cancel_requested', 'cancelled', 'failed'
+  )),
+  book_after timestamptz not null default now(),
+  attempts integer not null default 0 check (attempts between 0 and 100),
+  next_attempt_at timestamptz,
+  last_error text check (char_length(last_error) <= 300),
+  awb_number text unique check (awb_number ~ '^[0-9A-Za-z]{6,30}$'),
+  xb_order_id text check (char_length(xb_order_id) <= 40),
+  xb_shipment_id text check (char_length(xb_shipment_id) <= 40),
+  xb_status text check (char_length(xb_status) <= 80),
+  courier_id text check (courier_id ~ '^[0-9]{1,10}$'),
+  courier_name text check (char_length(courier_name) <= 100),
+  courier_chosen_by_admin boolean not null default false,
+  freight_charges numeric(10, 2) check (freight_charges >= 0),
+  cod_charges numeric(10, 2) check (cod_charges >= 0),
+  total_charges numeric(10, 2) check (total_charges >= 0),
+  label_url text check (label_url ~ '^https://xb-files\.s3\.amazonaws\.com/[A-Za-z0-9._/-]+$'),
+  manifest_url text check (manifest_url ~ '^https://xb-files\.s3\.amazonaws\.com/[A-Za-z0-9._/-]+$'),
+  package_weight_g integer check (package_weight_g between 1 and 100000),
+  package_length_cm numeric(6, 1) check (package_length_cm > 0),
+  package_breadth_cm numeric(6, 1) check (package_breadth_cm > 0),
+  package_height_cm numeric(6, 1) check (package_height_cm > 0),
+  return_details jsonb,
+  history jsonb not null default '[]'::jsonb check (jsonb_typeof(history) = 'array'),
+  last_tracked_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- At most one live parcel of each kind per order.
+create unique index if not exists shipments_one_live_forward
+  on public.shipments (order_id) where kind = 'forward' and status <> 'cancelled';
+create unique index if not exists shipments_one_live_reverse
+  on public.shipments (order_id) where kind = 'reverse' and status <> 'cancelled';
+create index if not exists shipments_due_idx on public.shipments (status, book_after);
+
+drop trigger if exists shipments_set_updated_at on public.shipments;
+create trigger shipments_set_updated_at
+  before update on public.shipments
+  for each row execute function public.set_updated_at();
+
+alter table public.shipments enable row level security;
+
+drop policy if exists "Admins view shipments" on public.shipments;
+create policy "Admins view shipments" on public.shipments
+  for select to authenticated
+  using ((select public.is_admin()));
+
+revoke all on public.shipments from anon, authenticated;
+grant select on public.shipments to authenticated;
+
+-- What happened to each parcel and who did it (null actor = the automatic worker).
+-- Never holds tokens, passwords or full addresses.
+create table if not exists public.shipment_events (
+  id bigint generated always as identity primary key,
+  shipment_id uuid references public.shipments (id) on delete cascade,
+  order_id uuid references public.orders (id) on delete cascade,
+  actor uuid,
+  action text not null check (char_length(action) <= 40),
+  detail text check (char_length(detail) <= 300),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists shipment_events_order_idx on public.shipment_events (order_id, created_at desc);
+
+alter table public.shipment_events enable row level security;
+
+drop policy if exists "Admins view shipment events" on public.shipment_events;
+create policy "Admins view shipment events" on public.shipment_events
+  for select to authenticated
+  using ((select public.is_admin()));
+
+revoke all on public.shipment_events from anon, authenticated;
+grant select on public.shipment_events to authenticated;
+
+-- Used only by the Edge Function (service role): the cached Xpressbees session token,
+-- the PIN code answer cache and request counters for rate limits. Row Level Security is
+-- on with no policies and no grants, so the website can never read or write them.
+create table if not exists public.integration_tokens (
+  provider text primary key check (provider in ('xpressbees')),
+  token text not null,
+  expires_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.pincode_checks (
+  pincode text not null check (pincode ~ '^[1-9][0-9]{5}$'),
+  payment_type text not null check (payment_type in ('cod', 'prepaid')),
+  serviceable boolean not null,
+  checked_at timestamptz not null default now(),
+  primary key (pincode, payment_type)
+);
+
+create table if not exists public.rate_limits (
+  bucket text not null check (char_length(bucket) <= 120),
+  window_start timestamptz not null,
+  hits integer not null default 0,
+  primary key (bucket, window_start)
+);
+
+alter table public.integration_tokens enable row level security;
+alter table public.pincode_checks enable row level security;
+alter table public.rate_limits enable row level security;
+revoke all on public.integration_tokens, public.pincode_checks, public.rate_limits from public, anon, authenticated;
+grant all on public.integration_tokens, public.pincode_checks, public.rate_limits to service_role;
+grant select, update on public.shipping_settings to service_role;
+grant all on public.shipments, public.shipment_events to service_role;
+
+
+-- -----------------------------------------------------------------------------
 -- 9. ORDER FUNCTIONS
 -- -----------------------------------------------------------------------------
 
 -- Places an order for the signed-in user. items: [{ "book_id": uuid, "quantity": 1-10 }]
 -- (1 to 50 different books). shipping: { name, phone, address, city, state, pincode }.
+-- payment: 'cod' (cash on delivery: confirmed at once, books taken out of stock now) or
+-- 'online' (saved as awaiting payment; stock is taken when it is marked paid).
 -- Prices, titles and stock come from the books table, never from the request.
--- A user can have at most 5 orders awaiting payment at once.
-create or replace function public.create_order(items jsonb, shipping jsonb)
+-- A user can have at most 5 orders awaiting online payment at once.
+drop function if exists public.create_order(jsonb, jsonb);
+
+create or replace function public.create_order(items jsonb, shipping jsonb, payment text default 'online')
 returns uuid
 language plpgsql
 security definer
@@ -584,6 +772,9 @@ begin
   if v_user is null then
     raise exception 'Sign in to place an order' using errcode = '42501';
   end if;
+  if payment is null or payment not in ('online', 'cod') then
+    raise exception 'Choose a payment method' using errcode = '22023';
+  end if;
   if jsonb_typeof(items) is distinct from 'array'
      or jsonb_array_length(items) not between 1 and 50 then
     raise exception 'An order needs between 1 and 50 different books' using errcode = '22023';
@@ -591,9 +782,19 @@ begin
   if jsonb_typeof(shipping) is distinct from 'object' then
     raise exception 'Delivery details are missing' using errcode = '22023';
   end if;
-  if (select count(*) from public.orders where user_id = v_user and status = 'pending_payment') >= 5 then
+  if payment = 'online'
+     and (select count(*) from public.orders where user_id = v_user and status = 'pending_payment') >= 5 then
     raise exception 'Too many orders are awaiting payment' using errcode = 'P0001', hint = 'pending_limit';
   end if;
+
+  -- Lock the books being ordered so two orders cannot take the same last copy.
+  perform 1
+  from public.books b
+  where b.id in (
+    select (e ->> 'book_id')::uuid from jsonb_array_elements(items) as e
+    where (e ->> 'book_id') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  )
+  for update;
 
   with req as (
     select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity
@@ -623,12 +824,15 @@ begin
     from jsonb_array_elements(items) as e
   )
   insert into public.orders (
-    user_id, item_count, subtotal, mrp_total,
+    user_id, status, payment_method, item_count, subtotal, mrp_total,
     shipping_name, shipping_phone, shipping_address,
     shipping_city, shipping_state, shipping_pincode
   )
   select
-    v_user, sum(r.quantity), sum(b.price * r.quantity), sum(b.mrp * r.quantity),
+    v_user,
+    case when payment = 'cod' then 'confirmed' else 'pending_payment' end,
+    payment,
+    sum(r.quantity), sum(b.price * r.quantity), sum(b.mrp * r.quantity),
     btrim(shipping ->> 'name'), btrim(shipping ->> 'phone'), btrim(shipping ->> 'address'),
     btrim(shipping ->> 'city'), btrim(shipping ->> 'state'), btrim(shipping ->> 'pincode')
   from req r
@@ -644,27 +848,69 @@ begin
   from req r
   join public.books b on b.id = r.book_id;
 
+  -- Cash on delivery is confirmed now, so its books leave stock now (rows are locked above).
+  if payment = 'cod' then
+    update public.books b
+    set stock_quantity = b.stock_quantity - i.quantity
+    from public.order_items i
+    where i.order_id = v_order and b.id = i.book_id;
+  end if;
+
   return v_order;
 end;
 $$;
 
-revoke execute on function public.create_order(jsonb, jsonb) from public, anon;
-grant execute on function public.create_order(jsonb, jsonb) to authenticated;
+revoke execute on function public.create_order(jsonb, jsonb, text) from public, anon;
+grant execute on function public.create_order(jsonb, jsonb, text) to authenticated;
 
--- Lets a customer cancel their own order while it is still awaiting payment.
+-- True once the parcel has left the warehouse (picked up or further), after which an
+-- order can no longer be cancelled from the website.
+create or replace function public.order_has_left(p_order uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.shipments s
+    where s.order_id = p_order and s.kind = 'forward'
+      and s.status in ('in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto')
+  );
+$$;
+
+revoke execute on function public.order_has_left(uuid) from public, anon, authenticated;
+
+-- Lets a customer cancel their own order while it is awaiting payment, or a cash on
+-- delivery order until the parcel has been picked up. Books taken from stock go back.
+-- A shipment already booked with the courier is cancelled with them by the shipping
+-- worker (see the orders trigger in section 10).
 create or replace function public.cancel_order(p_order uuid)
 returns text
 language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_status text;
 begin
-  update public.orders
-  set status = 'cancelled'
-  where id = p_order and user_id = auth.uid() and status = 'pending_payment';
-  if not found then
+  select status into v_status
+  from public.orders
+  where id = p_order and user_id = auth.uid()
+  for update;
+
+  if v_status is null or v_status not in ('pending_payment', 'confirmed') or public.order_has_left(p_order) then
     raise exception 'This order can no longer be cancelled' using errcode = 'P0001';
   end if;
+
+  if v_status = 'confirmed' then
+    update public.books b
+    set stock_quantity = b.stock_quantity + i.quantity
+    from public.order_items i
+    where i.order_id = p_order and b.id = i.book_id;
+  end if;
+
+  update public.orders set status = 'cancelled' where id = p_order;
   return 'cancelled';
 end;
 $$;
@@ -672,8 +918,9 @@ $$;
 revoke execute on function public.cancel_order(uuid) from public, anon;
 grant execute on function public.cancel_order(uuid) to authenticated;
 
--- Admin-only status changes. Marking an order paid takes the books out of stock
--- (all or nothing); cancelling a paid order puts them back.
+-- Admin-only status changes. Marking an online order paid takes the books out of stock
+-- (all or nothing); cancelling a paid or confirmed order puts them back. A shipped order
+-- can be cancelled only after the courier returned it (shipment status rto).
 create or replace function public.admin_set_order_status(p_order uuid, p_status text)
 returns text
 language plpgsql
@@ -683,6 +930,7 @@ as $$
 declare
   v_current text;
   v_short integer;
+  v_returned boolean;
 begin
   if not public.is_admin() then
     raise exception 'Only admins can change orders' using errcode = '42501';
@@ -693,12 +941,22 @@ begin
     raise exception 'Order not found' using errcode = 'P0002';
   end if;
 
+  select exists (
+    select 1 from public.shipments
+    where order_id = p_order and kind = 'forward' and status = 'rto'
+  ) into v_returned;
+
   if not (
        (v_current = 'pending_payment' and p_status in ('paid', 'cancelled'))
-    or (v_current = 'paid' and p_status in ('shipped', 'cancelled'))
+    or (v_current in ('paid', 'confirmed') and p_status in ('shipped', 'cancelled'))
     or (v_current = 'shipped' and p_status = 'delivered')
+    or (v_current = 'shipped' and p_status = 'cancelled' and v_returned)
   ) then
     raise exception 'An order that is % cannot become %', v_current, p_status using errcode = '22023';
+  end if;
+
+  if v_current in ('paid', 'confirmed') and p_status = 'cancelled' and public.order_has_left(p_order) then
+    raise exception 'This parcel has left the warehouse' using errcode = 'P0001', hint = 'shipped';
   end if;
 
   if p_status = 'paid' then
@@ -713,7 +971,7 @@ begin
     set stock_quantity = b.stock_quantity - i.quantity
     from public.order_items i
     where i.order_id = p_order and b.id = i.book_id;
-  elsif p_status = 'cancelled' and v_current = 'paid' then
+  elsif p_status = 'cancelled' and v_current in ('paid', 'confirmed', 'shipped') then
     update public.books b
     set stock_quantity = b.stock_quantity + i.quantity
     from public.order_items i
@@ -729,6 +987,472 @@ revoke execute on function public.admin_set_order_status(uuid, text) from public
 grant execute on function public.admin_set_order_status(uuid, text) to authenticated;
 
 
+-- -----------------------------------------------------------------------------
+-- 9b. SHIPPING FUNCTIONS
+-- -----------------------------------------------------------------------------
+-- Everything below except get_my_shipments() may only be called by the `shipping`
+-- Edge Function (service role). The website calls the function, never these directly.
+
+create or replace function public.log_shipment_event(
+  p_shipment uuid, p_order uuid, p_actor uuid, p_action text, p_detail text default null
+)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.shipment_events (shipment_id, order_id, actor, action, detail)
+  values (p_shipment, p_order, p_actor, left(p_action, 40), left(p_detail, 300));
+$$;
+
+-- When an order is confirmed (cash on delivery) or marked paid, queue its parcel to be
+-- booked after the hold time. When it is cancelled, drop a parcel not booked yet, or ask
+-- the worker to cancel one that is booked.
+create or replace function public.orders_shipping_sync()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_hold integer;
+  v_shipment uuid;
+begin
+  if new.status in ('confirmed', 'paid')
+     and (tg_op = 'INSERT' or old.status is distinct from new.status)
+     and not exists (
+       select 1 from public.shipments
+       where order_id = new.id and kind = 'forward' and status <> 'cancelled'
+     ) then
+    select hold_minutes into v_hold from public.shipping_settings where id;
+    insert into public.shipments (order_id, kind, status, book_after)
+    values (new.id, 'forward', 'queued', now() + make_interval(mins => coalesce(v_hold, 30)))
+    returning id into v_shipment;
+    perform public.log_shipment_event(v_shipment, new.id, null, 'queued', 'Waiting ' || coalesce(v_hold, 30) || ' min before booking');
+  elsif tg_op = 'UPDATE' and new.status = 'cancelled' and old.status <> 'cancelled' then
+    update public.shipments
+    set status = case when status in ('booking', 'booked') then 'cancel_requested' else 'cancelled' end
+    where order_id = new.id and kind = 'forward' and status in ('queued', 'failed', 'booking', 'booked')
+    returning id into v_shipment;
+    if v_shipment is not null then
+      perform public.log_shipment_event(v_shipment, new.id, null, 'order_cancelled', null);
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists orders_shipping_sync on public.orders;
+create trigger orders_shipping_sync
+  after insert or update of status on public.orders
+  for each row execute function public.orders_shipping_sync();
+
+-- The worker takes parcels whose booking time has come, at most p_limit at a time.
+-- skip locked: two workers running at once never take the same parcel. A parcel stuck in
+-- "booking" for 15 minutes (the worker died) is taken again; Xpressbees refuses a second
+-- booking of the same order number, so it can never be booked twice.
+create or replace function public.claim_due_shipments(p_limit integer default 10)
+returns setof public.shipments
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.shipping_settings where id and auto_book and warehouse_name <> '') then
+    return;
+  end if;
+  return query
+  update public.shipments s
+  set status = 'booking', attempts = s.attempts + 1, last_error = null
+  where s.id in (
+    select id from public.shipments
+    where kind = 'forward'
+      and ((status = 'queued' and book_after <= now() and (next_attempt_at is null or next_attempt_at <= now()))
+        or (status = 'booking' and updated_at < now() - interval '15 minutes'))
+    order by book_after
+    limit greatest(1, least(p_limit, 50))
+    for update skip locked
+  )
+  returning s.*;
+end;
+$$;
+
+-- An admin's "Book now" / "Retry": takes one parcel whatever the switch or hold time says.
+create or replace function public.claim_shipment(p_shipment uuid)
+returns setof public.shipments
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if exists (select 1 from public.shipping_settings where id and warehouse_name = '') then
+    raise exception 'Set the Xpressbees warehouse name in Admin > Shipping first' using errcode = 'P0001', hint = 'no_warehouse';
+  end if;
+  return query
+  update public.shipments s
+  set status = 'booking', attempts = s.attempts + 1, last_error = null, next_attempt_at = null
+  where s.id = p_shipment and s.kind = 'forward' and s.status in ('queued', 'failed')
+  returning s.*;
+end;
+$$;
+
+-- Everything needed to book a parcel, read from the database only.
+create or replace function public.shipment_booking_data(p_shipment uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'shipment', to_jsonb(s),
+    'order', jsonb_build_object(
+      'id', o.id, 'order_number', o.order_number, 'status', o.status,
+      'payment_method', o.payment_method, 'subtotal', o.subtotal,
+      'name', o.shipping_name, 'phone', o.shipping_phone, 'address', o.shipping_address,
+      'city', o.shipping_city, 'state', o.shipping_state, 'pincode', o.shipping_pincode
+    ),
+    'items', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'title', i.title, 'sku', i.sku, 'quantity', i.quantity, 'unit_price', i.unit_price,
+        'weight_kg', b.weight_kg, 'length_cm', b.length_cm, 'breadth_cm', b.breadth_cm, 'height_cm', b.height_cm
+      ) order by i.title)
+      from public.order_items i
+      left join public.books b on b.id = i.book_id
+      where i.order_id = o.id
+    ), '[]'::jsonb),
+    'settings', (select to_jsonb(st) from public.shipping_settings st where st.id)
+  )
+  from public.shipments s
+  join public.orders o on o.id = s.order_id
+  where s.id = p_shipment;
+$$;
+
+-- Saves a successful booking. If the order was cancelled while the booking was in flight
+-- the parcel stays cancel_requested, so the worker cancels it with Xpressbees next.
+create or replace function public.record_booking(p_shipment uuid, p jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+begin
+  update public.shipments
+  set status = case when status = 'cancel_requested' then 'cancel_requested' else 'booked' end,
+      awb_number = p ->> 'awb_number',
+      xb_order_id = p ->> 'xb_order_id',
+      xb_shipment_id = p ->> 'xb_shipment_id',
+      xb_status = p ->> 'xb_status',
+      courier_id = p ->> 'courier_id',
+      courier_name = p ->> 'courier_name',
+      freight_charges = (p ->> 'freight_charges')::numeric,
+      cod_charges = (p ->> 'cod_charges')::numeric,
+      total_charges = (p ->> 'total_charges')::numeric,
+      label_url = p ->> 'label_url',
+      manifest_url = p ->> 'manifest_url',
+      package_weight_g = (p ->> 'package_weight_g')::integer,
+      package_length_cm = (p ->> 'package_length_cm')::numeric,
+      package_breadth_cm = (p ->> 'package_breadth_cm')::numeric,
+      package_height_cm = (p ->> 'package_height_cm')::numeric,
+      last_error = null,
+      next_attempt_at = null
+  where id = p_shipment and status in ('booking', 'cancel_requested')
+  returning order_id into v_order;
+  if v_order is null then
+    raise exception 'This parcel is not being booked' using errcode = 'P0001';
+  end if;
+  perform public.log_shipment_event(p_shipment, v_order, (p ->> 'actor')::uuid, 'booked',
+    'AWB ' || (p ->> 'awb_number') || ' with ' || coalesce(p ->> 'courier_name', 'courier'));
+end;
+$$;
+
+-- A booking attempt failed. Retried later (5, 20, 45, 80 minutes) unless it cannot work
+-- or it has failed 5 times; then it waits for an admin.
+create or replace function public.record_booking_failure(p_shipment uuid, p_error text, p_retry boolean, p_actor uuid default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+  v_attempts integer;
+  v_status text;
+begin
+  select order_id, attempts, status into v_order, v_attempts, v_status
+  from public.shipments where id = p_shipment for update;
+  if v_order is null then
+    return;
+  end if;
+  if v_status = 'cancel_requested' then
+    update public.shipments set status = 'cancelled', last_error = left(p_error, 300) where id = p_shipment;
+  elsif p_retry and v_attempts < 5 then
+    update public.shipments
+    set status = 'queued', last_error = left(p_error, 300),
+        next_attempt_at = now() + make_interval(mins => 5 * v_attempts * v_attempts)
+    where id = p_shipment;
+  else
+    update public.shipments set status = 'failed', last_error = left(p_error, 300) where id = p_shipment;
+  end if;
+  perform public.log_shipment_event(p_shipment, v_order, p_actor, 'booking_failed', p_error);
+end;
+$$;
+
+-- Saves the latest tracking and moves the order along: picked up -> shipped,
+-- delivered -> delivered.
+create or replace function public.record_tracking(p_shipment uuid, p_status text, p_xb_status text, p_history jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+  v_old text;
+  v_kind text;
+begin
+  if p_status not in ('booked', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto', 'cancelled') then
+    raise exception 'Unknown parcel status' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_history) is distinct from 'array' then
+    raise exception 'Tracking history must be a list' using errcode = '22023';
+  end if;
+  select order_id, status, kind into v_order, v_old, v_kind
+  from public.shipments where id = p_shipment for update;
+  if v_order is null then
+    return;
+  end if;
+  update public.shipments
+  set status = case when v_old = 'cancel_requested' and p_status = 'booked' then v_old else p_status end,
+      xb_status = left(p_xb_status, 80),
+      history = p_history,
+      last_tracked_at = now()
+  where id = p_shipment;
+  if v_kind = 'forward' then
+    if p_status in ('in_transit', 'out_for_delivery', 'exception') then
+      update public.orders set status = 'shipped' where id = v_order and status in ('confirmed', 'paid');
+    elsif p_status = 'delivered' then
+      update public.orders set status = 'delivered' where id = v_order and status in ('confirmed', 'paid', 'shipped');
+    end if;
+  end if;
+  if v_old is distinct from p_status then
+    perform public.log_shipment_event(p_shipment, v_order, null, 'status_' || p_status, left(p_xb_status, 80));
+  end if;
+end;
+$$;
+
+-- Parcels whose tracking should be refreshed (not checked in the last p_minutes).
+create or replace function public.shipments_to_track(p_minutes integer default 110, p_limit integer default 50)
+returns setof public.shipments
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select * from public.shipments
+  where awb_number is not null
+    and status in ('booked', 'in_transit', 'out_for_delivery', 'exception')
+    and (last_tracked_at is null or last_tracked_at < now() - make_interval(mins => p_minutes))
+  order by last_tracked_at nulls first
+  limit greatest(1, least(p_limit, 200));
+$$;
+
+-- Counts one request in a time window; false once the limit is reached.
+create or replace function public.hit_rate_limit(p_bucket text, p_limit integer, p_window_seconds integer)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_window timestamptz := to_timestamp(floor(extract(epoch from now()) / p_window_seconds) * p_window_seconds);
+  v_hits integer;
+begin
+  insert into public.rate_limits (bucket, window_start, hits)
+  values (left(p_bucket, 120), v_window, 1)
+  on conflict (bucket, window_start) do update set hits = public.rate_limits.hits + 1
+  returning hits into v_hits;
+  if random() < 0.01 then
+    delete from public.rate_limits where window_start < now() - interval '1 day';
+  end if;
+  return v_hits <= p_limit;
+end;
+$$;
+
+-- What a customer may see about their own order's parcel (admins: any order).
+-- No label, charges, errors or courier account details.
+create or replace function public.get_my_shipments(p_order uuid)
+returns table (
+  kind text, status text, awb_number text, courier_name text,
+  history jsonb, last_tracked_at timestamptz, updated_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select s.kind, s.status, s.awb_number, s.courier_name, s.history, s.last_tracked_at, s.updated_at
+  from public.shipments s
+  join public.orders o on o.id = s.order_id
+  where s.order_id = p_order
+    and (o.user_id = (select auth.uid()) or (select public.is_admin()))
+  order by s.created_at;
+$$;
+
+revoke execute on function public.log_shipment_event(uuid, uuid, uuid, text, text) from public, anon, authenticated;
+revoke execute on function public.orders_shipping_sync() from public, anon, authenticated;
+revoke execute on function public.claim_due_shipments(integer) from public, anon, authenticated;
+revoke execute on function public.claim_shipment(uuid) from public, anon, authenticated;
+revoke execute on function public.shipment_booking_data(uuid) from public, anon, authenticated;
+revoke execute on function public.record_booking(uuid, jsonb) from public, anon, authenticated;
+revoke execute on function public.record_booking_failure(uuid, text, boolean, uuid) from public, anon, authenticated;
+revoke execute on function public.record_tracking(uuid, text, text, jsonb) from public, anon, authenticated;
+revoke execute on function public.shipments_to_track(integer, integer) from public, anon, authenticated;
+revoke execute on function public.hit_rate_limit(text, integer, integer) from public, anon, authenticated;
+revoke execute on function public.order_has_left(uuid) from public, anon, authenticated;
+
+grant execute on function public.log_shipment_event(uuid, uuid, uuid, text, text) to service_role;
+grant execute on function public.claim_due_shipments(integer) to service_role;
+grant execute on function public.claim_shipment(uuid) to service_role;
+grant execute on function public.shipment_booking_data(uuid) to service_role;
+grant execute on function public.record_booking(uuid, jsonb) to service_role;
+grant execute on function public.record_booking_failure(uuid, text, boolean, uuid) to service_role;
+grant execute on function public.record_tracking(uuid, text, text, jsonb) to service_role;
+grant execute on function public.shipments_to_track(integer, integer) to service_role;
+grant execute on function public.hit_rate_limit(text, integer, integer) to service_role;
+grant execute on function public.order_has_left(uuid) to service_role;
+
+-- A parcel was cancelled with Xpressbees (or never got booked).
+create or replace function public.record_cancelled(p_shipment uuid, p_actor uuid default null, p_detail text default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+begin
+  update public.shipments set status = 'cancelled'
+  where id = p_shipment and status in ('queued', 'failed', 'booking', 'booked', 'cancel_requested')
+  returning order_id into v_order;
+  if v_order is not null then
+    perform public.log_shipment_event(p_shipment, v_order, p_actor, 'cancelled', p_detail);
+  end if;
+end;
+$$;
+
+-- An admin picked a different courier for a parcel that is not booked yet.
+create or replace function public.set_shipment_courier(p_shipment uuid, p_courier_id text, p_courier_name text, p_actor uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+begin
+  update public.shipments
+  set courier_id = p_courier_id, courier_name = left(p_courier_name, 100), courier_chosen_by_admin = true
+  where id = p_shipment and status in ('queued', 'failed')
+  returning order_id into v_order;
+  if v_order is null then
+    raise exception 'The courier can only be changed before booking' using errcode = 'P0001';
+  end if;
+  perform public.log_shipment_event(p_shipment, v_order, p_actor, 'courier_set', p_courier_name);
+end;
+$$;
+
+-- Starts a return pickup for a delivered order (one live return per order).
+create or replace function public.create_return_shipment(p_order uuid, p_actor uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id uuid;
+begin
+  if not exists (select 1 from public.orders where id = p_order and status = 'delivered') then
+    raise exception 'Only a delivered order can be picked up for return' using errcode = 'P0001';
+  end if;
+  insert into public.shipments (order_id, kind, status, attempts)
+  values (p_order, 'reverse', 'booking', 1)
+  returning id into v_id;
+  perform public.log_shipment_event(v_id, p_order, p_actor, 'return_requested', null);
+  return v_id;
+end;
+$$;
+
+-- Cached answers to "does Xpressbees deliver to this PIN code?" (null = not cached).
+create or replace function public.get_pincode_check(p_pincode text, p_payment_type text, p_max_age_minutes integer default 1440)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select serviceable from public.pincode_checks
+  where pincode = p_pincode and payment_type = p_payment_type
+    and checked_at > now() - make_interval(mins => p_max_age_minutes);
+$$;
+
+create or replace function public.save_pincode_check(p_pincode text, p_payment_type text, p_serviceable boolean)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.pincode_checks (pincode, payment_type, serviceable, checked_at)
+  values (p_pincode, p_payment_type, p_serviceable, now())
+  on conflict (pincode, payment_type) do update set serviceable = excluded.serviceable, checked_at = now();
+$$;
+
+-- The cached Xpressbees session token (expires after a few hours).
+create or replace function public.xb_token_get()
+returns table (token text, expires_at timestamptz)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select token, expires_at from public.integration_tokens where provider = 'xpressbees' and expires_at > now();
+$$;
+
+create or replace function public.xb_token_set(p_token text, p_expires_at timestamptz)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  insert into public.integration_tokens (provider, token, expires_at, updated_at)
+  values ('xpressbees', p_token, p_expires_at, now())
+  on conflict (provider) do update set token = excluded.token, expires_at = excluded.expires_at, updated_at = now();
+$$;
+
+revoke execute on function public.record_cancelled(uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.set_shipment_courier(uuid, text, text, uuid) from public, anon, authenticated;
+revoke execute on function public.create_return_shipment(uuid, uuid) from public, anon, authenticated;
+revoke execute on function public.get_pincode_check(text, text, integer) from public, anon, authenticated;
+revoke execute on function public.save_pincode_check(text, text, boolean) from public, anon, authenticated;
+revoke execute on function public.xb_token_get() from public, anon, authenticated;
+revoke execute on function public.xb_token_set(text, timestamptz) from public, anon, authenticated;
+grant execute on function public.record_cancelled(uuid, uuid, text) to service_role;
+grant execute on function public.set_shipment_courier(uuid, text, text, uuid) to service_role;
+grant execute on function public.create_return_shipment(uuid, uuid) to service_role;
+grant execute on function public.get_pincode_check(text, text, integer) to service_role;
+grant execute on function public.save_pincode_check(text, text, boolean) to service_role;
+grant execute on function public.xb_token_get() to service_role;
+grant execute on function public.xb_token_set(text, timestamptz) to service_role;
+
+
+revoke execute on function public.get_my_shipments(uuid) from public, anon;
+grant execute on function public.get_my_shipments(uuid) to authenticated;
+
+
+
+
 -- Make the website's API see the new tables immediately.
 notify pgrst, 'reload schema';
 
@@ -738,16 +1462,17 @@ commit;
 -- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: six rows
--- (book_internal, books, order_items, orders, users, wishlist_items), all with
--- rls_enabled = true.
+-- The SQL Editor shows this table after the run. Expected: twelve rows, all with
+-- rls_enabled = true (integration_tokens, pincode_checks and rate_limits have 0
+-- policies on purpose: only the shipping Edge Function may touch them).
 select
   t.tablename as table_name,
   t.rowsecurity as rls_enabled,
   (select count(*) from pg_policies p where p.schemaname = 'public' and p.tablename = t.tablename) as policies
 from pg_tables t
 where t.schemaname = 'public'
-  and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items')
+  and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items',
+    'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits')
 order by t.tablename;
 
 

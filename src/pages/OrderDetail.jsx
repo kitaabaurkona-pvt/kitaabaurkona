@@ -10,6 +10,7 @@ import CartSummary from '../components/store/CartSummary';
 import OrderStatus from '../components/store/OrderStatus';
 import { LoadError, StateBlock } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
+import ShipmentCard from '../components/store/ShipmentCard';
 
 function CancelOrder({ orderId, onCancelled }) {
   const [confirming, setConfirming] = useState(false);
@@ -104,6 +105,10 @@ function OrderDetail() {
 
   const totals = { count: order.item_count, subtotal: Number(order.subtotal), mrp: Number(order.mrp_total) };
   const pending = order.status === 'pending_payment';
+  const cod = order.payment_method === 'cod';
+  // The database refuses once the parcel has left with the courier.
+  const cancellable = pending || order.status === 'confirmed';
+  const showParcel = ['confirmed', 'paid', 'shipped', 'delivered'].includes(order.status);
 
   return (
     <div className="container page">
@@ -126,6 +131,11 @@ function OrderDetail() {
       {location.state?.placed && pending && (
         <p className="notice notice-gap" data-tone="ok" role="status">
           Order placed. It is saved and awaiting payment.
+        </p>
+      )}
+      {location.state?.placed && cod && order.status === 'confirmed' && (
+        <p className="notice notice-gap" data-tone="ok" role="status">
+          Order placed. Pay in cash when it arrives.
         </p>
       )}
 
@@ -168,6 +178,8 @@ function OrderDetail() {
               Mobile {order.shipping_phone}
             </address>
           </section>
+
+          {showParcel && <ShipmentCard orderId={order.id} />}
         </div>
 
         <aside className="stack-sm">
@@ -178,7 +190,15 @@ function OrderDetail() {
                 <p>This order is waiting for payment.</p>
               </div>
             )}
-            {pending && (
+            {cod && order.status !== 'cancelled' && (
+              <div className="payment-option">
+                <p className="payment-option-title">Cash on delivery</p>
+                <p>
+                  {order.status === 'delivered' ? 'Paid in cash on delivery.' : `Pay ${formatPrice(order.subtotal)} in cash when your order arrives.`}
+                </p>
+              </div>
+            )}
+            {cancellable && (
               <CancelOrder
                 orderId={order.id}
                 onCancelled={() => {

@@ -50,10 +50,24 @@ function AdminDashboard() {
           </Link>
         </div>
         <div className="stat-grid">
+          <Stat to="/admin/orders?status=confirmed" value={s.confirmed} label="Cash on delivery, to ship" />
           <Stat to="/admin/orders?status=pending_payment" value={s.pending} label="Awaiting payment" />
           <Stat to="/admin/orders?status=paid" value={s.paid} label="Paid, to ship" />
           <Stat to="/admin/orders?status=shipped" value={s.shipped} label="Shipped" />
           <Stat to="/admin/orders?status=delivered" value={s.delivered} label="Delivered" />
+        </div>
+      </section>
+      <section className="stack-sm" aria-labelledby="shipping-heading">
+        <div className="section-head">
+          <h2 id="shipping-heading" className="section-title">
+            Shipping
+          </h2>
+          <Link to="/admin/shipping" className="section-link">
+            Shipping settings
+          </Link>
+        </div>
+        <div className="stat-grid">
+          <Stat to="/admin/shipping" value={s.problems} label="Parcels needing attention" />
         </div>
       </section>
     </div>

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { CONTACT } from '../utils/storeInfo';
 
 // Bracketed items are details the business has not supplied yet. They are shown
 // as highlighted placeholders so nothing on this page is invented.
@@ -49,7 +50,7 @@ function Terms() {
 
         <h2 id="about">About these terms</h2>
         <p>
-          Kitaabaurkona is operated by <Fill>Business legal name</Fill>, <Fill>Registered address</Fill>. These terms
+          Kitaabaurkona is operated by <Fill>Business legal name</Fill>, {CONTACT.address}. These terms
           apply whenever you browse this site, create an account or place an order. By using the site you agree to
           them.
         </p>
@@ -78,26 +79,25 @@ function Terms() {
         <h2 id="orders">Orders and payment</h2>
         <ul>
           <li>The price you pay is the price shown when you place the order.</li>
-          <li>Online payment is not connected yet. New orders are saved as awaiting payment.</li>
-          <li>An order is confirmed only once its payment has been received.</li>
+          <li>Orders are paid by cash on delivery: you pay the order total in cash when the parcel arrives.</li>
+          <li>A cash on delivery order is confirmed as soon as it is placed, and its books are set aside for you.</li>
           <li>Your cart is kept in this browser until you place an order or clear it.</li>
         </ul>
 
         <h2 id="delivery">Delivery</h2>
         <p>
-          Orders are delivered to the address you enter at checkout, within India. Delivery times and charges:{' '}
-          <Fill>Delivery times and charges</Fill>.
+          Orders are delivered to the address you enter at checkout, within India. Shipping is free on all orders,
+          and orders are usually shipped within two business days. See our <Link to="/shipping">Shipping policy</Link>.
         </p>
 
         <h2 id="returns">Cancellations and returns</h2>
         <ul>
           <li>
-            You can cancel an order yourself from its page in <Link to="/orders">Orders</Link> while it is awaiting
-            payment.
+            You can cancel an order yourself from its page in <Link to="/orders">Orders</Link> until the parcel has
+            been picked up by the courier.
           </li>
           <li>
-            Returns are accepted within <Fill>Return window</Fill> of delivery, on the following conditions:{' '}
-            <Fill>Return conditions</Fill>.
+            Returns and exchanges follow our <Link to="/returns">Return policy</Link>.
           </li>
           <li>
             Refunds are made to the original payment method within <Fill>Refund timeline</Fill>.
@@ -148,7 +148,8 @@ function Terms() {
 
         <h2 id="contact">Contact</h2>
         <p>
-          Questions about these terms or an order: <Fill>Support email</Fill>.
+          Questions about these terms or an order: <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>, or call or
+          WhatsApp <a href={CONTACT.phoneHref}>{CONTACT.phone}</a> ({CONTACT.hours}).
         </p>
       </article>
     </div>

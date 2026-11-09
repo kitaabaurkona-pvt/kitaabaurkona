@@ -14,7 +14,7 @@ import { BagIcon } from '../components/icons';
 function Cart() {
   useDocumentTitle('Cart');
   const { ids } = useCart();
-  const { lines, totals, blocked, data, loading, error, retry } = useCartLines();
+  const { lines, totals, blocked, pending, data, loading, error, retry } = useCartLines();
 
   // Re-read prices and stock whenever the cart page is opened.
   useEffect(() => {
@@ -53,7 +53,7 @@ function Cart() {
                   Remove the books that are no longer available to continue.
                 </p>
               )}
-              {blocked || totals.count === 0 ? (
+              {blocked || pending || totals.count === 0 ? (
                 <button type="button" className="btn btn-primary btn-block" aria-disabled="true">
                   Proceed to checkout
                 </button>

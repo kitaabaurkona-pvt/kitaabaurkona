@@ -9,7 +9,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { createBackend, fetchPublicBooks, handleAuth, handleRest } from './fake-supabase.mjs';
+import { createClient } from '@supabase/supabase-js';
+import { createBackend, fetchPublicBooks, handleAuth, handleRest, SERVICE_TOKEN } from './fake-supabase.mjs';
+import { createHandler } from '../supabase/functions/shipping/handler.js';
+import { createXpressbees } from '../supabase/functions/shipping/xpressbees.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.BASE || 'http://localhost:5199';
@@ -35,6 +38,66 @@ const db = await createBackend({ schemaPath: path.join(ROOT, 'supabase', 'schema
 const one = async (sql, params = []) => (await db.query(sql, params)).rows[0];
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
 
+// The real `shipping` Edge Function, run in this process. It reaches the fake database
+// through an in-process fetch and a stand-in Xpressbees that answers like the real API.
+const inProcessFetch = async (input, init = {}) => {
+  const url = new URL(typeof input === 'string' ? input : input.url);
+  const headers = Object.fromEntries(new Headers(init.headers).entries());
+  const request = { method: init.method || 'GET', url, headers, body: init.body };
+  const r = url.pathname.startsWith('/rest/v1/') ? await handleRest(db, request) : handleAuth(request);
+  return new Response(r.body ?? '', { status: r.status, headers: { 'content-type': 'application/json', ...(r.headers || {}) } });
+};
+const XB_CALLS = [];
+const xbToken = `eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 10800 })).toString('base64url')}.sig`;
+async function fakeXpressbees(url, init = {}) {
+  const p = new URL(url).pathname;
+  const body = init.body ? JSON.parse(init.body) : null;
+  XB_CALLS.push(p);
+  const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+  if (p === '/api/users/login') return json(200, { status: true, data: xbToken });
+  if (p === '/api/courier/serviceability') {
+    return json(200, { status: true, data: body.destination === '799999' ? [] : [{ id: '1', name: 'Surface Xpressbees 0.5 K.G', freight_charges: 50, cod_charges: 40, total_charges: 90 }] });
+  }
+  if (p === '/api/shipments2') {
+    return json(200, {
+      status: true,
+      data: {
+        order_id: 1, shipment_id: 2, awb_number: String(14344940300000 + XB_CALLS.length), courier_id: '1', courier_name: 'Surface Xpressbees 0.5 K.G', status: 'booked',
+        label: 'https://xb-files.s3.amazonaws.com/labels/test.pdf', manifest: 'https://xb-files.s3.amazonaws.com/manifest/test.pdf',
+      },
+    });
+  }
+  if (p.startsWith('/api/shipments2/track/')) {
+    return json(200, { status: true, data: { status: 'in transit', history: [{ status_code: 'IT', location: 'Udaipur', event_time: '2026-11-10 10:00', message: 'In Transit' }] } });
+  }
+  if (p === '/api/shipments2/manifest') return json(200, { status: true, data: 'https://xb-files.s3.amazonaws.com/manifest/test.pdf' });
+  if (p === '/api/ndr') return json(200, { status: true, data: [] });
+  return json(404, { status: false, message: 'Not found' });
+}
+const shippingDb = createClient('https://fake.supabase.co', SERVICE_TOKEN, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: inProcessFetch } });
+const shippingFunction = createHandler({
+  db: shippingDb,
+  cronSecret: 'e2e-cron-secret-0123456789abcdef',
+  allowedOrigins: [new URL(BASE).origin],
+  log: { info() {}, warn() {}, error() {} },
+  makeXpressbees: () =>
+    createXpressbees({
+      baseUrl: 'https://shipment.xpressbees.com',
+      email: 'ops@example.com',
+      password: 'e2e-password',
+      fetchImpl: fakeXpressbees,
+      tokenStore: {
+        async get() {
+          const { data } = await shippingDb.rpc('xb_token_get');
+          return data?.[0]?.token ?? null;
+        },
+        async set(token, expiresAt) {
+          await shippingDb.rpc('xb_token_set', { p_token: token, p_expires_at: expiresAt.toISOString() });
+        },
+      },
+    }),
+});
+
 async function newPage({ width = 1280, height = 900, scheme = 'light', touch = false, prefs = null } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
@@ -51,6 +114,10 @@ async function newPage({ width = 1280, height = 900, scheme = 'light', touch = f
     const url = new URL(req.url());
     if (!url.hostname.endsWith('.supabase.co')) return req.continue();
     if (req.method() === 'OPTIONS') return req.respond({ status: 204, headers: CORS });
+    if (url.pathname === '/functions/v1/shipping') {
+      const res = await shippingFunction(new Request('https://fake.supabase.co/functions/v1/shipping', { method: req.method(), headers: req.headers(), body: req.postData() }));
+      return req.respond({ status: res.status, headers: { ...CORS, ...Object.fromEntries(res.headers) }, body: await res.text() });
+    }
     const input = { method: req.method(), url, headers: req.headers(), body: req.postData() };
     const r = url.pathname.startsWith('/rest/v1/') ? await handleRest(db, input) : handleAuth(input);
     return req.respond({ status: r.status, headers: { ...CORS, 'content-type': 'application/json', ...(r.headers || {}) }, body: r.body ?? '' });
@@ -63,64 +130,107 @@ const waitSel = (page, sel, ms = 10000) => page.waitForSelector(sel, { timeout: 
 const gone = (page, sel, ms = 3000) => page.waitForSelector(sel, { hidden: true, timeout: ms }).then(() => true).catch(() => false);
 const text = (page, sel) => page.$eval(sel, (e) => e.textContent.trim()).catch(() => null);
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-const AMBER = 'rgb(234, 168, 0)';
-// Amber buttons a visitor can actually see (slides that are not showing are aria-hidden).
-const amberButtons = (page) =>
-  page.$$eval(
-    'main .btn, main button',
-    (els, amber) => els.filter((e) => !e.closest('[aria-hidden="true"]') && getComputedStyle(e).backgroundColor === amber).length,
-    AMBER,
-  );
+const BLACK = 'rgb(0, 0, 0)';
+const RED = 'rgb(178, 34, 34)';
+const GREEN = 'rgb(0, 128, 0)';
+// A spot on the page that is over no carousel (right end of the nav row), so nothing pauses.
+const NEUTRAL = [1275, 140];
+const ANNOUNCEMENTS = ['Free shipping on all orders', 'Cash on delivery available', 'Easy returns'];
+const INVENTED = /BUMPER10|Rs\.?\s?200|extra discount|countdown|\d\dH:\d\dM|customer feedback|quality trust|★/i;
+// Scroll the whole page so every reveal-on-scroll section has played (for screenshots).
+const scrollThrough = (page) =>
+  page.evaluate(async () => {
+    for (let y = 0; y < document.body.scrollHeight; y += 500) {
+      window.scrollTo(0, y);
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    window.scrollTo(0, 0);
+    await new Promise((r) => setTimeout(r, 500));
+  });
+// The slides a visitor can see in a carousel (copies and off-screen slides are hidden).
+const visibleSlides = (page, root) =>
+  page.$$eval(`${root} .carousel-slide:not([aria-hidden="true"])`, (els) => els.map((e) => e.textContent.trim()));
+const activeDot = (page, root) =>
+  page.$$eval(`${root} .carousel-dot`, (ds) => ds.findIndex((d) => d.getAttribute('aria-current') === 'true'));
 
 try {
   // ---------- Visitor: Home ----------
   {
     const { page, ctx, errors } = await newPage();
     await goto(page, '/');
-    check('home: hero slider renders', await waitSel(page, '.slider .slide-title'));
-    const topFive = (
-      await db.query(`select title from public.books where is_visible and stock_quantity > 0 order by discount_percent desc, id asc limit 5`)
+    await page.mouse.move(...NEUTRAL);
+    check('home: hero banner shows first', await waitSel(page, '.hero-carousel .carousel-slide:not([data-copy]) img[src="/banners/collect-the-adventure.webp"]'));
+    await waitSel(page, '.hero-deal-title');
+    const topThree = (
+      await db.query(`select title from public.books where is_visible and stock_quantity > 0 order by discount_percent desc, id asc limit 3`)
     ).rows.map((r) => r.title);
-    const slideTitles = await page.$$eval('.slide .slide-title', (els) => els.map((e) => e.textContent.trim()));
-    check('home: slider shows the 5 biggest in-stock discounts, in order', JSON.stringify(slideTitles) === JSON.stringify(topFive), JSON.stringify(slideTitles));
-    check('home: only the first slide is exposed to assistive tech', (await page.$$('.slide[aria-hidden="false"]')).length === 1);
-    await waitSel(page, '#deals-heading');
-    await waitSel(page, '.shelf .book-card');
-    check('home: deals shelf shows the next 10 deals', (await page.$$('[aria-labelledby="deals-heading"] .book-card')).length === 10);
+    const dealTitles = await page.$$eval('.hero-carousel .carousel-slide:not([data-copy]) .hero-deal-title', (els) => els.map((e) => e.textContent.trim()));
+    check('home: hero then shows the 3 biggest in-stock discounts, in order', JSON.stringify(dealTitles) === JSON.stringify(topThree), JSON.stringify(dealTitles));
+    check('home: only one hero slide is exposed to assistive tech', (await page.$$('.hero-carousel .carousel-slide:not([aria-hidden="true"])')).length === 1);
+
+    const shownOffers = await page.$$eval('.announcement-bar .carousel-slide:not([data-copy]) .announcement', (els) => els.map((e) => e.textContent.trim()));
+    check('announcement bar: only the three confirmed offers', JSON.stringify(shownOffers) === JSON.stringify(ANNOUNCEMENTS), JSON.stringify(shownOffers));
+    check('home: no invented promos, countdowns or reviews', !INVENTED.test(await page.$eval('body', (b) => b.innerText)));
+
+    const dbCategories = (await db.query(`select distinct category from public.books where is_visible and category is not null`)).rows.map((r) => r.category);
+    await waitSel(page, '.circle');
+    const circles = await page.$$eval('.circles-section .circle', (cs) => cs.map((c) => ({ label: c.textContent.trim(), href: c.getAttribute('href'), img: Boolean(c.querySelector('img')) })));
+    check('circles: one round link per category in the database', circles.length === dbCategories.length && circles.every((c) => dbCategories.includes(c.label)), JSON.stringify(circles.map((c) => c.label)));
+    check('circles: each links to its category and shows a cover', circles.every((c) => c.href === `/books?category=${encodeURIComponent(c.label)}` && c.img));
+
+    const trust = await page.$$eval('.trust-strip .trust-items:not([aria-hidden]) .trust-item', (els) => els.map((e) => e.textContent.trim()));
+    check('trust strip: free shipping, cash on delivery, easy returns', JSON.stringify(trust) === JSON.stringify(['Free shipping', 'Cash on delivery', 'Easy returns']), JSON.stringify(trust));
+    check('banner 2: the Must-Read Trio banner links to box sets', (await page.$eval('.banner-wrap a', (a) => a.getAttribute('href')).catch(() => null)) === '/books?category=Box%20Sets%20%26%20Combos');
+
+    await waitSel(page, '[aria-labelledby="deals-heading"] .book-card');
+    check('home: AMAZING DEALS row holds the next 10 deals', (await page.$$('[aria-labelledby="deals-heading"] .book-card')).length === 10);
     for (const [id, label] of [['under', 'Up to ₹299'], ['combos', 'Box Sets & Combos'], ['regional', 'Regional editions']]) {
-      check(`home: "${label}" shelf has books`, (await waitSel(page, `[aria-labelledby="${id}-heading"] .book-card`)) && (await text(page, `#${id}-heading`)) === label);
+      check(`home: "${label}" row has books`, (await waitSel(page, `[aria-labelledby="${id}-heading"] .book-card`)) && (await text(page, `#${id}-heading`)) === label);
     }
-    const total = (await one(`select count(*)::int as n from public.books where is_visible`)).n;
-    check('home: "Browse all N books" uses the real count', new RegExp(`Browse all ${total} books`).test(await page.$eval('main', (m) => m.innerText)), total);
-    check('home: no announcement bar or invented promos', !/free delivery|prepaid|% off on|sale ends|rated|★/i.test(await page.$eval('main', (m) => m.innerText)));
-    check('home: exactly one visible amber button (the slide Add to cart)', (await amberButtons(page)) === 1, await amberButtons(page));
+    await waitSel(page, '[aria-labelledby="all-heading"] .book-card');
+    check('home: ALL PRODUCTS shows 8 books with VIEW ALL', (await page.$$('[aria-labelledby="all-heading"] .book-card')).length === 8 && (await page.$('[aria-labelledby="all-heading"] .view-all[href="/books"]')) !== null);
+    const headTransform = await page.$eval('#all-heading', (h) => getComputedStyle(h).textTransform);
+    check('home: section headings are UPPERCASE and centred', headTransform === 'uppercase' && (await page.$eval('.home-head', (h) => getComputedStyle(h).alignItems)) === 'center');
+
     check('cards: no Save button on cards', (await page.$('.book-card .save-button')) === null);
-    check('cards: every card has the quiet Add button', (await page.$$('.book-card')).length === (await page.$$('.book-card .btn-quiet')).length);
-    const tagBg = await page.$eval('.book-card .cover-tag', (e) => getComputedStyle(e).backgroundColor).catch(() => null);
-    check('cards: discount tag is neutral, not amber', tagBg && tagBg !== AMBER, tagBg);
+    check('cards: every card has a full-width button', (await page.$$('.book-card')).length === (await page.$$('.book-card .btn-card')).length);
+    const cardBtn = await page.$eval('.book-card .btn-card:not([aria-disabled])', (b) => ({ bg: getComputedStyle(b).backgroundColor, tt: getComputedStyle(b).textTransform }));
+    check('cards: black UPPERCASE button', cardBtn.bg === BLACK && cardBtn.tt === 'uppercase', JSON.stringify(cardBtn));
+    check('cards: red discount tag', (await page.$eval('.book-card .cover-tag', (e) => getComputedStyle(e).backgroundColor).catch(() => null)) === RED);
+    check('cards: green "% OFF" in the price row', (await page.$eval('.book-card .price-off', (e) => getComputedStyle(e).color).catch(() => null)) === GREEN);
+    check('cards: framed with a 1px border', (await page.$eval('.book-card', (e) => getComputedStyle(e).borderTopWidth)) === '1px');
     check('header: Offers removed from navigation', (await page.$('header a[href="/offers"]')) === null);
-    check('footer: slim footer with Terms and Settings', (await page.$('.site-footer a[href="/terms"]')) && (await page.$('.site-footer a[href="/settings"]')) && (await page.$('.footer-grid')) === null);
-    check('header: count shows 0 with no subtotal', (await text(page, '.cart-count')) === '0' && (await page.$('.cart-subtotal')) === null);
+    check('header: logo centred between search and icons', await page.$eval('.brand-logo', (l) => Math.abs(l.getBoundingClientRect().left + l.getBoundingClientRect().width / 2 - window.innerWidth / 2) < 2));
+    check('header: no count badge while the cart is empty', (await page.$('.cart-count')) === null);
+    const footer = await page.$eval('.site-footer', (f) => f.innerText);
+    check('footer: contact details from the owner', footer.includes('Kitaabaurkona@gmail.com') && footer.includes('8690965448') && /udaipur/i.test(footer));
+    check('footer: policy links', (await page.$$eval('.footer-links a', (as) => as.map((a) => a.getAttribute('href')))).join() === '/about,/returns,/terms,/privacy,/shipping,/settings');
+    await scrollThrough(page);
     await page.screenshot({ path: path.join(SHOTS, 'home-light-1280.png'), fullPage: true });
 
-    // ---------- Add to cart, header count + subtotal ----------
-    const firstCard = await page.$('.shelf .book-card');
+    // ---------- Add to cart: feedback, header count ----------
+    const firstCard = await page.$('[aria-labelledby="deals-heading"] .book-card');
     const price = await firstCard.$eval('.price', (e) => e.textContent.trim());
-    await (await firstCard.$('.btn-quiet')).click();
-    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
-    check('add: header count becomes 1', (await text(page, '.cart-count')) === '1');
-    const subtotalShown = await page
-      .waitForFunction((p) => document.querySelector('.cart-subtotal')?.textContent.trim() === p, { timeout: 5000 }, price)
+    const button = await firstCard.$('.btn-card');
+    await button.click();
+    check('add: the cart panel slides in from the right', await waitSel(page, '.cart-panel[role="dialog"]', 3000));
+    const midway = await page.$eval('.cart-panel', (p) => getComputedStyle(p).transform);
+    check('add: the panel slides in (not already in place)', midway !== 'none' && midway !== 'matrix(1, 0, 0, 1, 0, 0)', midway);
+    await sleep(400);
+    check('add: no pop-up message', (await page.$('.toast')) === null);
+    const lineReady = await page
+      .waitForFunction(() => document.querySelectorAll('.cart-panel .line .line-title').length === 1, { timeout: 6000 })
       .then(() => true)
       .catch(() => false);
-    check('add: header shows the subtotal from fresh prices', subtotalShown, `${await text(page, '.cart-subtotal')} vs ${price}`);
-    check('add: header cart button names count and subtotal', /Cart, 1 item, subtotal/.test(await page.$eval('.cart-button', (b) => b.getAttribute('aria-label'))));
-    check('add: toast offers "View cart"', await waitSel(page, '.toast .toast-action', 3000));
-    await page.click('.toast .toast-action');
-    check('toast "View cart" opens the cart panel', await waitSel(page, '.cart-panel', 3000));
-    await sleep(350);
+    check('add: panel shows the book just added', lineReady, await page.$eval('.cart-panel', (p) => p.innerText.replace(/\s+/g, ' ').slice(0, 160)).catch(() => 'no panel'));
+    check('add: the page behind dims like the old store', (await page.$eval('.drawer-scrim', (e) => getComputedStyle(e).backgroundColor)) === 'rgba(0, 0, 0, 0.8)');
+    check('add: panel is 390px wide', (await page.$eval('.cart-panel', (p) => Math.round(p.getBoundingClientRect().width))) === 390);
+    check('add: header count becomes 1', (await text(page, '.cart-count')) === '1');
+    check('add: header cart button names the count', /Cart, 1 item/.test(await page.$eval('.cart-button', (b) => b.getAttribute('aria-label'))));
+    check('add: the card button keeps its label', /Add to cart/i.test(await button.evaluate((b) => b.textContent)));
     await page.keyboard.press('Escape');
-    await gone(page, '.cart-panel');
+    check('add: Escape closes the panel', await gone(page, '.cart-panel'));
+    check('add: focus returns to the button that added the book', await button.evaluate((b) => b === document.activeElement));
 
     // ---------- Cart panel ----------
     await page.click('.cart-button');
@@ -129,8 +239,8 @@ try {
     check('panel: focus moves inside', await page.evaluate(() => document.querySelector('.cart-panel').contains(document.activeElement)));
     check('panel: lists the book with its total', (await page.$$('.cart-panel .line')).length === 1 && (await text(page, '.cart-panel .line-total')) === price);
     check('panel: subtotal matches', (await text(page, '.cart-panel-sum dd')) === price);
-    check('panel: amber Checkout is the only amber button', (await page.$$eval('.cart-panel .btn', (els, a) => els.filter((e) => getComputedStyle(e).backgroundColor === a).map((e) => e.textContent.trim()), AMBER)).join().startsWith('Checkout'));
-    check('panel: Checkout button shows the total', /^Checkout\s*•\s*₹/.test(await page.$eval('.cart-panel .btn-primary', (b) => b.textContent.trim())));
+    check('panel: Checkout is a black primary button', (await page.$eval('.cart-panel .btn-primary', (b) => getComputedStyle(b).backgroundColor)) === BLACK);
+    check('panel: Checkout button shows the total', /^Checkout\s*•\s*₹/i.test(await page.$eval('.cart-panel .btn-primary', (b) => b.textContent.trim())));
     check('panel: Continue browsing link present', (await page.$('.cart-panel-links a[href="/books"]')) !== null);
     const inc = await page.$('.cart-panel .stepper button:last-child');
     if (inc) {
@@ -155,85 +265,134 @@ try {
     await sleep(300);
     await page.$$eval('.cart-panel .btn-link', (bs) => bs.find((b) => b.textContent.trim() === 'Remove')?.click());
     check('panel: removing the last book shows the empty state', await waitSel(page, '.cart-panel-empty', 3000));
-    const zero = await page
-      .waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '0', { timeout: 3000 })
-      .then(() => true)
-      .catch(() => false);
-    check('panel: header count back to 0', zero, await text(page, '.cart-count'));
+    check('panel: header badge goes away', await gone(page, '.cart-count'));
     await page.click('.cart-panel-empty a');
     check('panel: a link inside the panel closes it and navigates', (await gone(page, '.cart-panel')) && new URL(page.url()).pathname === '/books');
     check('visitor flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
-  // ---------- Slider, tiles, shelves, Books menu, header search, filters ----------
+  // ---------- Motion: hero, announcement, rows, circles, card photos; menus, search, filters ----------
   {
     const { page, ctx, errors } = await newPage();
     await goto(page, '/');
-    await waitSel(page, '.slider .slide-title');
-    const activeDot = () => page.$$eval('.slider-dot', (ds) => ds.findIndex((d) => d.getAttribute('aria-current') === 'true'));
-    await page.mouse.move(5, 5);
-    check('slider: starts on the first book', (await activeDot()) === 0);
-    await sleep(6600);
-    check('slider: advances by itself after 6 seconds', (await activeDot()) === 1, await activeDot());
-    await page.hover('.slider');
-    const held = await activeDot();
-    await sleep(6600);
-    check('slider: pauses while hovered', (await activeDot()) === held, await activeDot());
-    await page.click('.slider-arrow[aria-label="Next book"]');
-    const afterArrow = await activeDot();
-    check('slider: next arrow moves on', afterArrow === (held + 1) % 5, afterArrow);
-    await page.mouse.move(5, 5);
-    await sleep(6600);
-    check('slider: stops advancing once the visitor used it', (await activeDot()) === afterArrow, await activeDot());
-    await page.click('.slider-dot:nth-child(1)');
-    check('slider: dots jump to a book', (await activeDot()) === 0);
+    await waitSel(page, '.hero-deal-title');
+    await page.mouse.move(...NEUTRAL);
+    const hero = '.hero-carousel';
+    check('hero: starts on the banner', (await activeDot(page, hero)) === 0);
+    const offer0 = (await visibleSlides(page, '.announcement-bar'))[0];
+    await sleep(4600);
+    const offer1 = (await visibleSlides(page, '.announcement-bar'))[0];
+    check('announcement bar: slides to the next offer by itself', offer0 && offer1 && offer0 !== offer1, `${offer0} -> ${offer1}`);
+    await sleep(1200);
+    check('hero: slides on by itself after 5 seconds', (await activeDot(page, hero)) === 1, await activeDot(page, hero));
+    const moving = await page.$eval(`${hero} .carousel-track`, (t) => getComputedStyle(t).transitionDuration);
+    check('hero: slides sideways in 0.5s', moving === '0.5s', moving);
+    await page.hover(hero);
+    const held = await activeDot(page, hero);
+    await sleep(5600);
+    check('hero: pauses while hovered', (await activeDot(page, hero)) === held, await activeDot(page, hero));
+    await page.click(`${hero} .carousel-next`);
+    await sleep(700);
+    const afterArrow = await activeDot(page, hero);
+    check('hero: next arrow moves on', afterArrow === (held + 1) % 4, afterArrow);
+    await page.mouse.move(...NEUTRAL);
+    await sleep(5600);
+    check('hero: stops moving once the visitor used it', (await activeDot(page, hero)) === afterArrow, await activeDot(page, hero));
+    await page.click(`${hero} .carousel-dot:nth-child(1)`);
+    await sleep(700);
+    check('hero: dots jump to a slide', (await activeDot(page, hero)) === 0);
+    await page.click(`${hero} .carousel-prev`);
+    await sleep(900);
+    check('hero: going back from the first slide loops to the last', (await activeDot(page, hero)) === 3, await activeDot(page, hero));
+    check('hero: still one slide exposed after looping', (await page.$$(`${hero} .carousel-slide:not([aria-hidden="true"])`)).length === 1);
 
-    // Tiles: counts come from the database
-    await waitSel(page, '.tile');
+    // Rows and circles
+    const deals = '[aria-labelledby="deals-heading"]';
+    await page.$eval(deals, (s) => s.scrollIntoView({ block: 'center' }));
+    await sleep(600);
+    await page.hover(`${deals} .carousel-next`);
+    const rowStart = await activeDot(page, deals);
+    await page.click(`${deals} .carousel-next`);
+    await sleep(700);
+    check('deals row: arrow slides one book along', (await activeDot(page, deals)) === rowStart + 1, `${rowStart} -> ${await activeDot(page, deals)}`);
+    check('deals row: 4 books visible at 1280px', (await page.$$(`${deals} .carousel-slide:not([aria-hidden="true"])`)).length === 4);
+
+    // Card photo swap on hover (in the still ALL PRODUCTS grid, on a book with 2+ photos)
+    await page.$eval('[aria-labelledby="all-heading"]', (s) => s.scrollIntoView({ block: 'start' }));
+    await sleep(800);
+    const gridCards = await page.$$('[aria-labelledby="all-heading"] .book-card');
+    let card = null;
+    for (const c of gridCards) if (await c.$('.card-photo-arrow')) card = card ?? c;
+    check('cards: the grid has a book with more than one photo to test', card !== null);
+    if (card) {
+      await card.evaluate((c) => c.scrollIntoView({ block: 'center' }));
+      await sleep(300);
+      const media = await card.$('.card-media');
+      await media.hover();
+      const swapped = await card
+        .waitForSelector('.card-photo-extra[data-shown]', { timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      check('cards: hovering a card fades in its next photo', swapped);
+      check('cards: the lift and shadow show on hover', (await card.evaluate((c) => getComputedStyle(c).boxShadow)) !== 'none');
+      await page.mouse.move(...NEUTRAL);
+      await sleep(700);
+      check('cards: leaving the card goes back to the cover', (await card.$('.card-photo-extra[data-shown]')) === null);
+    }
+
+    const circlesNext = await page.$('.circles-section .carousel-next');
+    if (circlesNext) {
+      await page.$eval('.circles-section', (s) => s.scrollIntoView({ block: 'center' }));
+      await sleep(500);
+      await circlesNext.click();
+      await sleep(700);
+      check('circles: arrow slides the categories', (await activeDot(page, '.circles-section')) === 1);
+    }
+
+    // Nav menus
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(300);
+    const fiction = (await db.query(`select distinct category from public.books where is_visible and category in ('Romance','Thriller & Mystery','Fantasy','Literary Fiction','Comics & Manga')`)).rows.length;
+    const firstMenuButton = await page.$$('.nav-menu-button');
+    await firstMenuButton[0].hover();
+    check('nav menu: FICTION opens on hover', await waitSel(page, '.nav-menu-panel', 2000));
+    check('nav menu: lists the fiction categories', (await page.$$('.nav-menu-panel a[href*="category="]')).length === fiction, fiction);
+    await sleep(300);
+    await page.screenshot({ path: path.join(SHOTS, 'nav-menu-light-1280.png'), clip: { x: 0, y: 0, width: 1280, height: 480 } });
+    await page.keyboard.press('Escape');
+    const menuClosed = await gone(page, '.nav-menu-panel');
+    const focusBack = await page
+      .waitForFunction(() => document.activeElement?.classList.contains('nav-menu-button'), { timeout: 1500 })
+      .then(() => true)
+      .catch(() => false);
+    const menuState = await page.evaluate(() => ({
+      panels: [...document.querySelectorAll('.nav-menu-panel')].map((p) => `${p.closest('.nav-menu')?.querySelector('.nav-menu-button')?.textContent.trim()}:${getComputedStyle(p).opacity}`),
+      expanded: [...document.querySelectorAll('.nav-menu-button[aria-expanded="true"]')].map((b) => b.textContent.trim()),
+      active: document.activeElement?.textContent.trim().slice(0, 30),
+    }));
+    check('nav menu: Escape closes it and focus returns to the button', menuClosed && focusBack, `closed=${menuClosed} ${JSON.stringify(menuState)}`);
+    await page.keyboard.press('ArrowDown');
+    await waitSel(page, '.nav-menu-panel', 2000);
+    await sleep(100);
+    check('nav menu: Arrow down opens it and focuses the first link', await page.evaluate(() => document.activeElement?.closest('.nav-menu-panel') !== null));
+    const firstCategory = await page.$eval('.nav-menu-panel a[href*="category="]', (a) => a.textContent.trim());
+    await page.$eval('.nav-menu-panel a[href*="category="]', (a) => a.click());
+    await page.waitForFunction(() => location.pathname === '/books', { timeout: 4000 }).catch(() => {});
+    check('nav menu: a category opens the filtered Books page and closes the menu', (await gone(page, '.nav-menu-panel')) && new URL(page.url()).searchParams.get('category') === firstCategory);
     const dbCounts = Object.fromEntries(
       (await db.query(`select category, count(*)::int as n from public.books where is_visible group by category`)).rows.map((r) => [r.category, r.n]),
     );
-    const tiles = await page.$$eval('.tile', (ts) => ts.map((t) => ({ label: t.querySelector('.tile-label').textContent.trim(), meta: t.querySelector('.tile-meta').textContent.trim(), href: t.getAttribute('href') })));
-    const categoryTiles = tiles.filter((t) => t.href.includes('category='));
-    check('tiles: one tile per category in the database', categoryTiles.length === Object.keys(dbCounts).filter((k) => k !== 'null').length, categoryTiles.length);
-    check('tiles: category counts match the database', categoryTiles.every((t) => t.meta.startsWith(`${dbCounts[t.label]} book`)), JSON.stringify(categoryTiles.slice(0, 3)));
-    const under = (await one(`select count(*)::int as n from public.books where is_visible and stock_quantity > 0 and price <= 299`)).n;
-    const regional = (await one(`select count(*)::int as n from public.books where is_visible and (title ilike '%tamil%' or title ilike '%bengali%' or title ilike '%malayalam%')`)).n;
-    check('tiles: "Up to ₹299" count matches the database', tiles.some((t) => t.label === 'Up to ₹299' && t.meta.startsWith(`${under} book`)), under);
-    check('tiles: "Regional editions" count matches the database', tiles.some((t) => t.label === 'Regional editions' && t.meta.startsWith(`${regional} book`)), regional);
-    const tintBg = await page.$eval('.tile', (t) => getComputedStyle(t).backgroundColor);
-    check('tiles: tinted, not amber', tintBg !== AMBER && tintBg !== 'rgba(0, 0, 0, 0)', tintBg);
-
-    // Shelf arrows (desktop, mouse)
-    const before = await page.$eval('[aria-labelledby="deals-heading"] .shelf', (l) => l.scrollLeft);
-    await page.click('[aria-labelledby="deals-heading"] .shelf-arrow[aria-label$="forward"]');
-    await sleep(700);
-    const after = await page.$eval('[aria-labelledby="deals-heading"] .shelf', (l) => l.scrollLeft);
-    check('shelf: forward arrow scrolls the row', after > before, `${before} -> ${after}`);
-    check('shelf: back arrow appears after scrolling', await page.$eval('[aria-labelledby="deals-heading"] .shelf-arrow[aria-label$="back"]', (b) => !b.hidden));
-    await page.screenshot({ path: path.join(SHOTS, 'home-tiles-light-1280.png'), fullPage: true });
-
-    // Books menu
-    await page.hover('.books-menu-button');
-    check('books menu: opens on hover', await waitSel(page, '.books-menu-panel', 2000));
-    check('books menu: lists fiction and non-fiction categories', (await page.$$('.books-menu-panel a[href*="category="]')).length === categoryTiles.length);
-    await sleep(300); // let the 150ms fade finish before the screenshot
-    await page.screenshot({ path: path.join(SHOTS, 'books-menu-light-1280.png') });
-    await page.keyboard.press('Escape');
-    check('books menu: Escape closes it and focus returns to the button', (await gone(page, '.books-menu-panel')) && (await page.evaluate(() => document.activeElement?.classList.contains('books-menu-button'))));
-    await page.keyboard.press('ArrowDown');
-    await waitSel(page, '.books-menu-panel', 2000);
-    await sleep(100);
-    check('books menu: Arrow down opens it and focuses the first link', await page.evaluate(() => document.activeElement?.closest('.books-menu-panel') !== null));
-    const firstCategory = await page.$eval('.books-menu-panel a[href*="category="]', (a) => a.textContent.trim());
-    await page.$eval('.books-menu-panel a[href*="category="]', (a) => a.click());
-    await page.waitForFunction(() => location.pathname === '/books', { timeout: 4000 }).catch(() => {});
-    check('books menu: a category opens the filtered Books page and closes the menu', (await gone(page, '.books-menu-panel')) && new URL(page.url()).searchParams.get('category') === firstCategory);
     await waitSel(page, '.book-grid .book-card');
     check('books page: category filter count matches the database', new RegExp(`^${dbCounts[firstCategory]} books?`).test(await text(page, '.page-meta')), await text(page, '.page-meta'));
+    check('nav: the open category is marked in the nav row', (await page.$('.nav-menu-button[data-current]')) !== null);
+    await goto(page, '/books?category=Self-Help');
+    await waitSel(page, '.book-grid .book-card');
+    check('nav: SELF-HELP link marked current on its page', (await page.$eval('.header-nav a[href="/books?category=Self-Help"]', (a) => a.getAttribute('aria-current'))) === 'page');
 
     // Filters reached from URLs
+    const under = (await one(`select count(*)::int as n from public.books where is_visible and stock_quantity > 0 and price <= 299`)).n;
+    const regional = (await one(`select count(*)::int as n from public.books where is_visible and (title ilike '%tamil%' or title ilike '%bengali%' or title ilike '%malayalam%')`)).n;
     await goto(page, '/books?max=299&stock=1');
     await waitSel(page, '.book-grid .book-card');
     check('books page: "Up to ₹299" filter count matches the database', new RegExp(`^${under} books`).test(await text(page, '.page-meta')), await text(page, '.page-meta'));
@@ -251,20 +410,53 @@ try {
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => location.search.includes('q=Tintin'), { timeout: 4000 }).catch(() => {});
     check('header search: Enter opens Books with the search', new URL(page.url()).searchParams.get('q') === 'Tintin');
-    check('slider/menu/filters: no console errors', errors.length === 0, errors.join(' | '));
+
+    // Policy pages from the footer
+    await page.$eval('.footer-links a[href="/returns"]', (a) => a.click());
+    await page.waitForFunction(() => location.pathname === '/returns', { timeout: 4000 }).catch(() => {});
+    check('returns page: the old store text, word for word', await page.waitForFunction(() => /the standard return window is 3 days/.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
+    for (const [route, phrase] of [['/about', 'Where Every Page Turns Into Possibility'], ['/shipping', 'We ship all over India'], ['/privacy', 'Personal Information That We collect']]) {
+      await goto(page, route);
+      check(`policy page ${route} renders`, await page.waitForFunction((p) => document.body.innerText.includes(p), { timeout: 5000 }, phrase).then(() => true).catch(() => false));
+    }
+    await goto(page, '/terms');
+    await waitSel(page, '.prose h2');
+    const terms = await page.$eval('.prose', (p) => p.innerText);
+    check('terms: contact details filled in, other unknowns still marked', terms.includes('Kitaabaurkona@gmail.com') && terms.includes('udaipur') && (await page.$$('.prose .placeholder')).length > 0);
+    await page.$eval('.footer-top', (b) => b.scrollIntoView());
+    await sleep(200);
+    await page.click('.footer-top');
+    await page.waitForFunction(() => window.scrollY === 0, { timeout: 3000 }).catch(() => {});
+    check('footer: Go to top scrolls back up', (await page.evaluate(() => window.scrollY)) === 0);
+    check('motion/menus/filters/pages: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
-  // ---------- Phone: side menu categories ----------
+  // ---------- Phone: side menu, swipe, marquee ----------
   {
-    const { page, ctx } = await newPage({ width: 375, height: 812, touch: true });
+    const { page, ctx, errors } = await newPage({ width: 375, height: 812, touch: true });
     await goto(page, '/');
-    await waitSel(page, '.menu-button');
+    await waitSel(page, '.hero-deal-title');
+    check('phone: carousel arrows hidden (swipe and dots instead)', await page.$eval('.hero-carousel .carousel-next', (b) => getComputedStyle(b).display === 'none'));
+    const box = await page.$eval('.hero-carousel .carousel-viewport', (v) => {
+      const r = v.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+    await page.touchscreen.touchStart(box.x + 100, box.y);
+    await page.touchscreen.touchMove(box.x - 40, box.y);
+    await page.touchscreen.touchMove(box.x - 120, box.y);
+    await page.touchscreen.touchEnd();
+    await sleep(800);
+    check('phone: swiping the hero moves to the next slide', (await activeDot(page, '.hero-carousel')) === 1, await activeDot(page, '.hero-carousel'));
+    check('phone: trust strip scrolls as a marquee', (await page.$eval('.trust-marquee', (m) => getComputedStyle(m).animationName)) === 'marquee');
+    check('phone: header shows menu, search, logo and bag', (await page.$('.menu-button')) && (await page.$eval('.header-search-icon', (e) => getComputedStyle(e).display !== 'none')) && (await page.$('.brand-logo')));
     await page.click('.menu-button');
     await waitSel(page, '.drawer');
     check('phone menu: Categories section lists the genres', await waitSel(page, '.drawer nav[aria-label="Categories"] a[href*="category="]', 4000));
+    check('phone menu: Help section links the policy pages', (await page.$$('.drawer nav[aria-label="Help"] a')).length === 5);
     await sleep(400);
     await page.screenshot({ path: path.join(SHOTS, 'drawer-categories-light-375.png') });
+    check('phone: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
@@ -275,12 +467,12 @@ try {
       `select id, title from public.books where is_visible and stock_quantity > 1 and coalesce(array_length(image_urls, 1), 0) > 1 order by discount_percent desc, id limit 1`,
     );
     await goto(page, `/books/${book.id}`);
-    check('book page: title in serif renders', await waitSel(page, '.detail-title'));
+    check('book page: title renders', await waitSel(page, '.detail-title'));
     check('book page: title matches the database', (await text(page, '.detail-title')) === book.title);
     const body = await page.$eval('main', (m) => m.innerText);
     check('book page: no SKU, package size or shipping weight', !/\bSKU\b|Package size|Shipping weight/i.test(body));
-    check('book page: exactly one amber button (Add to cart)', (await amberButtons(page)) === 1, await amberButtons(page));
-    check('book page: Buy now and Save are quiet outline buttons', /Buy now/.test(body) && (await page.$('.buy-secondary .btn-outline[aria-pressed]')) !== null);
+    check('book page: Add to cart is the black primary button', (await page.$eval('.detail-buy .btn-primary', (b) => getComputedStyle(b).backgroundColor)) === BLACK);
+    check('book page: Buy now and Save are quiet outline buttons', /Buy now/i.test(body) && (await page.$('.buy-secondary .btn-outline[aria-pressed]')) !== null);
     const thumbs = await page.$$('.gallery-thumbs .thumb');
     if (thumbs.length > 1) {
       await thumbs[1].click();
@@ -290,6 +482,10 @@ try {
     await page.screenshot({ path: path.join(SHOTS, 'book-light-1280.png'), fullPage: true });
     await page.$$eval('.detail-buy .btn-primary', (bs) => bs[0].click());
     await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
+    check('book page: Add to cart opens the cart panel', await waitSel(page, '.cart-panel', 3000));
+    await sleep(350);
+    await page.keyboard.press('Escape');
+    await gone(page, '.cart-panel');
     await page.$$eval('.buy-secondary button', (bs) => bs.find((b) => b.textContent.trim() === 'Buy now')?.click());
     await page.waitForFunction(() => location.pathname === '/cart', { timeout: 4000 }).catch(() => {});
     check('book page: Buy now goes to the cart page without adding twice', new URL(page.url()).pathname === '/cart' && (await text(page, '.cart-count')) === '1');
@@ -310,13 +506,11 @@ try {
     await page.click('button[type=submit]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
     check('signed in: lands on the store', new URL(page.url()).pathname === '/');
-    await waitSel(page, '.shelf .book-card');
-    await (await page.$('.shelf .book-card .btn-quiet')).click();
-    await sleep(300);
-    await page.click('.cart-button');
+    await waitSel(page, '[aria-labelledby="deals-heading"] .book-card');
+    await (await page.$('[aria-labelledby="deals-heading"] .book-card .btn-card')).click();
     await waitSel(page, '.cart-panel');
-    await sleep(300);
-    await page.$$eval('.cart-panel a', (as) => as.find((a) => a.textContent.trim().startsWith('Checkout'))?.click());
+    await sleep(400);
+    await page.$$eval('.cart-panel a', (as) => as.find((a) => /^checkout/i.test(a.textContent.trim()))?.click());
     await page.waitForFunction(() => location.pathname === '/checkout', { timeout: 5000 }).catch(() => {});
     check('panel Checkout opens the checkout page', new URL(page.url()).pathname === '/checkout');
     await waitSel(page, '#ship-name');
@@ -324,16 +518,40 @@ try {
     check('checkout: delivery details prefilled from the profile', (await page.$eval('#ship-name', (e) => e.value)) === 'Asha Rao');
     await page.type('#ship-city', 'Udaipur');
     await page.select('#ship-state', 'Rajasthan');
+    await page.type('#ship-pincode', '799999');
+    check('checkout: a PIN code the courier cannot serve is flagged', await waitSel(page, '.pin-check[data-state="no"]', 6000));
+    check('checkout: Place order is blocked for that PIN', (await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Place order/i.test(b.textContent))?.getAttribute('aria-disabled'))) === 'true');
+    await page.$eval('#ship-pincode', (e) => e.select());
     await page.type('#ship-pincode', '313001');
-    check('checkout: Place order is the only amber button', (await amberButtons(page)) === 1, await amberButtons(page));
+    check('checkout: the courier confirms delivery and cash on delivery', await waitSel(page, '.pin-check[data-state="ok"]', 6000));
+    check('checkout: payment is cash on delivery with free shipping', /Cash on delivery/i.test(await text(page, '.payment-option')) && /Shipping is free/i.test(await text(page, '.payment-option')));
+    check('checkout: Place order is the black primary button', (await page.$$eval('main .btn-primary', (bs) => bs.filter((b) => /Place order/i.test(b.textContent)).map((b) => getComputedStyle(b).backgroundColor))).join() === BLACK);
     await page.screenshot({ path: path.join(SHOTS, 'checkout-light-1280.png'), fullPage: true });
     const before = (await one('select count(*)::int as n from public.orders')).n;
     await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Place order/.test(b.textContent))?.click());
     await page.waitForFunction(() => /^\/orders\//.test(location.pathname), { timeout: 8000 }).catch(() => {});
     check('checkout: order saved once and order page opens', /^\/orders\//.test(new URL(page.url()).pathname) && (await one('select count(*)::int as n from public.orders')).n === before + 1);
-    check('order page: "awaiting payment" notice', await page.waitForFunction(() => /awaiting payment/i.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
-    check('order: cart emptied after ordering', await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '0', { timeout: 4000 }).then(() => true).catch(() => false));
+    check('order page: "pay in cash when it arrives" notice', await page.waitForFunction(() => /Pay in cash when it arrives/i.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
+    const placedId = new URL(page.url()).pathname.split('/').pop();
+    check('order: saved as a confirmed cash on delivery order', (await one(`select status, payment_method from public.orders where id = $1`, [placedId]))?.status === 'confirmed');
+    check('order page: shows the order as Confirmed', (await text(page, '.page-head .status')) === 'Confirmed');
+    check('order page: the parcel is being prepared', await page.waitForFunction(() => /Preparing to ship/i.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
+    check('order page: the customer can still cancel before pickup', /Cancel order/i.test(await page.$eval('main', (m) => m.innerText)));
+    check('order: cart emptied after ordering', await gone(page, '.cart-count', 4000));
     await page.screenshot({ path: path.join(SHOTS, 'order-light-1280.png'), fullPage: true });
+
+    const saveBook = await one(`select id from public.books where is_visible order by discount_percent desc, id limit 1`);
+    await goto(page, `/books/${saveBook.id}`);
+    await waitSel(page, '.buy-secondary .btn-outline[aria-pressed]');
+    await page.click('.buy-secondary .btn-outline[aria-pressed]');
+    const savedNow = await page
+      .waitForFunction(() => document.querySelector('.buy-secondary .btn-outline[aria-pressed]')?.getAttribute('aria-pressed') === 'true', { timeout: 5000 })
+      .then(() => true)
+      .catch(() => false);
+    check('wishlist: Save fills the bookmark', savedNow);
+    await sleep(400);
+    check('wishlist: label changes to Saved, no pop-up message', /saved/i.test(await text(page, '.buy-secondary .btn-outline[aria-pressed]')) && (await page.$('.toast')) === null);
+    check('wishlist: saved in the database', Boolean(await one(`select 1 as ok from public.wishlist_items where book_id = $1`, [saveBook.id])));
 
     for (const [route, sel, label] of [
       ['/orders', '.order-card', 'orders list shows the order'],
@@ -362,6 +580,60 @@ try {
     await ctx.close();
   }
 
+  // ---------- Admin: shipping settings, booking a parcel, manifest; customer tracking ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    await goto(page, '/sign-in');
+    await waitSel(page, '#email');
+    await page.type('#email', 'admin@example.com');
+    await page.type('#password', 'admin-pass-1');
+    await page.click('button[type=submit]');
+    await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
+    await goto(page, '/admin/shipping');
+    check('admin shipping: settings load', await waitSel(page, '#ship-warehouse_name'));
+    check('admin shipping: warns that nothing is booked without a warehouse name', /Nothing is booked until the warehouse name/i.test(await page.$eval('main', (m) => m.innerText)));
+    await page.type('#ship-warehouse_name', 'Kitaabaurkona Udaipur');
+    await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Save settings/.test(b.textContent))?.click());
+    const savedWarehouse = await page
+      .waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Shipping settings saved'), { timeout: 5000 })
+      .then(() => true)
+      .catch(() => false);
+    check('admin shipping: settings save', savedWarehouse && (await one(`select warehouse_name from public.shipping_settings`)).warehouse_name === 'Kitaabaurkona Udaipur');
+    check('admin shipping: failed deliveries list loads from the courier', await page.waitForFunction(() => /No failed delivery attempts/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-light-1280.png'), fullPage: true });
+
+    await goto(page, '/admin/orders?status=confirmed');
+    check('admin orders: the COD order shows its queued parcel', await page.waitForFunction(() => /Parcel: Queued/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Change courier/.test(b.textContent))?.click());
+    check('admin orders: courier prices load for the parcel', await waitSel(page, '.parcel-admin select', 6000));
+    await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Book now/.test(b.textContent))?.click());
+    check('admin orders: Book now books it with an AWB', await page.waitForFunction(() => /Pickup scheduled/i.test(document.body.innerText) && /AWB \d+/.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin orders: the label link points to the courier file host', /^https:\/\/xb-files\.s3\.amazonaws\.com\//.test(await page.$eval('.parcel-admin a[href*="labels"]', (a) => a.href).catch(() => '')));
+    check('admin orders: booked parcels can be picked for a manifest', await waitSel(page, '.pick input[type=checkbox]', 3000));
+    await page.click('.pick input[type=checkbox]');
+    check('admin orders: manifest button appears', /Pickup manifest for 1 order/.test(await page.$eval('main', (m) => m.innerText)));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-orders-parcel-light-1280.png'), fullPage: true });
+    check('admin shipping flow: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+
+    const reader = await newPage();
+    await goto(reader.page, '/sign-in');
+    await waitSel(reader.page, '#email');
+    await reader.page.type('#email', 'reader@example.com');
+    await reader.page.type('#password', 'reader-pass-1');
+    await reader.page.click('button[type=submit]');
+    await reader.page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
+    const placed = await one(`select id from public.orders where payment_method = 'cod' order by created_at desc limit 1`);
+    await goto(reader.page, `/orders/${placed.id}`);
+    check('customer: tracking shows the courier and AWB', await reader.page.waitForFunction(() => /Tracking number/i.test(document.body.innerText) && /On the way/i.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('customer: picked up, so the order is Shipped', (await one(`select status from public.orders where id = $1`, [placed.id])).status === 'shipped');
+    check('customer: the tracking history is listed', (await reader.page.$$('.parcel-history li')).length >= 1);
+    check('customer: no label or courier cost is shown', !/label|courier cost|₹90/i.test(await reader.page.$eval('main', (m) => m.innerText)));
+    await reader.page.screenshot({ path: path.join(SHOTS, 'order-tracking-light-1280.png'), fullPage: true });
+    check('customer tracking: no console errors', reader.errors.length === 0, reader.errors.join(' | '));
+    await reader.ctx.close();
+  }
+
   // ---------- Reduced motion ----------
   {
     const { page, ctx } = await newPage({ prefs: { theme: 'system', motion: 'reduce' } });
@@ -374,16 +646,22 @@ try {
     check('reduce motion: cart panel is in place immediately', transform === 'none' || transform === 'matrix(1, 0, 0, 1, 0, 0)', transform);
     await page.keyboard.press('Escape');
     await gone(page, '.cart-panel');
-    await page.mouse.move(5, 5);
-    await waitSel(page, '.slider .slide-title');
-    await sleep(6800);
-    const dot = await page.$$eval('.slider-dot', (ds) => ds.findIndex((d) => d.getAttribute('aria-current') === 'true'));
-    check('reduce motion: the slider does not advance by itself', dot === 0, dot);
+    await page.mouse.move(...NEUTRAL);
+    await waitSel(page, '.hero-deal-title');
+    check('reduce motion: sections are shown without waiting to scroll', (await page.$eval('[aria-labelledby="deals-heading"]', (s) => getComputedStyle(s).opacity).catch(() => null)) === '1');
+    check('reduce motion: the trust strip stands still', (await page.$eval('.trust-marquee', (m) => getComputedStyle(m).animationName)) === 'none');
+    const offer = (await visibleSlides(page, '.announcement-bar'))[0];
+    await sleep(5800);
+    check('reduce motion: the hero does not move by itself', (await activeDot(page, '.hero-carousel')) === 0, await activeDot(page, '.hero-carousel'));
+    check('reduce motion: the announcement bar does not move by itself', (await visibleSlides(page, '.announcement-bar'))[0] === offer);
+    await page.click('.hero-carousel .carousel-next');
+    await sleep(50);
+    check('reduce motion: arrows change slides instantly', (await activeDot(page, '.hero-carousel')) === 1 && (await page.$eval('.hero-carousel .carousel-track', (t) => t.style.transition)) === 'none');
     await ctx.close();
   }
 
   // ---------- Themes, widths, overflow ----------
-  const pages = ['/', '/books', '/books?max=299&stock=1', '/books?collection=regional', '/cart', '/terms', '/nowhere'];
+  const pages = ['/', '/books', '/books?max=299&stock=1', '/books?collection=regional', '/cart', '/terms', '/about', '/returns', '/shipping', '/privacy', '/nowhere'];
   for (const scheme of ['light', 'dark']) {
     for (const [w, h] of [[320, 640], [375, 812], [768, 1024], [1280, 900]]) {
       const { page, ctx, errors } = await newPage({ width: w, height: h, scheme, touch: w < 768 });
@@ -397,12 +675,10 @@ try {
       check(`${scheme} ${w}px: no horizontal overflow on ${pages.length} pages`, bad.length === 0, bad.join(' '));
       if (w === 375 || w === 1280) {
         await goto(page, '/');
-        await waitSel(page, '.shelf .book-card');
-        await sleep(600);
+        await waitSel(page, '.product-row .book-card');
+        await scrollThrough(page);
         await page.screenshot({ path: path.join(SHOTS, `home-${scheme}-${w}.png`), fullPage: true });
-        await (await page.$('.shelf .book-card .btn-quiet')).click();
-        await sleep(300);
-        await page.click('.cart-button');
+        await (await page.$('.product-row .book-card .btn-card')).click();
         await waitSel(page, '.cart-panel');
         await sleep(400);
         await page.screenshot({ path: path.join(SHOTS, `panel-${scheme}-${w}.png`) });

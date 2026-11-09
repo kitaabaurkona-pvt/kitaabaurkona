@@ -1,30 +1,43 @@
 import { useState } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'motion/react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
 import { useCart } from '../../hooks/useCart';
 import { useCartLines } from '../../hooks/useCartLines';
+import { useAsync } from '../../hooks/useAsync';
+import { listCategories } from '../../services/bookService';
+import {
+  COLLECTIONS,
+  FICTION,
+  NON_FICTION,
+  UNDER_PRICE,
+  categoryHref,
+  dealsHref,
+  regionalHref,
+  underPriceHref,
+} from '../../utils/categories';
 import { formatCount, formatPrice } from '../../utils/format';
-import { BagIcon, SearchIcon, UserIcon } from '../icons';
+import { BagIcon, BookmarkIcon, SearchIcon, UserIcon } from '../icons';
 import MobileMenu from './MobileMenu';
-import BooksMenu from './BooksMenu';
+import NavMenu from './NavMenu';
 
-const fade = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 },
-  transition: { duration: 0.15 },
-};
+const toLinks = (names) => names.map((name) => ({ to: categoryHref(name), label: name }));
 
+// Store header like the previous store: search on the left, the logo in the middle,
+// account, wishlist and bag on the right, and an UPPERCASE nav row underneath
+// (tablets and up). Phones get the menu button and a search icon instead.
 function SiteHeader() {
   const { isAuthenticated, role } = useAuth();
   const { count } = useCart();
-  const { totals, data, loading, cartOpen, openCart } = useCartLines();
-  // The count is instant (it lives in this browser); the subtotal waits for fresh prices
-  // so it never shows a figure worked out from an older cart.
-  const showSubtotal = count > 0 && Boolean(data) && !loading;
+  const { cartOpen, openCart } = useCartLines();
   const navigate = useNavigate();
+  const { pathname, search } = useLocation();
   const [term, setTerm] = useState('');
+  const categories = useAsync(() => listCategories(), []);
+
+  // Before the category list arrives, offer the known ones; afterwards only those with books.
+  const present = (names) => (categories.data ? names.filter((name) => categories.data.includes(name)) : names);
+  const activeCategory = pathname === '/books' ? new URLSearchParams(search).get('category') : null;
 
   function handleSearch(event) {
     event.preventDefault();
@@ -33,37 +46,36 @@ function SiteHeader() {
     setTerm('');
   }
 
-  const label = `Cart, ${count} ${count === 1 ? 'item' : 'items'}${showSubtotal ? `, subtotal ${formatPrice(totals.subtotal)}` : ''}`;
+  const categoryLink = (name, text) => (
+    <Link to={categoryHref(name)} className="nav-link" aria-current={activeCategory === name ? 'page' : undefined}>
+      {text}
+    </Link>
+  );
+
+  const more = [
+    { to: dealsHref, label: 'Biggest discounts' },
+    { to: underPriceHref, label: `Up to ${formatPrice(UNDER_PRICE)}` },
+    { to: regionalHref, label: COLLECTIONS.regional.label },
+    ...toLinks(present(['Biography & Memoir', 'Mythology & History'])),
+    { to: '/books', label: 'All books' },
+    { to: '/orders', label: 'Orders' },
+    ...(role === 'admin' ? [{ to: '/admin', label: 'Admin' }] : []),
+  ];
 
   return (
     <header className="site-header">
-      <div className="container site-header-row">
-        <MobileMenu />
-        <Link to="/" className="brand">
-          <img src="/logo-64.png" alt="" width="28" height="28" />
-          <span>Kitaabaurkona</span>
-        </Link>
-
-        <nav className="desktop-nav" aria-label="Main">
-          <NavLink to="/" end>
-            Store
-          </NavLink>
-          <BooksMenu />
-          <NavLink to="/wishlist">Wishlist</NavLink>
-          <NavLink to="/orders">Orders</NavLink>
-          {role === 'admin' && <NavLink to="/admin">Admin</NavLink>}
-        </nav>
-
-        <div className="header-actions">
+      <div className="container header-top">
+        <div className="header-left">
+          <MobileMenu />
           <form className="header-search" role="search" onSubmit={handleSearch}>
             <label htmlFor="header-search" className="visually-hidden">
               Search books by title
             </label>
-            <SearchIcon size={18} />
+            <SearchIcon size={20} />
             <input
               id="header-search"
               type="search"
-              placeholder="Search books"
+              placeholder="Search"
               maxLength={100}
               value={term}
               onChange={(event) => setTerm(event.target.value)}
@@ -72,43 +84,65 @@ function SiteHeader() {
           <Link to="/books" state={{ focusSearch: true }} className="icon-button header-search-icon" aria-label="Search books">
             <SearchIcon />
           </Link>
-          {isAuthenticated ? (
-            <Link to="/account" className="icon-button header-account" aria-label="Account">
-              <UserIcon />
-            </Link>
-          ) : (
-            <Link to="/sign-in" className="header-signin">
-              Sign in
-            </Link>
-          )}
+        </div>
+
+        <Link to="/" className="brand-logo" aria-label="Kitaabaurkona home">
+          <img src="/logo-192.png" alt="" width="56" height="56" />
+        </Link>
+
+        <div className="header-right">
+          <Link
+            to={isAuthenticated ? '/account' : '/sign-in'}
+            className="icon-button header-account"
+            aria-label={isAuthenticated ? 'Account' : 'Sign in'}
+          >
+            <UserIcon />
+          </Link>
+          <Link to="/wishlist" className="icon-button header-wishlist" aria-label="Wishlist">
+            <BookmarkIcon />
+          </Link>
           <button
             type="button"
-            className="cart-button"
-            aria-label={label}
+            className="icon-button cart-button"
+            aria-label={`Cart, ${count} ${count === 1 ? 'item' : 'items'}`}
             aria-haspopup="dialog"
             aria-expanded={cartOpen}
             onClick={openCart}
           >
-            <BagIcon size={20} />
-            <span className="cart-count" aria-hidden="true" data-empty={count === 0 || undefined}>
-              <AnimatePresence mode="popLayout" initial={false}>
-                <motion.span key={count} {...fade}>
-                  {count > 99 ? '99+' : formatCount(count)}
-                </motion.span>
-              </AnimatePresence>
-            </span>
-            {showSubtotal && (
-              <span className="cart-subtotal" aria-hidden="true">
-                <AnimatePresence mode="popLayout" initial={false}>
-                  <motion.span key={totals.subtotal} {...fade}>
-                    {formatPrice(totals.subtotal)}
-                  </motion.span>
-                </AnimatePresence>
-              </span>
+            <BagIcon />
+            {count > 0 && (
+              <motion.span
+                key={`count-${count}`}
+                className="cart-count"
+                aria-hidden="true"
+                initial={{ scale: 0.6 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 18 }}
+              >
+                {count > 99 ? '99+' : formatCount(count)}
+              </motion.span>
             )}
           </button>
         </div>
       </div>
+
+      <nav className="header-nav" aria-label="Main">
+        <div className="container header-nav-row">
+          <NavLink to="/" end className="nav-link">
+            Home
+          </NavLink>
+          <NavMenu label="Fiction" links={toLinks(present(FICTION))} current={FICTION.includes(activeCategory)} />
+          <NavMenu
+            label="Non-fiction"
+            links={toLinks(present(NON_FICTION))}
+            current={NON_FICTION.includes(activeCategory)}
+          />
+          {categoryLink('Self-Help', 'Self-Help')}
+          {categoryLink('Money & Business', 'Money & Business')}
+          {categoryLink('Box Sets & Combos', 'Box Sets')}
+          <NavMenu label="More" links={more} />
+        </div>
+      </nav>
     </header>
   );
 }

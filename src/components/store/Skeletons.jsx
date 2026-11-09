@@ -14,10 +14,11 @@ export function BookCardSkeleton() {
   return (
     <div className="skeleton-card" aria-hidden="true">
       <span className="skeleton skeleton-cover" />
-      <span className="skeleton skeleton-text" style={{ width: '90%', marginTop: 12 }} />
-      <span className="skeleton skeleton-text" style={{ width: '60%' }} />
-      <span className="skeleton skeleton-text" style={{ width: '45%', height: 18, marginTop: 14 }} />
-      <span className="skeleton" style={{ height: 36, width: 72, marginTop: 12 }} />
+      <div className="skeleton-card-body">
+        <span className="skeleton skeleton-text" style={{ width: '90%', marginTop: 0 }} />
+        <span className="skeleton skeleton-text" style={{ width: '60%', height: 18, marginTop: 12 }} />
+        <span className="skeleton" style={{ height: 40, marginTop: 14 }} />
+      </div>
     </div>
   );
 }
@@ -27,21 +28,6 @@ export function BookGridSkeleton({ count = 8, label = 'Loading books…' }) {
     <>
       <LoadingLabel label={label} />
       <ul className="book-grid" aria-hidden="true">
-        {Array.from({ length: count }, (_, i) => (
-          <li key={i}>
-            <BookCardSkeleton />
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
-
-export function ShelfSkeleton({ count = 5, label = 'Loading books…' }) {
-  return (
-    <>
-      <LoadingLabel label={label} />
-      <ul className="shelf" aria-hidden="true">
         {Array.from({ length: count }, (_, i) => (
           <li key={i}>
             <BookCardSkeleton />
@@ -111,39 +97,32 @@ export function DetailSkeleton() {
   );
 }
 
-export function SliderSkeleton() {
+export function CarouselSkeleton({ count = 4, label = 'Loading books…' }) {
   return (
     <>
-      <LoadingLabel label="Loading books…" />
-      <div className="slider" aria-hidden="true">
-        <div className="slides">
-          <div className="slide">
-            <span className="skeleton slide-media" />
-            <div className="slide-body">
-              <span className="skeleton skeleton-text" style={{ width: 180, marginTop: 0 }} />
-              <span className="skeleton" style={{ height: 44, width: '90%', marginTop: 16 }} />
-              <span className="skeleton" style={{ height: 44, width: '60%', marginTop: 8 }} />
-              <span className="skeleton" style={{ height: 28, width: 180, marginTop: 24 }} />
-              <span className="skeleton" style={{ height: 48, width: 280, maxWidth: '100%', marginTop: 32 }} />
-            </div>
-          </div>
-        </div>
-        <div className="slider-controls" />
-      </div>
+      <LoadingLabel label={label} />
+      <ul className="skeleton-row" aria-hidden="true">
+        {Array.from({ length: count }, (_, i) => (
+          <li key={i}>
+            <BookCardSkeleton />
+          </li>
+        ))}
+      </ul>
     </>
   );
 }
 
-export function TilesSkeleton({ count = 8 }) {
+export function CirclesSkeleton({ count = 5 }) {
   return (
-    <div className="section tiles-section" aria-hidden="true">
-      <div className="section-head">
-        <span className="skeleton" style={{ height: 24, width: 100 }} />
+    <div className="home-section" aria-hidden="true">
+      <div className="home-head">
+        <span className="skeleton" style={{ height: 28, width: 240 }} />
       </div>
-      <ul className="tiles">
+      <ul className="skeleton-circles">
         {Array.from({ length: count }, (_, i) => (
           <li key={i}>
-            <span className="skeleton tile" />
+            <span className="skeleton skeleton-circle" />
+            <span className="skeleton skeleton-text" style={{ width: 80 }} />
           </li>
         ))}
       </ul>

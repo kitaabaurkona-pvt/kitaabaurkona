@@ -12,8 +12,12 @@ import { CartLinesContext } from './cartLinesContextObject';
 export function CartLinesProvider({ children }) {
   const { ids, items, setQuantity } = useCart();
   const idsKey = [...ids].sort().join(',');
-  const result = useAsync(() => getBooksByIds(ids), [idsKey]);
-  const { data, loading, error, retry } = result;
+  // Each fetch remembers which cart it was for. A book added after the last fetch is
+  // "pending" (still loading), never mistaken for one that is no longer available.
+  const result = useAsync(async () => ({ key: idsKey, books: await getBooksByIds(ids) }), [idsKey]);
+  const { loading, error, retry } = result;
+  const data = result.data?.books;
+  const fresh = result.data?.key === idsKey;
   const { pathname } = useLocation();
   // The panel remembers the page it was opened on, so moving to another page closes it.
   const [openOn, setOpenOn] = useState(null);
@@ -32,7 +36,7 @@ export function CartLinesProvider({ children }) {
       const book = byId.get(id) ?? null;
       const limit = book ? Math.min(book.stock_quantity, MAX_QUANTITY) : 0;
       const quantity = Math.min(items[id], Math.max(limit, 1));
-      return { id, book, quantity, limit, available: Boolean(book) && limit > 0 };
+      return { id, book, quantity, limit, pending: !book && !fresh, available: Boolean(book) && limit > 0 };
     });
     const totals = lines
       .filter((line) => line.available)
@@ -51,13 +55,14 @@ export function CartLinesProvider({ children }) {
       retry,
       lines,
       totals,
-      blocked: lines.some((line) => !line.available),
+      blocked: lines.some((line) => !line.available && !line.pending),
+      pending: lines.some((line) => line.pending),
       cartOpen,
       setCartOpen,
       openCart,
       closeCart,
     };
-  }, [data, loading, error, retry, ids, items, cartOpen, setCartOpen, openCart, closeCart]);
+  }, [data, fresh, loading, error, retry, ids, items, cartOpen, setCartOpen, openCart, closeCart]);
 
   // If stock dropped since a book was added, bring its quantity down to what exists.
   useEffect(() => {

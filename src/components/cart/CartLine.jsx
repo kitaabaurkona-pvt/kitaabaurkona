@@ -4,7 +4,6 @@ import { motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
 import { useCart } from '../../hooks/useCart';
 import { useWishlist } from '../../hooks/useWishlist';
-import { useToast } from '../../hooks/useToast';
 import { coverOf, formatPrice, stockLevel } from '../../utils/format';
 import BookCover from '../store/BookCover';
 import PriceBlock from '../store/PriceBlock';
@@ -24,7 +23,6 @@ function CartLine({ line, compact = false }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [saveFailed, setSaveFailed] = useState(false);
-  const { show } = useToast();
   const { book } = line;
 
   async function saveForLater() {
@@ -35,10 +33,27 @@ function CartLine({ line, compact = false }) {
     try {
       if (!has(book.id)) await toggle(book.id);
       remove(book.id);
-      show({ message: `Moved “${book.title}” to your wishlist`, action: { label: 'View', to: '/wishlist' } });
     } catch {
       setSaveFailed(true);
     }
+  }
+
+  if (line.pending) {
+    return (
+      <motion.li className="line" data-compact={compact || undefined} {...collapse}>
+        <p className="visually-hidden" role="status">
+          Loading book…
+        </p>
+        <div className="skeleton-line" aria-hidden="true">
+          <span className="skeleton" />
+          <div>
+            <span className="skeleton skeleton-text" style={{ width: '70%', marginTop: 0 }} />
+            <span className="skeleton skeleton-text" style={{ width: '30%' }} />
+            <span className="skeleton skeleton-text" style={{ width: '45%' }} />
+          </div>
+        </div>
+      </motion.li>
+    );
   }
 
   if (!book) {

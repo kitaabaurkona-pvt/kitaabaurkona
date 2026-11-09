@@ -9,22 +9,14 @@ import { usePreferences } from '../../hooks/usePreferences';
 import { useToast } from '../../hooks/useToast';
 import { useAsync } from '../../hooks/useAsync';
 import { listCategories } from '../../services/bookService';
-import {
-  COLLECTIONS,
-  UNDER_PRICE,
-  categoryHref,
-  orderCategories,
-  regionalHref,
-  tintFor,
-  underPriceHref,
-} from '../../utils/categories';
+import { COLLECTIONS, UNDER_PRICE, categoryHref, orderCategories, regionalHref, underPriceHref } from '../../utils/categories';
+import { POLICY_LINKS } from '../../content/policies';
 import { formatPrice } from '../../utils/format';
 import {
   BagIcon,
   BookIcon,
   BookmarkIcon,
   CloseIcon,
-  FileIcon,
   LogoutIcon,
   MenuIcon,
   ReceiptIcon,
@@ -121,17 +113,14 @@ function MobileMenu() {
                   <nav aria-label="Categories" className="drawer-section">
                     <h2>Categories</h2>
                     {orderCategories(categories.data).map((name) => (
-                      <Link key={name} to={categoryHref(name)} className="drawer-link" onClick={close}>
-                        <span className="swatch" data-tint={tintFor(name)} aria-hidden="true" />
+                      <Link key={name} to={categoryHref(name)} className="drawer-link drawer-link-plain" onClick={close}>
                         {name}
                       </Link>
                     ))}
-                    <Link to={underPriceHref} className="drawer-link" onClick={close}>
-                      <span className="swatch" data-tint="sand" aria-hidden="true" />
+                    <Link to={underPriceHref} className="drawer-link drawer-link-plain" onClick={close}>
                       Up to {formatPrice(UNDER_PRICE)}
                     </Link>
-                    <Link to={regionalHref} className="drawer-link" onClick={close}>
-                      <span className="swatch" data-tint="sky" aria-hidden="true" />
+                    <Link to={regionalHref} className="drawer-link drawer-link-plain" onClick={close}>
                       {COLLECTIONS.regional.label}
                     </Link>
                   </nav>
@@ -155,8 +144,16 @@ function MobileMenu() {
                   </nav>
                 )}
 
+                <nav aria-label="Help" className="drawer-section">
+                  <h2>Help</h2>
+                  {POLICY_LINKS.map((link) => (
+                    <NavLink key={link.to} to={link.to} className="drawer-link drawer-link-plain" onClick={close}>
+                      {link.label}
+                    </NavLink>
+                  ))}
+                </nav>
+
                 <div className="drawer-section">
-                  {item('/terms', 'Terms and conditions', FileIcon)}
                   <div className="switch-row">
                     <span id="drawer-dark-label">Dark theme</span>
                     <button
