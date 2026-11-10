@@ -5,6 +5,7 @@
 // seeded with the public catalogue read live with the anon key from .env.local.
 // Screenshots go to e2e/shots/ (gitignored).
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -154,6 +155,17 @@ const activeDot = (page, root) =>
   page.$$eval(`${root} .carousel-dot`, (ds) => ds.findIndex((d) => d.getAttribute('aria-current') === 'true'));
 
 try {
+  // ---------- Security headers (vercel.json) ----------
+  {
+    const csp = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8')).headers[0].headers.find((h) => h.key === 'Content-Security-Policy')?.value ?? '';
+    const inline = [...fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    const hashes = inline.map((s) => `'sha256-${crypto.createHash('sha256').update(s, 'utf8').digest('base64')}'`);
+    check('CSP allows exactly the inline theme script in index.html (update its hash if the script changes)', hashes.length === 1 && csp.includes(hashes[0]), hashes.join(' '));
+    check('CSP blocks plugins, framing and other script sources', /object-src 'none'/.test(csp) && /frame-ancestors 'none'/.test(csp) && !/script-src[^;]*unsafe-(inline|eval)/.test(csp));
+    const served = (await fetch(`${BASE}/`)).headers.get('content-security-policy');
+    if (new URL(BASE).port === '5200') check('the preview build is served with the CSP', Boolean(served && served.includes("default-src 'self'")), served);
+  }
+
   // ---------- Visitor: Home ----------
   {
     const { page, ctx, errors } = await newPage();
@@ -433,7 +445,7 @@ try {
     await goto(page, '/terms');
     await waitSel(page, '.prose h2');
     const terms = await page.$eval('.prose', (p) => p.innerText);
-    check('terms: contact details filled in, other unknowns still marked', terms.includes('Kitaabaurkona@gmail.com') && terms.includes('udaipur') && (await page.$$('.prose .placeholder')).length > 0);
+    check('terms: contact details filled in, other unknowns still marked', terms.includes('Kitaabaurkona@gmail.com') && terms.includes('59 Nakoda Nagar') && (await page.$$('.prose .placeholder')).length > 0);
     await page.$eval('.footer-top', (b) => b.scrollIntoView());
     await sleep(200);
     await page.click('.footer-top');

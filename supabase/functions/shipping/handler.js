@@ -328,6 +328,11 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
     },
 
     async run_job({ job }) {
+      // Connection check: logs in (if needed) and lists couriers. Free, books nothing.
+      if (job === 'health') {
+        const couriers = await xb().couriers();
+        return { connected: true, couriers: couriers.length };
+      }
       if (job === 'book_due') {
         const due = (await rpc('claim_due_shipments', { p_limit: LIMITS.bookBatch })) ?? [];
         const results = [];
@@ -398,7 +403,14 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
 
       let context = {};
       if (CRON_ACTIONS.includes(action)) {
-        if (!(await sameSecret(req.headers.get('x-cron-secret'), cronSecret))) return fail(401, 'Not allowed');
+        // cronSecret is the value itself or an async getter (read from Vault on the server).
+        let expected = '';
+        try {
+          expected = typeof cronSecret === 'function' ? await cronSecret() : cronSecret;
+        } catch {
+          expected = '';
+        }
+        if (!(await sameSecret(req.headers.get('x-cron-secret'), expected))) return fail(401, 'Not allowed');
       } else {
         const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
         if (!token) return fail(401, 'Sign in first');

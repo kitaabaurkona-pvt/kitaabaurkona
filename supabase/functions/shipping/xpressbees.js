@@ -67,7 +67,7 @@ export function createXpressbees({ baseUrl, email, password, tokenStore, fetchIm
     const { status, json } = await call('/api/users/login', { method: 'POST', body: { email, password } });
     if (status >= 500 || status === 429) throw new XpressbeesError('Xpressbees login is unavailable', { status, retryable: true });
     if (!json?.status || typeof json.data !== 'string' || json.data.length < 20) {
-      throw new XpressbeesError('Xpressbees login was refused (check the email and password secrets)', { status });
+      throw new XpressbeesError('Xpressbees login was refused (check the EXPRESSBEES_EMAIL and EXPRESSBEES_PASSWORD secrets)', { status });
     }
     const token = json.data;
     await tokenStore.set(token, tokenExpiry(token));

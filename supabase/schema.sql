@@ -591,7 +591,7 @@ create table if not exists public.shipping_settings (
   hold_minutes integer not null default 30 check (hold_minutes between 0 and 1440),
   warehouse_name text not null default '' check (char_length(warehouse_name) <= 100),
   pickup_name text not null default 'Kitaabaurkona' check (char_length(pickup_name) between 2 and 80),
-  pickup_address text not null default 'hiran magri sec -5 udaipur near bsnl office'
+  pickup_address text not null default '59 Nakoda Nagar, Hiran Magri Sector 3'
     check (char_length(pickup_address) between 5 and 200),
   pickup_city text not null default 'Udaipur' check (char_length(pickup_city) between 2 and 60),
   pickup_state text not null default 'Rajasthan' check (char_length(pickup_state) between 2 and 60),

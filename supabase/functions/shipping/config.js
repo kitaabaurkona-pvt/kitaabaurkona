@@ -1,5 +1,5 @@
 // Fixed settings for the shipping function. Nothing here is secret: the Xpressbees login
-// and the cron secret come from Supabase Edge Function secrets at run time.
+// comes from Supabase Edge Function secrets and the cron secret from Vault, at run time.
 
 // The only host this function ever sends requests to.
 export const XPRESSBEES_BASE_URL = 'https://shipment.xpressbees.com';

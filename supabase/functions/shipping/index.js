@@ -1,8 +1,11 @@
 // Supabase Edge Function "shipping" (Deno). Wires the handler to the database and to
 // Xpressbees using secrets set in Supabase (never stored in this repository):
-//   XPRESSBEES_EMAIL, XPRESSBEES_PASSWORD  Xpressbees account login
-//   SHIPPING_CRON_SECRET                   shared with the scheduled jobs (pg_cron)
+//   EXPRESSBEES_EMAIL, EXPRESSBEES_PASSWORD  Xpressbees account login (the older
+//                                            XPRESSBEES_* spelling is also accepted)
 //   SHIPPING_ALLOWED_ORIGINS               optional, comma-separated site addresses
+// The scheduled jobs' secret is generated inside the database (Vault) and read here
+// through public.shipping_cron_secret(), which only the service role may run, so it is
+// never typed, shown or copied anywhere.
 // SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
 // Deployed with JWT verification off at the gateway: the handler checks every request
 // itself (user token via Supabase Auth, or the cron secret).
@@ -33,15 +36,24 @@ const origins = env('SHIPPING_ALLOWED_ORIGINS')
   .map((o) => o.trim())
   .filter((o) => /^https?:\/\/[a-z0-9.-]+(:\d+)?$/i.test(o));
 
+let cronSecretCache = '';
+async function cronSecret() {
+  if (!cronSecretCache) {
+    const { data, error } = await db.rpc('shipping_cron_secret');
+    if (!error && typeof data === 'string' && data.length >= 32) cronSecretCache = data;
+  }
+  return cronSecretCache;
+}
+
 const handle = createHandler({
   db,
-  cronSecret: env('SHIPPING_CRON_SECRET'),
+  cronSecret,
   allowedOrigins: origins.length ? origins : DEFAULT_ORIGINS,
   makeXpressbees: () =>
     createXpressbees({
       baseUrl: XPRESSBEES_BASE_URL,
-      email: env('XPRESSBEES_EMAIL'),
-      password: env('XPRESSBEES_PASSWORD'),
+      email: (env('EXPRESSBEES_EMAIL') || env('XPRESSBEES_EMAIL')).trim(),
+      password: env('EXPRESSBEES_PASSWORD') || env('XPRESSBEES_PASSWORD'),
       tokenStore,
       timeoutMs: LIMITS.requestTimeoutMs,
     }),

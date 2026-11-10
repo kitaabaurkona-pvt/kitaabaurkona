@@ -130,7 +130,7 @@ const ACTIONS = {
   },
   run_job: (b) => {
     only(b, ['action', 'job']);
-    if (!['book_due', 'cancel_requested', 'track_active'].includes(b.job)) throw new InputError('Unknown job');
+    if (!['book_due', 'cancel_requested', 'track_active', 'health'].includes(b.job)) throw new InputError('Unknown job');
     return { job: b.job };
   },
 };

@@ -11,7 +11,7 @@ export const CONTACT = {
   whatsappHref: 'https://wa.me/918690965448',
   hours: 'Sun-Sat, 10 AM to 6 PM',
   email: 'Kitaabaurkona@gmail.com',
-  address: 'hiran magri sec -5 udaipur near bsnl office, Rajasthan, Udaipur, 313002',
+  address: '59 Nakoda Nagar, Hiran Magri Sector 3, Udaipur, Rajasthan 313002',
 };
 
 // Short line under the logo in the footer.

@@ -2,21 +2,48 @@
 -- Kitaabaurkona: scheduled shipping jobs (live Supabase project only)
 -- =============================================================================
 -- Run AFTER schema.sql and after the `shipping` Edge Function is deployed.
--- The jobs call the function with the cron secret. Both the function address and the
--- secret are read from Supabase Vault at run time; their values are NEVER written in
--- this file. Create them once (SQL Editor), replacing the placeholders:
+-- Replace <project-ref> below with the project's reference (Settings -> General).
+-- Safe to run again: secrets are kept, the helper functions and jobs are replaced.
 --
---   select vault.create_secret('https://<project-ref>.supabase.co/functions/v1/shipping', 'shipping_function_url');
---   select vault.create_secret('<the same value as the SHIPPING_CRON_SECRET function secret>', 'shipping_cron_secret');
+--   every 5 minutes   book parcels whose hold time is over (if automatic booking is on)
+--   every 5 minutes   cancel booked parcels of cancelled orders with Xpressbees
+--   every 2 hours     refresh tracking of parcels on the way
 --
--- Safe to run again: existing shipping jobs are replaced.
---   every 5 minutes      book parcels whose hold time is over (if automatic booking is on)
---   every 5 minutes      cancel booked parcels of cancelled orders with Xpressbees
---   every 2 hours        refresh tracking of parcels on the way
+-- The jobs call the function with a secret header. The secret is generated here, inside
+-- the database, straight into Supabase Vault: nobody types, sees or copies it. The
+-- function reads it through shipping_cron_secret(), which only the service role may run.
 -- =============================================================================
 
 create extension if not exists pg_cron;
-create extension if not exists pg_net;
+-- pg_net keeps its functions in the `net` schema; the extension itself is registered in
+-- `extensions` (not `public`), as Supabase's security advisor recommends.
+create extension if not exists pg_net with schema extensions;
+
+do $$
+begin
+  if not exists (select 1 from vault.secrets where name = 'shipping_cron_secret') then
+    perform vault.create_secret(encode(extensions.gen_random_bytes(32), 'hex'), 'shipping_cron_secret',
+      'Header secret for the shipping Edge Function''s scheduled jobs');
+  end if;
+  if not exists (select 1 from vault.secrets where name = 'shipping_function_url') then
+    perform vault.create_secret('https://<project-ref>.supabase.co/functions/v1/shipping', 'shipping_function_url',
+      'Address of the shipping Edge Function');
+  end if;
+end $$;
+
+-- The function compares the job header with this (service role only).
+create or replace function public.shipping_cron_secret()
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select decrypted_secret from vault.decrypted_secrets where name = 'shipping_cron_secret';
+$$;
+
+revoke execute on function public.shipping_cron_secret() from public, anon, authenticated;
+grant execute on function public.shipping_cron_secret() to service_role;
 
 -- Calls the shipping function for one job. Only the scheduler (postgres) may run it.
 create or replace function public.shipping_run_job(p_job text)

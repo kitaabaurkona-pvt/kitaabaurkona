@@ -65,6 +65,7 @@ const xbServer = http.createServer(async (req, res) => {
   const auth = req.headers.authorization;
   if (auth !== `Bearer ${TOKEN}`) return send(401, { status: false, message: 'Unauthorized' });
   if (XB.mode.down) return send(503, { status: false, message: 'Service unavailable' });
+  if (p === '/api/courier') return send(200, { status: true, data: COURIERS.map(({ id, name }) => ({ id, name })) });
   if (p === '/api/courier/serviceability') {
     if (json.destination === '799999') return send(200, { status: true, data: [] });
     if (json.destination === '799998' && json.payment_type === 'cod') return send(200, { status: true, data: [] });
@@ -269,6 +270,9 @@ try {
   await db.query(`update public.shipments set last_tracked_at = now() - interval '3 hours' where order_id = $1`, [o1]);
   const bg = await cron('track_active');
   check('the background job refreshes tracking', bg.json?.data?.checked >= 1);
+  const health = await cron('health');
+  check('the health job confirms the Xpressbees connection', health.json?.data?.connected === true && health.json.data.couriers === COURIERS.length, JSON.stringify(health.json));
+  check('the health job needs the cron secret', (await call({ action: 'run_job', job: 'health' }, { token: admin })).status === 401);
   check('delivered: the order becomes delivered', (await orderStatus(o1)) === 'delivered');
   XB.trackStatus = 'in transit';
 
