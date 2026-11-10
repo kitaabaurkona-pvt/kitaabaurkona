@@ -58,7 +58,7 @@ function CartPanel() {
                 initial={{ x: '100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '100%' }}
-                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                transition={{ type: 'spring', stiffness: 340, damping: 36 }}
               >
                 <div className="cart-panel-head">
                   <Dialog.Title className="cart-panel-title">Your cart</Dialog.Title>

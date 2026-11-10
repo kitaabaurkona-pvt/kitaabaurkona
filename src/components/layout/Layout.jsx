@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
+import { usePreferences } from '../../hooks/usePreferences';
 import SiteHeader from './SiteHeader';
 import SiteFooter from './SiteFooter';
 import { PageSkeleton } from '../store/Skeletons';
@@ -9,9 +10,13 @@ import { useScrollMemory } from '../../hooks/useScrollMemory';
 import '../../styles/store.css';
 import '../../styles/reading-corner.css';
 import '../../styles/bento-shop.css';
+import '../../styles/storefront-motion.css';
 
 function Layout() {
   const { pathname } = useLocation();
+  const systemReduced = useReducedMotion();
+  const { motion: preference } = usePreferences();
+  const reduced = systemReduced || preference === 'reduce';
 
   useScrollMemory();
 
@@ -24,9 +29,9 @@ function Layout() {
       <main id="main" className="site-main" tabIndex={-1}>
         <motion.div
           key={pathname}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.12, ease: 'linear' }}
+          initial={reduced ? false : { opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: reduced ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
         >
           <Suspense fallback={<PageSkeleton />}>
             <Outlet />

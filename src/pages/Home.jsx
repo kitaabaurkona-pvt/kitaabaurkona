@@ -1,3 +1,4 @@
+import { Reveal } from '../components/motion/Reveal';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, ArrowRight, Heart, Detective, Sparkle, Plant, Books, BookOpen } from '@phosphor-icons/react';
 import { getBooksByIds, listBooks } from '../services/bookService';
@@ -24,7 +25,7 @@ export default function Home() {
   const hero = useAsync(() => getBooksByIds(heroIds), []);
   const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4 }), []);
   return <div className="reading-home container">
-    <section className="bento-hero" aria-labelledby="hero-title">
+    <Reveal className="bento-hero" aria-labelledby="hero-title">
       <div className="bento-main">
         <div className="bento-main-copy"><p className="eyebrow"><BookOpen size={17}/> Your little reading corner</p><h1 id="hero-title">What’s your <span>next read?</span></h1><p className="hero-description">Thrillers, manga, or a little self-help?</p><Link to="/books?stock=1" className="btn btn-primary hero-cta">Browse books <ArrowUpRight size={20}/></Link></div>
         <div className="hero-books" aria-label="A few stories to discover">
@@ -35,16 +36,16 @@ export default function Home() {
       </div>
       <Link className="bento-small bento-sage" to={underPriceHref}><span className="feature-kicker">Read within your budget</span><h2>Books for<br/>₹299 or less</h2><span className="feature-link">See the books <ArrowUpRight size={21}/></span><BookOpen className="feature-icon" size={72} weight="light" aria-hidden="true"/></Link>
       <Link className="bento-small bento-peach" to={categoryHref('Literary Fiction')}><span className="feature-kicker">Explore literary fiction</span><h2>Not sure?<br/>Try fiction.</h2><span className="feature-link">Explore fiction <ArrowUpRight size={21}/></span><Sparkle className="feature-icon" size={74} weight="light" aria-hidden="true"/></Link>
-    </section>
-    <section className="mood-section" aria-labelledby="mood-title"><div className="editorial-section-head"><div><h2 id="mood-title">Browse by genre</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div><nav className="mood-grid" aria-label="Browse by genre">{genres.map(({name,category,mood,Icon,tone})=><Link key={name} className="mood-tile" data-tone={tone} to={categoryHref(category)}><Icon size={28} weight="regular"/><span><strong>{name}</strong><small>{mood}</small></span><ArrowUpRight className="mood-arrow" size={18}/></Link>)}</nav></section>
-    <section className="reading-feature" aria-labelledby="shelf-title"><div className="editorial-section-head"><div><h2 id="shelf-title">Books to start with</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div>
+    </Reveal>
+    <Reveal className="mood-section" aria-labelledby="mood-title"><div className="editorial-section-head"><div><h2 id="mood-title">Browse by genre</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div><nav className="mood-grid" aria-label="Browse by genre">{genres.map(({name,category,mood,Icon,tone})=><Link key={name} className="mood-tile" data-tone={tone} to={categoryHref(category)}><Icon size={28} weight="regular"/><span><strong>{name}</strong><small>{mood}</small></span><ArrowUpRight className="mood-arrow" size={18}/></Link>)}</nav></Reveal>
+    <Reveal className="reading-feature" aria-labelledby="shelf-title"><div className="editorial-section-head"><div><h2 id="shelf-title">Books to start with</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div>
       {featured.loading && <BookGridSkeleton count={4}/>}{featured.error && <LoadError onRetry={featured.retry} what="books"/>}
       {featured.data && <ul className="book-grid reading-shelf">{featuredIds.map(id=>featured.data.find(book=>book.id===id)).filter(Boolean).map(book=><li key={book.id}><BookCard book={book} eager/></li>)}</ul>}
-    </section>
-    <section className="affordable-section" aria-labelledby="affordable-title"><div className="editorial-section-head"><div><h2 id="affordable-title">₹299 & under</h2></div><Link to={underPriceHref}>₹299 & under <ArrowRight size={18}/></Link></div>
+    </Reveal>
+    <Reveal className="affordable-section" aria-labelledby="affordable-title"><div className="editorial-section-head"><div><h2 id="affordable-title">₹299 & under</h2></div><Link to={underPriceHref}>₹299 & under <ArrowRight size={18}/></Link></div>
       {affordable.loading && <BookGridSkeleton count={4}/>}{affordable.error && <LoadError onRetry={affordable.retry} what="books"/>}
       {affordable.data && <ul className="book-grid">{affordable.data.books.map(book=><li key={book.id}><BookCard book={book}/></li>)}</ul>}
-    </section>
+    </Reveal>
     <div className="reading-signoff"><BookOpen size={27} weight="light"/><p>A book, a breather,<br/>a little time for you.</p><Link to="/books" className="btn btn-outline">Find your next read <ArrowUpRight size={19}/></Link></div>
   </div>;
 }
