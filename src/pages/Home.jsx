@@ -1,3 +1,4 @@
+import GenreSlider from '../components/home/GenreSlider';
 import Reveal from '../components/motion/Reveal';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, ArrowRight, Heart, Detective, Sparkle, Plant, Books, BookOpen } from '@phosphor-icons/react';
@@ -37,7 +38,7 @@ export default function Home() {
       <Link className="bento-small bento-sage" to={underPriceHref}><span className="feature-kicker">Read within your budget</span><h2>Books for<br/>₹299 or less</h2><span className="feature-link">See the books <ArrowUpRight size={21}/></span><BookOpen className="feature-icon" size={72} weight="light" aria-hidden="true"/></Link>
       <Link className="bento-small bento-peach" to={categoryHref('Literary Fiction')}><span className="feature-kicker">Explore literary fiction</span><h2>Not sure?<br/>Try fiction.</h2><span className="feature-link">Explore fiction <ArrowUpRight size={21}/></span><Sparkle className="feature-icon" size={74} weight="light" aria-hidden="true"/></Link>
     </section>
-    <Reveal as="section" className="mood-section" aria-labelledby="mood-title"><div className="editorial-section-head"><div><h2 id="mood-title">Browse by genre</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div><nav className="mood-grid" aria-label="Browse by genre">{genres.map(({name,category,mood,Icon,tone})=><Link key={name} className="mood-tile" data-tone={tone} to={categoryHref(category)}><Icon size={28} weight="regular"/><span><strong>{name}</strong><small>{mood}</small></span><ArrowUpRight className="mood-arrow" size={18}/></Link>)}</nav></Reveal>
+    <Reveal as="section" className="mood-section" aria-labelledby="mood-title"><div className="editorial-section-head"><div><h2 id="mood-title">Browse by genre</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div><GenreSlider>{genres.map(({name,category,mood,Icon,tone})=><Link key={name} className="mood-tile" data-tone={tone} to={categoryHref(category)}><Icon size={28} weight="regular"/><span><strong>{name}</strong><small>{mood}</small></span><ArrowUpRight className="mood-arrow" size={18}/></Link>)}</GenreSlider></Reveal>
     <Reveal as="section" className="reading-feature" aria-labelledby="shelf-title"><div className="editorial-section-head"><div><h2 id="shelf-title">Books to start with</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div>
       {featured.loading && <BookGridSkeleton count={4}/>}{featured.error && <LoadError onRetry={featured.retry} what="books"/>}
       {featured.data && <ul className="book-grid reading-shelf">{featuredIds.map(id=>featured.data.find(book=>book.id===id)).filter(Boolean).map(book=><li key={book.id}><BookCard book={book}/></li>)}</ul>}
