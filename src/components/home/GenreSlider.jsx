@@ -10,11 +10,12 @@ export default function GenreSlider({ children }) {
     const node = rail.current;
     if (!node || reduced) return undefined;
     let frame = 0, previous = 0, direction = 1, position = node.scrollLeft;
-    let visible = false, hovered = false, pressed = false, resumeAt = 0;
+    let visible = false, hovered = false, pressed = false, keyboardMode = false, resumeAt = 0;
     const tick = (now) => {
       const dt = previous ? Math.min(now - previous, 50) / 1000 : 0;
       previous = now;
-      const focused = node.contains(document.activeElement);
+      // Touch focus can persist after a swipe; only keyboard focus should hold autoplay.
+      const focused = keyboardMode && node.contains(document.activeElement);
       if (!hovered && !pressed && !focused && now > resumeAt) {
         const max = node.scrollWidth - node.clientWidth;
         if (max > 1) {
@@ -34,13 +35,20 @@ export default function GenreSlider({ children }) {
     observer.observe(node);
     const enter = (e) => { if (e.pointerType === 'mouse') hovered = true; };
     const leave = () => { hovered = false; };
-    const down = () => { pressed = true; };
-    const up = () => { pressed = false; resumeAt = performance.now() + 3000; position = node.scrollLeft; };
+    const pointerInput = () => { keyboardMode = false; };
+    const keyboardInput = (event) => { if (['Tab', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) keyboardMode = true; };
+    const down = () => { keyboardMode = false; pressed = true; };
+    const up = () => { if (!pressed) return; pressed = false; resumeAt = performance.now() + 3000; position = node.scrollLeft; };
     const wheel = () => { resumeAt = performance.now() + 3000; position = node.scrollLeft; };
     node.addEventListener('pointerenter', enter);
     node.addEventListener('pointerleave', leave);
     node.addEventListener('pointerdown', down);
     node.addEventListener('wheel', wheel, { passive: true });
+    window.addEventListener('pointerdown', pointerInput, { passive: true });
+    window.addEventListener('keydown', keyboardInput);
+    node.addEventListener('touchstart', down, { passive: true });
+    window.addEventListener('touchend', up);
+    window.addEventListener('touchcancel', up);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
     document.addEventListener('visibilitychange', sync);
@@ -48,6 +56,8 @@ export default function GenreSlider({ children }) {
       cancelAnimationFrame(frame); observer.disconnect();
       node.removeEventListener('pointerenter', enter); node.removeEventListener('pointerleave', leave);
       node.removeEventListener('pointerdown', down); node.removeEventListener('wheel', wheel);
+      window.removeEventListener('pointerdown', pointerInput); window.removeEventListener('keydown', keyboardInput);
+      node.removeEventListener('touchstart', down); window.removeEventListener('touchend', up); window.removeEventListener('touchcancel', up);
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
       document.removeEventListener('visibilitychange', sync);
     };
