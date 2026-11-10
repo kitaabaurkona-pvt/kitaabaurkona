@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useReduceMotion } from '../../hooks/useReduceMotion';
 
 // A real scroll area: no cloned links. Change SPEED to adjust pixels per second.
@@ -6,10 +6,9 @@ const SPEED = 18;
 export default function GenreSlider({ children }) {
   const rail = useRef(null);
   const reduced = useReduceMotion();
-  const [paused, setPaused] = useState(false);
   useEffect(() => {
     const node = rail.current;
-    if (!node || reduced || paused) return undefined;
+    if (!node || reduced) return undefined;
     let frame = 0, previous = 0, direction = 1, position = node.scrollLeft;
     let visible = false, hovered = false, pressed = false, resumeAt = 0;
     const tick = (now) => {
@@ -52,9 +51,8 @@ export default function GenreSlider({ children }) {
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
       document.removeEventListener('visibilitychange', sync);
     };
-  }, [paused, reduced]);
+  }, [reduced]);
   return <div className="genre-slider">
-    <nav ref={rail} id="genre-rail" className="mood-grid genre-rail" aria-label="Browse by genre" tabIndex={0}>{children}</nav>
-    {!reduced && <button type="button" className="genre-motion-toggle" aria-controls="genre-rail" aria-pressed={paused} onClick={() => setPaused(value => !value)}>{paused ? 'Resume sliding' : 'Pause sliding'}</button>}
+    <nav ref={rail} id="genre-rail" className="mood-grid auto-genre-rail" aria-label="Browse by genre" tabIndex={0}>{children}</nav>
   </div>;
 }
