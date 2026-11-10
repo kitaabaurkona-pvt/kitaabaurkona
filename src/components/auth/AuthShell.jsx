@@ -4,7 +4,7 @@ import '../../styles/auth.css';
 
 function AuthShell({ title, backTo, backLabel, children }) {
   useEffect(() => {
-    document.title = `${title} - Kitaabaurkona`;
+    document.title = `${title} - Kitaab Aur Kona`;
   }, [title]);
 
   return (
@@ -17,8 +17,8 @@ function AuthShell({ title, backTo, backLabel, children }) {
           </svg>
         </Link>
         <Link to="/" className="auth-brand">
-          <img src="/logo-64.png" alt="" width="28" height="28" />
-          Kitaabaurkona
+          <img src="/images/brand/emblem-transparent.png" alt="" width="28" height="28" />
+          Kitaab Aur Kona
         </Link>
       </header>
       <main className="auth-main">

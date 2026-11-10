@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -7,7 +7,11 @@ import { useCart } from '../../hooks/useCart';
 import { useWishlist } from '../../hooks/useWishlist';
 import { usePreferences } from '../../hooks/usePreferences';
 import { useToast } from '../../hooks/useToast';
+import { useAsync } from '../../hooks/useAsync';
+import { listCategories } from '../../services/bookService';
+import { COLLECTIONS, UNDER_PRICE, categoryHref, orderCategories, regionalHref, underPriceHref } from '../../utils/categories';
 import { POLICY_LINKS } from '../../content/policies';
+import { formatPrice } from '../../utils/format';
 import {
   BagIcon,
   BookIcon,
@@ -21,6 +25,7 @@ import {
   StoreIcon,
   UploadIcon,
   UserIcon,
+  ChevronDownIcon,
 } from '../icons';
 
 // Phone navigation: a menu button in the header opens this side panel. Radix Dialog
@@ -34,6 +39,7 @@ function MobileMenu() {
   const { show } = useToast();
   const navigate = useNavigate();
   const close = () => setOpen(false);
+  const categories = useAsync(() => listCategories(), []);
 
   const item = (to, label, Icon, { end = false, count = 0 } = {}) => (
     <NavLink to={to} end={end} className="drawer-link" onClick={close}>
@@ -79,7 +85,7 @@ function MobileMenu() {
                 <div className="drawer-head">
                   <Dialog.Title asChild>
                     <span className="brand">
-                      <img src="/logo-64.png" alt="" width="28" height="28" />
+                      <img src="/images/brand/emblem-transparent.png" alt="" width="28" height="28" />
                       <span>Menu</span>
                     </span>
                   </Dialog.Title>
@@ -88,6 +94,20 @@ function MobileMenu() {
                       <CloseIcon />
                     </button>
                   </Dialog.Close>
+                </div>
+
+                <div className="drawer-section">
+                  <div className="switch-row">
+                    <span id="drawer-dark-label">Dark theme</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      className="switch"
+                      aria-checked={dark}
+                      aria-labelledby="drawer-dark-label"
+                      onClick={() => setTheme(dark ? 'light' : 'dark')}
+                    />
+                  </div>
                 </div>
 
                 {isAuthenticated && (
@@ -100,9 +120,28 @@ function MobileMenu() {
                 <nav aria-label="Shop" className="drawer-section">
                   <h2>Shop</h2>
                   {item('/', 'Store', StoreIcon, { end: true })}
-                  {item('/books', 'Books', BookIcon)}
+                  {item('/books', 'Browse books', BookIcon)}
                   {item('/cart', 'Cart', BagIcon, { count: cartCount })}
                 </nav>
+
+                {categories.data?.length > 0 && (
+                  <details className="drawer-section drawer-categories">
+                    <summary>Browse categories <ChevronDownIcon size={18}/></summary>
+                    <nav aria-label="Categories" className="drawer-category-options">
+                    {orderCategories(categories.data).map((name) => (
+                      <Link key={name} to={categoryHref(name)} className="drawer-link drawer-link-plain" onClick={close}>
+                        {name}
+                      </Link>
+                    ))}
+                    <Link to={underPriceHref} className="drawer-link drawer-link-plain" onClick={close}>
+                      Up to {formatPrice(UNDER_PRICE)}
+                    </Link>
+                    <Link to={regionalHref} className="drawer-link drawer-link-plain" onClick={close}>
+                      {COLLECTIONS.regional.label}
+                    </Link>
+                    </nav>
+                  </details>
+                )}
 
                 <nav aria-label="Your account" className="drawer-section">
                   <h2>Your account</h2>
@@ -122,30 +161,7 @@ function MobileMenu() {
                   </nav>
                 )}
 
-                <nav aria-label="Help" className="drawer-section">
-                  <h2>Help</h2>
-                  {POLICY_LINKS.map((link) => (
-                    <NavLink key={link.to} to={link.to} className="drawer-link drawer-link-plain" onClick={close}>
-                      {link.label}
-                    </NavLink>
-                  ))}
-                </nav>
-
-                <div className="drawer-section">
-                  <div className="switch-row">
-                    <span id="drawer-dark-label">Dark theme</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      className="switch"
-                      aria-checked={dark}
-                      aria-labelledby="drawer-dark-label"
-                      onClick={() => setTheme(dark ? 'light' : 'dark')}
-                    />
-                  </div>
-                </div>
-
-                <div className="drawer-foot">
+                <div className="drawer-section drawer-auth">
                   {isAuthenticated ? (
                     <button type="button" className="btn btn-outline btn-block" onClick={handleSignOut}>
                       <LogoutIcon size={18} />
@@ -162,6 +178,19 @@ function MobileMenu() {
                     </>
                   )}
                 </div>
+
+                <nav aria-label="Help" className="drawer-section">
+                  <h2>Help</h2>
+                  {POLICY_LINKS.map((link) => (
+                    <NavLink key={link.to} to={link.to} className="drawer-link drawer-link-plain" onClick={close}>
+                      {link.label}
+                    </NavLink>
+                  ))}
+                </nav>
+
+
+
+
               </motion.div>
             </Dialog.Content>
           </Dialog.Portal>

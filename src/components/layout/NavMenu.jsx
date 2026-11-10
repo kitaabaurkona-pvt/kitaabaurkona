@@ -10,7 +10,7 @@ const CLOSE_DELAY = 150;
 // a short pause (so passing over it does nothing), on click, or with Enter / Arrow down;
 // Escape, a click elsewhere, moving away or leaving it with Tab closes it.
 // links: [{ to, label }]
-function NavMenu({ label, links, current = false }) {
+function NavMenu({ label, links, groups, current = false }) {
   const { pathname, search } = useLocation();
   const here = pathname + search;
   const [openOn, setOpenOn] = useState(null);
@@ -98,13 +98,13 @@ function NavMenu({ label, links, current = false }) {
         {open && (
           <motion.div
             id={panelId}
-            className="nav-menu-panel"
+            className={groups ? "nav-menu-panel grouped-book-menu" : "nav-menu-panel"}
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.15, ease: [0.25, 0.8, 0.25, 1] }}
           >
-            <ul>
+            {groups ? <div className="book-menu-groups">{groups.map(group => <section key={group.label}><h3>{group.label}</h3><ul>{group.links.map(link => <li key={link.to}><Link to={link.to} className="nav-menu-link">{link.label}</Link></li>)}</ul></section>)}</div> : <ul>
               {links.map((link) => (
                 <li key={link.to}>
                   <Link to={link.to} className="nav-menu-link">
@@ -112,7 +112,7 @@ function NavMenu({ label, links, current = false }) {
                   </Link>
                 </li>
               ))}
-            </ul>
+            </ul>}
           </motion.div>
         )}
       </AnimatePresence>

@@ -537,3 +537,12 @@
     background: var(--c-surface);
   }
 }
+
+/* Shared bookstore typography: display headings, readable form controls. */
+.auth-page .auth-title {font-family:var(--font-serif);font-size:32px;font-weight:400;line-height:1.25;letter-spacing:-.8px;text-transform:none;margin-bottom:28px;}
+.auth-page .auth-brand {font-family:var(--font-serif);font-size:18px;letter-spacing:-.4px;}
+.auth-page .field-label {font-size:14px;font-weight:550;}
+.auth-page .auth-form input {font-size:16px;}
+.auth-page .btn {text-transform:none;letter-spacing:0;font-size:15px;min-height:48px;border-radius:6px;}
+.auth-page .btn-primary,.auth-page .btn-secondary {text-transform:none;letter-spacing:0;font-size:15px;font-weight:600;min-height:48px;border-radius:6px;}
+.auth-page .field-input,.auth-page .field-control,.auth-page .phone-group {border-radius:6px;}

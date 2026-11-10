@@ -8,6 +8,7 @@ import { COLLECTIONS, UNDER_PRICE, orderCategories } from '../utils/categories';
 import BookCard from '../components/store/BookCard';
 import { LoadError, StateBlock } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
+import { SlidersHorizontal, CaretDown } from '@phosphor-icons/react';
 import { SearchIcon } from '../components/icons';
 import { FadeIn } from '../components/motion/FadeIn';
 
@@ -96,8 +97,9 @@ function FilterMenu({ options, onToggle, onClear }) {
 }
 
 function Books() {
-  useDocumentTitle('Books');
+  useDocumentTitle('Browse books');
   const location = useLocation();
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [params, setParams] = useSearchParams();
   const q = (params.get('q') ?? '').slice(0, 100);
   // While searching, the best matches come first unless another order is picked.
@@ -149,7 +151,7 @@ function Books() {
   const first = useAsync(() => find({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey], { key: `books:${filterKey}` });
   const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
 
-  const [more, setMore] = useState(() => morePages.get(filterKey) ?? { key: '', books: [], page: 0 });
+  const [more, setMore] = useState({ key: '', books: [], page: 0 });
   const [moreState, setMoreState] = useState({ loading: false, error: false });
   const keyRef = useRef(filterKey);
   useEffect(() => {
@@ -177,17 +179,17 @@ function Books() {
   const total = first.data?.total ?? 0;
   const filtered = Boolean(q || inStock || category || maxPrice || collection);
   const describe = [
-    category,
-    maxPrice ? `up to ${formatPrice(maxPrice)}` : '',
+    q ? category : '',
+    maxPrice && (q || category) ? `up to ${formatPrice(maxPrice)}` : '',
     collection ? COLLECTIONS[collection].label.toLowerCase() : '',
   ].filter(Boolean);
   const note = searchNote(first.data, q, describe);
   const suggestions = first.data?.note === 'none';
 
   return (
-    <div className="container page">
+    <div className="container page catalogue-page" data-filters-open={filtersOpen || undefined}>
       <div className="page-head">
-        <h1 className="page-title">Books</h1>
+        <h1 className="page-title">Browse books</h1>
         {first.data && !suggestions && (
           <p className="page-meta" aria-live="polite">
             {plural(total, 'book')}
@@ -213,7 +215,8 @@ function Books() {
             onChange={(event) => setTerm(event.target.value)}
           />
         </form>
-        <div className="toolbar-row">
+        <div className="filter-toggle-row"><button type="button" className="btn btn-outline" aria-expanded={filtersOpen} aria-controls="catalogue-filters" onClick={() => setFiltersOpen(v => !v)}><span><SlidersHorizontal size={18}/>{filtersOpen ? 'Hide filters' : 'Filters & sort'}</span><CaretDown size={16} aria-hidden="true"/></button></div>
+        <div className="toolbar-row" id="catalogue-filters">
           <label htmlFor="books-sort" className="visually-hidden">
             Sort books
           </label>
@@ -261,6 +264,7 @@ function Books() {
         </div>
       )}
 
+      {filtered && books.length > 0 && !first.loading && <div className="active-filter-summary" aria-label="Active filters"><span>{[category, inStock ? 'In stock' : '', maxPrice ? `${formatPrice(maxPrice)} & under` : '', collection ? COLLECTIONS[collection].label : ''].filter(Boolean).join(' · ') || 'Search results'}</span><button className="btn-link" type="button" onClick={()=>setParams({}, {replace:true})}>Clear filters</button></div>}
       <div className="results">
         {note && !first.loading && (
           <p className="notice search-note" role="status">

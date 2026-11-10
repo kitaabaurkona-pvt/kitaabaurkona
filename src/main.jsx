@@ -1,7 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import '@fontsource-variable/inter';
+import '@fontsource-variable/dm-sans';
+import '@fontsource-variable/bricolage-grotesque';
 import './index.css';
 import { captureAuthRedirectError } from './utils/authRedirect';
 import { PreferencesProvider } from './context/PreferencesContext';

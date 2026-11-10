@@ -1,3 +1,5 @@
+import { previewMode } from '../preview/mode';
+import PreviewCheckout from '../preview/PreviewCheckout';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
@@ -250,4 +252,4 @@ function Checkout() {
   );
 }
 
-export default Checkout;
+export default function CheckoutRoute() { return previewMode ? <PreviewCheckout /> : <Checkout />; }

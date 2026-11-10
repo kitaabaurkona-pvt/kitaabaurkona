@@ -1,3 +1,4 @@
+import { bookDisplay } from '../utils/bookDisplay';
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -9,6 +10,7 @@ import { formatPrice, stockLevel } from '../utils/format';
 import { MAX_QUANTITY } from '../utils/storeForm';
 import BookCover from '../components/store/BookCover';
 import PriceBlock from '../components/store/PriceBlock';
+import QuantityStepper from '../components/store/QuantityStepper';
 import AddToCartButton from '../components/store/AddToCartButton';
 import SaveButton from '../components/store/SaveButton';
 import { LoadError, StateBlock } from '../components/store/States';
@@ -40,19 +42,23 @@ function BookView({ book }) {
   const images = book.image_urls ?? [];
   const [active, setActive] = useState(0);
   const limit = Math.min(book.stock_quantity, MAX_QUANTITY);
+  const room = Math.max(0, limit - quantityOf(book.id));
+  const [quantity, setQuantity] = useState(1);
+  const qty = Math.max(1, Math.min(quantity, room || 1));
   const stock = stockLevel(book.stock_quantity);
   const saving = Number(book.mrp) - Number(book.price);
   const specs = specRows(book);
+  const display = bookDisplay(book);
 
   // If the book is already in the cart, go straight there instead of adding it twice.
   function buyNow() {
     if (book.stock_quantity <= 0) return;
-    if (quantityOf(book.id) === 0) add(book.id, 1, limit);
+    if (quantityOf(book.id) === 0) add(book.id, qty, limit);
     navigate('/cart');
   }
 
   return (
-    <div className="container page">
+    <div className="container page product-page">
       <nav aria-label="Breadcrumb">
         <ol className="breadcrumb">
           <li>
@@ -65,6 +71,7 @@ function BookView({ book }) {
         </ol>
       </nav>
 
+      {stock.level !== 'out' && <div className="mobile-purchase-bar" role="region" aria-label="Quick purchase"><div><span className="mobile-price">{formatPrice(book.price)}</span><small>{book.category === 'Box Sets & Combos' ? 'per set' : 'per book'}</small></div><AddToCartButton book={book} quantity={qty}/></div>}
       <div className="detail">
         <div className="detail-media">
           <div className="gallery-main">
@@ -101,7 +108,7 @@ function BookView({ book }) {
         </div>
 
         <div>
-          <h1 className="detail-title">{book.title}</h1>
+          <p className="eyebrow">{book.category}</p><h1 className="detail-title">{display.title}</h1>{display.author && <p className="detail-author">{display.author}</p>}
           <div className="detail-buy">
             <div>
               <PriceBlock price={book.price} mrp={book.mrp} large />
@@ -110,20 +117,27 @@ function BookView({ book }) {
                 {stock.label}
               </p>
             </div>
-            {/* One control: Add to cart, which becomes the − count + stepper once added. */}
-            <div className="buy-row buy-row-single">
-              <AddToCartButton book={book} className="btn btn-primary btn-block" />
-            </div>
+            {stock.level !== 'out' && room > 0 ? (
+              <div className="buy-row">
+                <QuantityStepper value={qty} max={room} onChange={setQuantity} label="Quantity" />
+                <AddToCartButton book={book} quantity={qty} />
+              </div>
+            ) : (
+              <div className="buy-row buy-row-single">
+                <AddToCartButton book={book} />
+              </div>
+            )}
             <div className="buy-secondary">
               {stock.level !== 'out' && (
                 <button type="button" className="btn btn-outline" onClick={buyNow}>
-                  Buy now
+                  Go to cart
                 </button>
               )}
               <SaveButton bookId={book.id} title={book.title} className="btn btn-outline" withLabel />
             </div>
           </div>
 
+          <div className="purchase-help"><Link to="/shipping">Delivery information</Link><Link to="/returns">Returns policy</Link></div>
           {book.description && (
             <section className="detail-section" aria-labelledby="about-heading">
               <h2 id="about-heading">About this book</h2>
@@ -159,7 +173,7 @@ function BookView({ book }) {
 
 function BookDetail() {
   const { id } = useParams();
-  const { data: book, loading, error, retry } = useAsync(() => getBook(id), [id], { key: `book:${id}` });
+  const { data: book, loading, error, retry } = useAsync(() => getBook(id), [id]);
 
   if (loading) return <DetailSkeleton />;
   if (error) {

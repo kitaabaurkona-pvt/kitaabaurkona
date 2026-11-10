@@ -1,3 +1,4 @@
+import { previewMode } from '../preview/mode';
 import { supabase } from '../clients/supabase';
 import { escapeLike } from '../utils/storeForm';
 import { isUuid, unwrap } from './request';
@@ -29,6 +30,7 @@ export async function listBooks({
   page = 0,
   pageSize = PAGE_SIZE,
 } = {}) {
+  if (previewMode) return (await import('../preview/catalogue')).previewList({ search, sort, inStock, category, maxPrice, collection, page, pageSize });
   const order = SORTS[sort] ?? SORTS.title;
   let query = supabase.from('books').select(LIST_FIELDS, { count: 'exact' }).eq('is_visible', true);
   const term = search.trim().slice(0, 100);
@@ -115,6 +117,7 @@ export async function searchBooks({
   page = 0,
   pageSize = PAGE_SIZE,
 } = {}) {
+  if (previewMode) return (await import('../preview/catalogue')).previewList({ search, sort: SORTS[sort] ? sort : 'title', inStock, category, maxPrice, collection, page, pageSize });
   const index = await loadSearchIndex();
   const ranked = rankBooks(index, search.trim().slice(0, 100));
   const languages = COLLECTIONS[collection]?.languages?.map((word) => word.toLowerCase());
@@ -151,6 +154,7 @@ export async function searchBooks({
 }
 
 export async function getBook(id) {
+  if (previewMode) return (await import('../preview/catalogue')).previewBooks.find(b => b.id === id) ?? null;
   if (!isUuid(id)) return null;
   const { data } = unwrap(await supabase.from('books').select(DETAIL_FIELDS).eq('id', id).eq('is_visible', true).maybeSingle());
   return data;
@@ -158,6 +162,7 @@ export async function getBook(id) {
 
 // Used by the cart: hidden or deleted books simply do not come back.
 export async function getBooksByIds(ids) {
+  if (previewMode) return (await import('../preview/catalogue')).previewBooks.filter(b => ids.includes(b.id));
   const valid = ids.filter(isUuid);
   if (valid.length === 0) return [];
   const { data } = unwrap(await supabase.from('books').select(`${LIST_FIELDS}, is_visible`).in('id', valid));
@@ -194,6 +199,7 @@ export async function listCategorySummary() {
 }
 
 export async function listCategories() {
+  if (previewMode) return [...new Set((await import('../preview/catalogue')).previewBooks.map(b => b.category))].filter(Boolean).sort();
   const { data } = unwrap(
     await supabase.from('books').select('category').eq('is_visible', true).not('category', 'is', null).limit(1000),
   );

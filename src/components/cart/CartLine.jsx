@@ -6,6 +6,7 @@ import { useCart } from '../../hooks/useCart';
 import { useWishlist } from '../../hooks/useWishlist';
 import { coverOf, formatPrice, stockLevel } from '../../utils/format';
 import BookCover from '../store/BookCover';
+import { bookDisplay } from '../../utils/bookDisplay';
 import PriceBlock from '../store/PriceBlock';
 import QuantityStepper from '../store/QuantityStepper';
 
@@ -79,6 +80,7 @@ function CartLine({ line, compact = false }) {
   const stock = stockLevel(book.stock_quantity);
   const { quantity } = line;
   const TitleTag = compact ? 'h3' : 'h2';
+  const display = bookDisplay(book);
   return (
     <motion.li className="line" data-compact={compact || undefined} {...collapse}>
       <div className="line-inner">
@@ -88,10 +90,11 @@ function CartLine({ line, compact = false }) {
         <div className="line-body">
           <div className="line-head">
             <TitleTag className="line-title">
-              <Link to={`/books/${book.id}`}>{book.title}</Link>
+              <Link to={`/books/${book.id}`}>{display.title}</Link>
             </TitleTag>
             {line.available && <span className="line-total">{formatPrice(Number(book.price) * quantity)}</span>}
           </div>
+          {display.author && <p className="line-author">{display.author}</p>}
           <PriceBlock price={book.price} mrp={book.mrp} />
           {stock.level !== 'in' && (
             <p className="stock-line" data-level={stock.level}>

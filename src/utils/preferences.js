@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'kitaab_prefs';
+const STORAGE_KEY = 'kitaab_corner_prefs';
 const THEMES = ['system', 'light', 'dark'];
 const MOTIONS = ['system', 'reduce'];
 
@@ -6,11 +6,11 @@ export function readPreferences() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
     return {
-      theme: THEMES.includes(raw.theme) ? raw.theme : 'system',
+      theme: THEMES.includes(raw.theme) ? raw.theme : 'dark',
       motion: MOTIONS.includes(raw.motion) ? raw.motion : 'system',
     };
   } catch {
-    return { theme: 'system', motion: 'system' };
+    return { theme: 'dark', motion: 'system' };
   }
 }
 

@@ -24,7 +24,7 @@ function CartSummary({ totals, title = 'Order summary', children }) {
             </div>
           )}
           <div className="summary-total">
-            <dt>Total</dt>
+            <dt>Books subtotal</dt>
             <dd>{formatPrice(totals.subtotal)}</dd>
           </div>
         </dl>

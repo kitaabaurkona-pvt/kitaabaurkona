@@ -1,106 +1,50 @@
-import { listBooks, listCategorySummary } from '../services/bookService';
+import { Link } from 'react-router-dom';
+import { ArrowUpRight, ArrowRight, Heart, Detective, Sparkle, Plant, Books, BookOpen } from '@phosphor-icons/react';
+import { getBooksByIds, listBooks } from '../services/bookService';
 import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { formatPrice } from '../utils/format';
-import { COLLECTIONS, UNDER_PRICE, categoryHref, dealsHref, regionalHref, underPriceHref } from '../utils/categories';
-import { BANNERS } from '../utils/storeInfo';
+import { categoryHref, underPriceHref } from '../utils/categories';
+import { featuredIds } from '../utils/featuredBooks';
+import { bookDisplay } from '../utils/bookDisplay';
 import { LoadError } from '../components/store/States';
-import { BookGridSkeleton, CirclesSkeleton } from '../components/store/Skeletons';
+import { BookGridSkeleton } from '../components/store/Skeletons';
 import BookCard from '../components/store/BookCard';
-import Reveal from '../components/motion/Reveal';
-import HeroCarousel from '../components/home/HeroCarousel';
-import CategoryCircles from '../components/home/CategoryCircles';
-import TrustStrip from '../components/home/TrustStrip';
-import Banner from '../components/home/Banner';
-import ProductCarousel from '../components/home/ProductCarousel';
-import SectionHead from '../components/home/SectionHead';
-import CategoryRibbon from '../components/home/CategoryRibbon';
-
-const HERO_BOOKS = 3;
-const ROW = 10;
-const ALL = 8;
-const COMBOS = 'Box Sets & Combos';
-
-// Laid out like the previous store: banner slider, SHOP BY CATEGORY, the black trust
-// strip, the second banner, rows of deals, then ALL PRODUCTS. Every book, count and
-// cover comes from the catalogue.
-function Home() {
-  useDocumentTitle('');
-  const deals = useAsync(() => listBooks({ sort: 'discount', inStock: true, pageSize: HERO_BOOKS + ROW }), [], { key: 'home:deals' });
-  const under = useAsync(() => listBooks({ sort: 'discount', inStock: true, maxPrice: UNDER_PRICE, pageSize: ROW }), [], { key: 'home:under' });
-  const combos = useAsync(() => listBooks({ sort: 'discount', inStock: true, category: COMBOS, pageSize: ROW }), [], { key: 'home:combos' });
-  const regional = useAsync(() => listBooks({ sort: 'discount', collection: 'regional', pageSize: ROW }), [], { key: 'home:regional' });
-  const summary = useAsync(() => listCategorySummary(), [], { key: 'category-summary' });
-  const all = useAsync(() => listBooks({ pageSize: ALL }), [], { key: 'home:all' });
-
-  const dealBooks = deals.data?.books ?? [];
-  const dealsRow = deals.data ? { ...deals, data: { ...deals.data, books: dealBooks.slice(HERO_BOOKS) } } : deals;
-
-  return (
-    <div className="home">
-      <div className="hero-wrap">
-        {/* The banner shows at once; the deal slides join it when they arrive. */}
-        <HeroCarousel books={dealBooks.slice(0, HERO_BOOKS)} />
-      </div>
-
-      <div className="band">
-        <div className="container">
-          {summary.loading && !summary.data && <CirclesSkeleton />}
-          {summary.data && <CategoryCircles summary={summary.data} />}
+const genres = [
+  {name:'Romance', category:'Romance', mood:'A little heart-flutter', Icon:Heart, tone:'peach'},
+  {name:'Mystery', category:'Thriller & Mystery', mood:'Just one more chapter', Icon:Detective, tone:'sage'},
+  {name:'Fantasy', category:'Fantasy', mood:'Somewhere far from here', Icon:Sparkle, tone:'gold'},
+  {name:'Self-help', category:'Self-Help', mood:'A little room to grow', Icon:Plant, tone:'sage'},
+  {name:'Manga', category:'Comics & Manga', mood:'A whole new world', Icon:Books, tone:'peach'},
+];
+const heroImages = ['/images/hero-dawn-of-onyx.png','/images/hero-everything-about-love.png','/images/hero-heartstopper.png'];
+const heroIds = ['e3f2ead5-b9e1-462a-8b47-7e868375f002','fd249dd4-5f1c-43fa-8052-dab6cf224bbc','6b811028-74fe-45aa-972d-46f3af1a3b46'];
+export default function Home() {
+  useDocumentTitle('Find your next favourite.');
+  const featured = useAsync(() => getBooksByIds(featuredIds), []);
+  const hero = useAsync(() => getBooksByIds(heroIds), []);
+  const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4 }), []);
+  return <div className="reading-home container">
+    <section className="bento-hero" aria-labelledby="hero-title">
+      <div className="bento-main">
+        <div className="bento-main-copy"><p className="eyebrow"><BookOpen size={17}/> Your little reading corner</p><h1 id="hero-title">What’s your <span>next read?</span></h1><p className="hero-description">Thrillers, manga, or a little self-help?</p><Link to="/books?stock=1" className="btn btn-primary hero-cta">Browse books <ArrowUpRight size={20}/></Link></div>
+        <div className="hero-books" aria-label="A few stories to discover">
+          {heroIds.map(id => hero.data?.find(book=>book.id===id)).filter(Boolean).map((book,i)=><Link key={book.id} to={`/books/${book.id}`} className={`hero-book hero-book-${i+1}`} aria-label={`Explore ${bookDisplay(book).title}`}><img src={heroImages[i]} srcSet={`${heroImages[i].replace('.png','-small.png')} 260w, ${heroImages[i]} 420w`} sizes="(max-width:767px) 110px, (max-width:1023px) 150px, 185px" alt={bookDisplay(book).title} fetchPriority={i===0?'high':'auto'} decoding="async"/></Link>)}
+          {hero.loading && <p className="hero-loading" role="status">Finding your next read…</p>}
+          {hero.error && <p className="hero-loading">Your next story is on the shelf below.</p>}
         </div>
       </div>
-
-      <TrustStrip />
-
-      <Reveal className="banner-wrap">
-        <Banner banner={BANNERS.trio} />
-      </Reveal>
-
-      {/* Rows alternate between warm cream and white bands. */}
-      <div className="band" data-tone="cream">
-        <div className="container">
-          <ProductCarousel id="deals" title="Amazing deals" href={dealsHref} state={dealsRow} autoplay={4000} />
-        </div>
-      </div>
-
-      {summary.data && <CategoryRibbon categories={Object.keys(summary.data)} />}
-
-      <div className="band">
-        <div className="container">
-          <ProductCarousel id="under" title={`Up to ${formatPrice(UNDER_PRICE)}`} href={underPriceHref} state={under} />
-        </div>
-      </div>
-      <div className="band" data-tone="cream">
-        <div className="container">
-          <ProductCarousel id="combos" title={COMBOS} href={categoryHref(COMBOS)} state={combos} />
-        </div>
-      </div>
-      <div className="band">
-        <div className="container">
-          <ProductCarousel id="regional" title={COLLECTIONS.regional.label} href={regionalHref} state={regional} />
-        </div>
-      </div>
-
-      <div className="band" data-tone="cream">
-        <div className="container">
-          <Reveal as="section" className="home-section" aria-labelledby="all-heading">
-            <SectionHead id="all-heading" title="All products" href="/books" />
-            {all.loading && !all.data && <BookGridSkeleton count={ALL} />}
-            {all.error && <LoadError onRetry={all.retry} what="books" />}
-            {all.data && (
-              <ul className="book-grid">
-                {all.data.books.map((book, index) => (
-                  <Reveal as="li" key={book.id} index={index % 4}>
-                    <BookCard book={book} />
-                  </Reveal>
-                ))}
-              </ul>
-            )}
-          </Reveal>
-        </div>
-      </div>
-    </div>
-  );
+      <Link className="bento-small bento-sage" to={underPriceHref}><span className="feature-kicker">Read within your budget</span><h2>Books for<br/>₹299 or less</h2><span className="feature-link">See the books <ArrowUpRight size={21}/></span><BookOpen className="feature-icon" size={72} weight="light" aria-hidden="true"/></Link>
+      <Link className="bento-small bento-peach" to={categoryHref('Literary Fiction')}><span className="feature-kicker">Explore literary fiction</span><h2>Not sure?<br/>Try fiction.</h2><span className="feature-link">Explore fiction <ArrowUpRight size={21}/></span><Sparkle className="feature-icon" size={74} weight="light" aria-hidden="true"/></Link>
+    </section>
+    <section className="mood-section" aria-labelledby="mood-title"><div className="editorial-section-head"><div><h2 id="mood-title">Browse by genre</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div><nav className="mood-grid" aria-label="Browse by genre">{genres.map(({name,category,mood,Icon,tone})=><Link key={name} className="mood-tile" data-tone={tone} to={categoryHref(category)}><Icon size={28} weight="regular"/><span><strong>{name}</strong><small>{mood}</small></span><ArrowUpRight className="mood-arrow" size={18}/></Link>)}</nav></section>
+    <section className="reading-feature" aria-labelledby="shelf-title"><div className="editorial-section-head"><div><h2 id="shelf-title">Books to start with</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div>
+      {featured.loading && <BookGridSkeleton count={4}/>}{featured.error && <LoadError onRetry={featured.retry} what="books"/>}
+      {featured.data && <ul className="book-grid reading-shelf">{featuredIds.map(id=>featured.data.find(book=>book.id===id)).filter(Boolean).map(book=><li key={book.id}><BookCard book={book} eager/></li>)}</ul>}
+    </section>
+    <section className="affordable-section" aria-labelledby="affordable-title"><div className="editorial-section-head"><div><h2 id="affordable-title">₹299 & under</h2></div><Link to={underPriceHref}>₹299 & under <ArrowRight size={18}/></Link></div>
+      {affordable.loading && <BookGridSkeleton count={4}/>}{affordable.error && <LoadError onRetry={affordable.retry} what="books"/>}
+      {affordable.data && <ul className="book-grid">{affordable.data.books.map(book=><li key={book.id}><BookCard book={book}/></li>)}</ul>}
+    </section>
+    <div className="reading-signoff"><BookOpen size={27} weight="light"/><p>A book, a breather,<br/>a little time for you.</p><Link to="/books" className="btn btn-outline">Find your next read <ArrowUpRight size={19}/></Link></div>
+  </div>;
 }
-
-export default Home;

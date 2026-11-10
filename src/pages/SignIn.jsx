@@ -100,7 +100,7 @@ function SignIn() {
       <AuthDivider />
       <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
       <p className="auth-switch">
-        New to Kitaabaurkona?
+        New to Kitaab Aur Kona?
         <Link to="/sign-up">Sign up</Link>
       </p>
     </AuthShell>
