@@ -71,3 +71,10 @@
 .drawer:focus { outline:none; }
 .menu-close { border-radius:10px; }
 .menu-close:focus-visible { outline:2px solid var(--c-focus); outline-offset:-4px; }
+/* A separate forest/sage surface anchors the header in both themes. */
+.site-header { --header-surface:#25352d; --header-search:#1c2822; --header-line:#45594c; background:var(--header-surface); border-bottom:1px solid var(--header-line); }
+:root[data-theme='light'] .site-header { --header-surface:#e1e9d9; --header-search:#f5f8ef; --header-line:#bdcdb5; }
+.site-header .header-nav { background:transparent; }
+.site-header .header-nav-row { border-bottom:0; }
+.site-header .header-search { background:var(--header-search); border-color:var(--header-line); }
+.site-header .header-search:focus-within { border-color:var(--c-focus); }
