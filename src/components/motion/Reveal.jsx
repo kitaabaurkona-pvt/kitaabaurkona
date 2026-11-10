@@ -1,12 +1,35 @@
-import { motion, useReducedMotion } from 'motion/react';
-import { usePreferences } from '../../hooks/usePreferences';
+import { useState } from 'react';
+import { motion } from 'motion/react';
+import { useReduceMotion } from '../../hooks/useReduceMotion';
 
-// Entrance timing lives here. Reveal once; reduced motion keeps content stationary.
-export function Reveal({ children, className, ...props }) {
-  const systemReduced = useReducedMotion();
-  const { motion: preference } = usePreferences();
-  const reduced = systemReduced || preference === 'reduce';
-  return <motion.section className={className} initial={reduced ? false : { opacity: 0, y: 16 }}
-    whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: 0.12 }}
-    transition={{ duration: reduced ? 0 : 0.45, ease: [0.22, 1, 0.36, 1] }} {...props}>{children}</motion.section>;
+const EASE = [0.25, 0.8, 0.25, 1];
+
+// Fades a block up into place the first time it scrolls into view (0.4s, 16px).
+// Cards in a row pass their position as `index` for a short stagger (60ms, at most 5
+// steps). Once in view it is marked data-inview, which lets CSS draw details such as the
+// gold rule under a heading. With Reduce animations the content is simply there.
+function Reveal({ as = 'div', index = 0, children, ...props }) {
+  const reduce = useReduceMotion();
+  const [inView, setInView] = useState(false);
+  if (reduce) {
+    const Tag = as;
+    return <Tag {...props}>{children}</Tag>;
+  }
+  const Component = motion[as];
+  return (
+    <Component
+      data-reveal=""
+      data-inview={inView || undefined}
+      initial={{ opacity: 0, y: 16 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, amount: 0.15 }}
+      onViewportEnter={() => setInView(true)}
+      transition={{ duration: 0.4, ease: EASE, delay: Math.min(index, 5) * 0.06 }}
+      {...props}
+    >
+      {children}
+    </Component>
+  );
 }
+
+export default Reveal;
