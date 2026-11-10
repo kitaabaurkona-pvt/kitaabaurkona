@@ -20,6 +20,7 @@ function CartPanel() {
   const saving = totals.mrp - totals.subtotal;
   const empty = ids.length === 0;
   const returnTo = useRef(null);
+  const panel = useRef(null);
 
   return (
     <Dialog.Root open={cartOpen} onOpenChange={setCartOpen}>
@@ -39,8 +40,12 @@ function CartPanel() {
               asChild
               forceMount
               aria-describedby={undefined}
-              onOpenAutoFocus={() => {
+              onOpenAutoFocus={(event) => {
                 returnTo.current = document.activeElement;
+                if (!returnTo.current?.matches(':focus-visible')) {
+                  event.preventDefault();
+                  panel.current?.focus();
+                }
               }}
               onCloseAutoFocus={(event) => {
                 // Return focus to what opened the panel, or to the header cart button when
@@ -51,7 +56,7 @@ function CartPanel() {
               }}
             >
               <motion.div
-                className="cart-panel"
+                className="cart-panel" ref={panel} tabIndex={-1}
                 onClick={(event) => {
                   // Any link inside the panel closes it, even one to the page already open.
                   if (event.target.closest('a')) setCartOpen(false);
@@ -65,7 +70,7 @@ function CartPanel() {
                   <Dialog.Title className="cart-panel-title">Your cart</Dialog.Title>
                   {!empty && <span className="cart-panel-count">{plural(totals.count, 'item')}</span>}
                   <Dialog.Close asChild>
-                    <button type="button" className="icon-button" aria-label="Close cart">
+                    <button type="button" className="icon-button cart-close" aria-label="Close cart">
                       <CloseIcon />
                     </button>
                   </Dialog.Close>

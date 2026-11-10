@@ -8,7 +8,7 @@ import { COLLECTIONS, UNDER_PRICE, orderCategories } from '../utils/categories';
 import BookCard from '../components/store/BookCard';
 import { LoadError, StateBlock } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
-import { SlidersHorizontal, CaretDown } from '@phosphor-icons/react';
+import { SlidersHorizontal, CaretDown, X } from '@phosphor-icons/react';
 import { SearchIcon } from '../components/icons';
 import { FadeIn } from '../components/motion/FadeIn';
 
@@ -67,7 +67,7 @@ function FilterMenu({ options, onToggle, onClear }) {
   }, [open]);
 
   return (
-    <div className="filter-menu" ref={ref}>
+    <div className="filter-menu" ref={ref} data-open={open || undefined}>
       <button
         type="button"
         className="select filter-toggle"
@@ -77,8 +77,7 @@ function FilterMenu({ options, onToggle, onClear }) {
       >
         Filters{count > 0 ? ` (${count})` : ''}
       </button>
-      {open && (
-        <div id="books-filters" className="filter-panel" role="group" aria-label="Filters">
+      <div id="books-filters" className="filter-panel" role="group" aria-label="Filters">
           {options.map((option) => (
             <label key={option.key} className="filter-option">
               <input type="checkbox" checked={option.checked} onChange={() => onToggle(option)} />
@@ -91,7 +90,6 @@ function FilterMenu({ options, onToggle, onClear }) {
             </button>
           )}
         </div>
-      )}
     </div>
   );
 }
@@ -178,6 +176,14 @@ function Books() {
   const books = first.data ? [...first.data.books, ...extra.books] : [];
   const total = first.data?.total ?? 0;
   const filtered = Boolean(q || inStock || category || maxPrice || collection);
+  const activeFilters = [
+    q && { key: 'q', label: `Search: ${q}` },
+    category && { key: 'category', label: category },
+    inStock && { key: 'stock', label: 'In stock' },
+    maxPrice && { key: 'max', label: `${formatPrice(maxPrice)} & under` },
+    collection && { key: 'collection', label: COLLECTIONS[collection].label },
+  ].filter(Boolean);
+  const filterCount = activeFilters.filter(item => item.key !== 'q').length;
   const describe = [
     q ? category : '',
     maxPrice && (q || category) ? `up to ${formatPrice(maxPrice)}` : '',
@@ -215,7 +221,7 @@ function Books() {
             onChange={(event) => setTerm(event.target.value)}
           />
         </form>
-        <div className="filter-toggle-row"><button type="button" className="btn btn-outline" aria-expanded={filtersOpen} aria-controls="catalogue-filters" onClick={() => setFiltersOpen(v => !v)}><span><SlidersHorizontal size={18}/>{filtersOpen ? 'Hide filters' : 'Filters & sort'}</span><CaretDown size={16} aria-hidden="true"/></button></div>
+        <div className="filter-toggle-row"><button type="button" className="btn btn-outline" aria-expanded={filtersOpen} aria-controls="catalogue-filters" onClick={() => setFiltersOpen(v => !v)}><span><SlidersHorizontal size={18}/>{filtersOpen ? 'Hide filters' : 'Filters & sort'}{filterCount > 0 && ` (${filterCount})`}</span><CaretDown size={16} aria-hidden="true"/></button></div>
         <div className="toolbar-row" id="catalogue-filters">
           <label htmlFor="books-sort" className="visually-hidden">
             Sort books
@@ -264,7 +270,10 @@ function Books() {
         </div>
       )}
 
-      {filtered && books.length > 0 && !first.loading && <div className="active-filter-summary" aria-label="Active filters"><span>{[category, inStock ? 'In stock' : '', maxPrice ? `${formatPrice(maxPrice)} & under` : '', collection ? COLLECTIONS[collection].label : ''].filter(Boolean).join(' · ') || 'Search results'}</span><button className="btn-link" type="button" onClick={()=>setParams({}, {replace:true})}>Clear filters</button></div>}
+      {filtered && <div className="active-filter-summary" aria-label="Active filters">
+        <div className="active-filter-chips">{activeFilters.map(item => <button key={item.key} className="active-filter-chip" type="button" aria-label={`Remove ${item.label}`} onClick={() => update({ [item.key]: null })}><span>{item.label}</span><X size={14} aria-hidden="true" /></button>)}</div>
+        <button className="btn-link" type="button" onClick={() => setParams({}, {replace:true})}>Clear all</button>
+      </div>}
       <div className="results">
         {note && !first.loading && (
           <p className="notice search-note" role="status">
