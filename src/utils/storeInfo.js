@@ -35,6 +35,8 @@ export const BANNERS = {
     href: '/books',
     width: 1672,
     height: 941,
+    // Smaller copies (name-480.webp …) so phones download only what they show.
+    widths: [480, 828, 1280],
   },
   trio: {
     src: '/banners/must-read-trio.webp',
@@ -42,5 +44,6 @@ export const BANNERS = {
     href: '/books?category=Box%20Sets%20%26%20Combos',
     width: 1672,
     height: 941,
+    widths: [480, 828, 1280],
   },
 };

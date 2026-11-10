@@ -610,6 +610,70 @@ try {
     await ctx.close();
   }
 
+  // ---------- Banners fit the screen; Books filters in one dropdown ----------
+  {
+    for (const [w, h, touch] of [[1920, 1080, false], [1600, 900, false], [1366, 768, false], [1280, 800, false], [390, 844, true], [844, 390, true]]) {
+      const { page, ctx, errors } = await newPage({ width: w, height: h, touch });
+      await goto(page, '/');
+      await waitSel(page, '.hero-banner img');
+      await page.waitForFunction(() => document.querySelector('.hero-banner img')?.complete, { timeout: 8000 }).catch(() => {});
+      const hero = await page.$eval('.hero-carousel', (e) => {
+        const r = e.getBoundingClientRect();
+        const img = e.querySelector('.hero-banner img');
+        return { bottom: Math.round(r.bottom + window.scrollY), height: Math.round(r.height), width: Math.round(r.width), src: img.currentSrc.split('/').pop() };
+      });
+      check(`banner ${w}x${h}: the hero ends above the bottom of the screen`, hero.bottom <= h, JSON.stringify(hero));
+      check(`banner ${w}x${h}: never wider than the store (1280px)`, hero.width <= 1280, hero.width);
+      if (w <= 400) check(`banner ${w}x${h}: a phone loads a small copy`, /-(480|828).webp$/.test(hero.src), hero.src);
+      if (w === 1920) {
+        await page.screenshot({ path: path.join(SHOTS, 'banner-1920.png') });
+        await page.$eval('.banner-wrap', (e) => e.scrollIntoView({ block: 'start' }));
+        await sleep(600);
+        const trio = await page.$eval('.banner-wrap .banner', (e) => Math.round(e.getBoundingClientRect().height));
+        check('banner 1920x1080: the second banner fits the screen too', trio <= h - 150, trio);
+      }
+      if (w === 844) await page.screenshot({ path: path.join(SHOTS, 'banner-phone-landscape.png') });
+      check(`banner ${w}x${h}: no console errors`, errors.length === 0, errors.join(' | '));
+      await ctx.close();
+    }
+
+    const { page, ctx, errors } = await newPage();
+    await goto(page, '/books');
+    await waitSel(page, '.book-grid .book-card');
+    check('books toolbar: only search, sort and one Filters button (no filter chips)', (await page.$$('.toolbar .chip')).length === 0 && (await page.$('.toolbar .filter-toggle')) !== null);
+    check('books toolbar: the category chips are still there', (await page.$$('.chip-scroll .chip')).length > 5);
+    await page.click('.filter-toggle');
+    check('filters: the dropdown opens with three options', (await page.$$('.filter-panel .filter-option')).length === 3);
+    await page.screenshot({ path: path.join(SHOTS, 'books-filters-open-1280.png') });
+    await page.$$eval('.filter-option', (ls) => ls.find((l) => /In stock only/.test(l.textContent)).querySelector('input').click());
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('stock') === '1', { timeout: 4000 }).catch(() => {});
+    check('filters: In stock only filters the list', new URL(page.url()).searchParams.get('stock') === '1');
+    check('filters: the button counts active filters', await page.waitForFunction(() => document.querySelector('.filter-toggle')?.textContent === 'Filters (1)', { timeout: 3000 }).then(() => true).catch(() => false), await text(page, '.filter-toggle'));
+    check('filters: the dropdown stays open to pick more', (await page.$('.filter-panel')) !== null);
+    await page.keyboard.press('Escape');
+    check('filters: Escape closes it', (await gone(page, '.filter-panel')) && (await page.evaluate(() => document.activeElement?.classList.contains('filter-toggle'))));
+    await page.click('.filter-toggle');
+    await page.click('.filter-clear');
+    await page.waitForFunction(() => !new URL(location.href).searchParams.has('stock'), { timeout: 4000 }).catch(() => {});
+    check('filters: Clear filters removes them', !new URL(page.url()).searchParams.has('stock'));
+    await page.mouse.click(10, 10);
+    check('filters: a click outside closes it', await gone(page, '.filter-panel'));
+    check('filters: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+
+    const phone = await newPage({ width: 375, height: 812, touch: true });
+    await goto(phone.page, '/books');
+    await waitSel(phone.page, '.book-grid .book-card');
+    const row = await phone.page.$eval('.toolbar-row', (r) => ({ h: Math.round(r.getBoundingClientRect().height), sw: document.documentElement.scrollWidth }));
+    check('phone books toolbar: sort and Filters share one row, no sideways scroll', row.h <= 52 && row.sw <= 375, JSON.stringify(row));
+    await phone.page.tap('.filter-toggle');
+    await waitSel(phone.page, '.filter-panel');
+    const panel = await phone.page.$eval('.filter-panel', (p) => { const r = p.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right) }; });
+    check('phone filters: the dropdown stays on screen', panel.left >= 0 && panel.right <= 375, JSON.stringify(panel));
+    await phone.page.screenshot({ path: path.join(SHOTS, 'books-filters-phone-375.png') });
+    await phone.ctx.close();
+  }
+
   // ---------- Phone: side menu, swipe, marquee ----------
   {
     const { page, ctx, errors } = await newPage({ width: 375, height: 812, touch: true });
@@ -630,7 +694,8 @@ try {
     check('phone: header shows menu, search, logo and bag', (await page.$('.menu-button')) && (await page.$eval('.header-search-icon', (e) => getComputedStyle(e).display !== 'none')) && (await page.$('.brand-logo')));
     await page.click('.menu-button');
     await waitSel(page, '.drawer');
-    check('phone menu: Categories section lists the genres', await waitSel(page, '.drawer nav[aria-label="Categories"] a[href*="category="]', 4000));
+    await waitSel(page, '.drawer nav[aria-label="Help"] a', 4000);
+    check('phone menu: no Categories section in the side panel', (await page.$('.drawer nav[aria-label="Categories"]')) === null && !(await page.$('.drawer a[href*="category="]')));
     check('phone menu: Help section links the policy pages', (await page.$$('.drawer nav[aria-label="Help"] a')).length === 5);
     await sleep(400);
     await page.screenshot({ path: path.join(SHOTS, 'drawer-categories-light-375.png') });

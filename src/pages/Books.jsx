@@ -41,6 +41,60 @@ function searchNote(data, q, describe) {
   return parts.length ? parts.join(' ') : null;
 }
 
+// The filters, in one dropdown so the toolbar stays calm: search, sort, Filters.
+function FilterMenu({ options, onToggle, onClear }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const count = options.filter((option) => option.checked).length;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event) => {
+      if (!ref.current?.contains(event.target)) setOpen(false);
+    };
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      ref.current?.querySelector('.filter-toggle')?.focus();
+    };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="filter-menu" ref={ref}>
+      <button
+        type="button"
+        className="select filter-toggle"
+        aria-expanded={open}
+        aria-controls="books-filters"
+        onClick={() => setOpen((value) => !value)}
+      >
+        Filters{count > 0 ? ` (${count})` : ''}
+      </button>
+      {open && (
+        <div id="books-filters" className="filter-panel" role="group" aria-label="Filters">
+          {options.map((option) => (
+            <label key={option.key} className="filter-option">
+              <input type="checkbox" checked={option.checked} onChange={() => onToggle(option)} />
+              <span>{option.label}</span>
+            </label>
+          ))}
+          {count > 0 && (
+            <button type="button" className="btn-link filter-clear" onClick={onClear}>
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Books() {
   useDocumentTitle('Books');
   const location = useLocation();
@@ -176,30 +230,15 @@ function Books() {
               </option>
             ))}
           </select>
-          <button
-            type="button"
-            className="chip"
-            aria-pressed={inStock}
-            onClick={() => update({ stock: inStock ? null : '1' })}
-          >
-            In stock only
-          </button>
-          <button
-            type="button"
-            className="chip"
-            aria-pressed={Boolean(maxPrice)}
-            onClick={() => update({ max: maxPrice ? null : String(UNDER_PRICE) })}
-          >
-            Up to {formatPrice(UNDER_PRICE)}
-          </button>
-          <button
-            type="button"
-            className="chip"
-            aria-pressed={Boolean(collection)}
-            onClick={() => update({ collection: collection ? null : 'regional' })}
-          >
-            {COLLECTIONS.regional.label}
-          </button>
+          <FilterMenu
+            options={[
+              { key: 'stock', on: '1', label: 'In stock only', checked: inStock },
+              { key: 'max', on: String(UNDER_PRICE), label: `Up to ${formatPrice(UNDER_PRICE)}`, checked: Boolean(maxPrice) },
+              { key: 'collection', on: 'regional', label: COLLECTIONS.regional.label, checked: Boolean(collection) },
+            ]}
+            onToggle={(option) => update({ [option.key]: option.checked ? null : option.on })}
+            onClear={() => update({ stock: null, max: null, collection: null })}
+          />
         </div>
       </div>
 
