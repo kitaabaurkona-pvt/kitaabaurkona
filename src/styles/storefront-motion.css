@@ -50,3 +50,5 @@
  .genre-rail { gap:10px; }
  .genre-rail .mood-tile,.genre-rail .mood-tile:last-child { flex-basis:calc((100% - 20px)/3); }
 }
+
+.header-search button { display:inline-flex; align-items:center; justify-content:center; width:36px; min-width:36px; height:36px; min-height:36px; padding:0; flex:none; }
