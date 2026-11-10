@@ -7,8 +7,18 @@ export const XPRESSBEES_BASE_URL = 'https://shipment.xpressbees.com';
 // Label and manifest PDFs are only accepted (stored or shown) from Xpressbees' file host.
 export const FILE_URL = /^https:\/\/xb-files\.s3\.amazonaws\.com\/[A-Za-z0-9._/-]+$/;
 
-// Sites allowed to call the function from a browser.
-export const DEFAULT_ORIGINS = ['https://kitaabaurkona.vercel.app', 'http://localhost:5199', 'http://localhost:5200', 'http://localhost:5173'];
+// Sites allowed to call the function from a browser: the live store (www, plus the bare
+// domain, which redirects to it), Vercel's own address for the live store, the test site
+// (Vercel free domain on the `test` branch) and local development.
+export const DEFAULT_ORIGINS = [
+  'https://www.kitaabaurkona.com',
+  'https://kitaabaurkona.com',
+  'https://kitaabaurkona-kitaabaurkona.vercel.app',
+  'https://kitaabaurkona.vercel.app',
+  'http://localhost:5199',
+  'http://localhost:5200',
+  'http://localhost:5173',
+];
 
 export const LIMITS = {
   bodyBytes: 32 * 1024,
