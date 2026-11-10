@@ -38,7 +38,7 @@ function MobileMenu() {
   const { show } = useToast();
   const navigate = useNavigate();
   const close = () => setOpen(false);
-  const categories = useAsync(() => listCategories(), []);
+  const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
 
   const item = (to, label, Icon, { end = false, count = 0 } = {}) => (
     <NavLink to={to} end={end} className="drawer-link" onClick={close}>

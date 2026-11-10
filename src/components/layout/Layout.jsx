@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion } from 'motion/react';
 import AnnouncementBar from './AnnouncementBar';
@@ -6,14 +6,13 @@ import SiteHeader from './SiteHeader';
 import SiteFooter from './SiteFooter';
 import { PageSkeleton } from '../store/Skeletons';
 import CartPanel from '../cart/CartPanel';
+import { useScrollMemory } from '../../hooks/useScrollMemory';
 import '../../styles/store.css';
 
 function Layout() {
   const { pathname } = useLocation();
-
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [pathname]);
+  // Back returns to the exact spot on the previous page; new pages open at the top.
+  useScrollMemory();
 
   return (
     <div className="site">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -17,6 +17,7 @@ import {
   underPriceHref,
 } from '../../utils/categories';
 import { formatCount, formatPrice } from '../../utils/format';
+import { cartFlights } from '../../utils/flyToCart';
 import { BagIcon, BookmarkIcon, SearchIcon, UserIcon } from '../icons';
 import MobileMenu from './MobileMenu';
 import NavMenu from './NavMenu';
@@ -54,10 +55,14 @@ function SiteHeader() {
   const { isAuthenticated, role } = useAuth();
   const { count } = useCart();
   const { cartOpen, openCart } = useCartLines();
+  // While a cover is flying in, the badge keeps the old number and changes as it lands.
+  const flying = useSyncExternalStore(cartFlights.subscribe, cartFlights.count);
+  const [badge, setBadge] = useState(count);
+  if (badge !== count && (flying === 0 || count < badge)) setBadge(count);
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const [term, setTerm] = useState('');
-  const categories = useAsync(() => listCategories(), []);
+  const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
 
   // Before the category list arrives, offer the known ones; afterwards only those with books.
   const present = (names) => (categories.data ? names.filter((name) => categories.data.includes(name)) : names);
@@ -137,16 +142,16 @@ function SiteHeader() {
             onClick={openCart}
           >
             <BagIcon />
-            {count > 0 && (
+            {badge > 0 && (
               <motion.span
-                key={`count-${count}`}
+                key={`count-${badge}`}
                 className="cart-count"
                 aria-hidden="true"
                 initial={{ scale: 0.6 }}
                 animate={{ scale: 1 }}
                 transition={{ type: 'spring', stiffness: 500, damping: 18 }}
               >
-                {count > 99 ? '99+' : formatCount(count)}
+                {badge > 99 ? '99+' : formatCount(badge)}
               </motion.span>
             )}
           </button>

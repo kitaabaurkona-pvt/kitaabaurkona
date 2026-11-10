@@ -1587,16 +1587,19 @@
   padding-top: 4px;
 }
 
-.cart-panel-links a {
+.cart-panel-links a,
+.cart-panel-links .btn-link {
   color: var(--c-muted);
   font-size: var(--fs-sm);
+  font-weight: 400;
   text-decoration: underline;
   text-decoration-color: var(--c-line-strong);
   text-underline-offset: 4px;
 }
 
 @media (hover: hover) {
-  .cart-panel-links a:hover {
+  .cart-panel-links a:hover,
+  .cart-panel-links .btn-link:hover {
     color: var(--c-ink);
     text-decoration-color: var(--c-ink);
   }
@@ -2472,6 +2475,143 @@
   font-size: var(--fs-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- In-cart stepper (Add to cart, once added) ---------- */
+
+/* Takes the exact place of the button it replaces: same height, same width rules. */
+.cart-stepper {
+  display: inline-grid;
+  grid-template-columns: 48px minmax(44px, 1fr) 48px;
+  min-width: 148px;
+  min-height: 48px;
+  border: 1px solid var(--c-accent);
+  border-radius: var(--radius-control);
+  background: var(--c-accent);
+  color: var(--c-on-accent);
+  transform-origin: center;
+  animation: cart-stepper-in 0.28s var(--ease-out);
+}
+
+.cart-stepper.is-block {
+  display: grid;
+  width: 100%;
+}
+
+.cart-stepper.is-card {
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  min-width: 0;
+  min-height: 40px;
+  margin-top: auto;
+}
+
+.cart-stepper.is-quiet {
+  grid-template-columns: 36px minmax(36px, 1fr) 36px;
+  min-width: 116px;
+  min-height: 36px;
+  border-color: var(--c-line-strong);
+  background: transparent;
+  color: var(--c-ink);
+}
+
+.cart-stepper button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.25rem;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.cart-stepper button span {
+  transition: transform 0.12s var(--ease-out);
+}
+
+.cart-stepper button:active:not([aria-disabled='true']) span {
+  transform: scale(0.8);
+}
+
+.cart-stepper button[aria-disabled='true'] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cart-stepper button:focus-visible {
+  outline: 2px solid var(--c-gold);
+  outline-offset: -4px;
+}
+
+@media (hover: hover) {
+  .cart-stepper button:not([aria-disabled='true']):hover {
+    background: var(--c-gold);
+    color: #111111;
+  }
+
+  .cart-stepper.is-quiet button:not([aria-disabled='true']):hover {
+    background: var(--c-surface-press);
+    color: var(--c-ink);
+  }
+}
+
+.cart-stepper-count {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cart-stepper-number {
+  display: inline-block;
+}
+
+@keyframes cart-stepper-in {
+  from {
+    opacity: 0.4;
+    transform: scaleX(0.94);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The cover copy that flies into the header cart (see utils/flyToCart.js). */
+.cart-flight {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.cart-flight-lift,
+.cart-flight-card {
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+}
+
+.cart-flight-card {
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--c-gold);
+}
+
+.cart-flight-card img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 /* ---------- Line items (cart page, cart panel, checkout) ---------- */

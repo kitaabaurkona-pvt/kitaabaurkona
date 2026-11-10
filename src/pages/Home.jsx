@@ -26,12 +26,12 @@ const COMBOS = 'Box Sets & Combos';
 // cover comes from the catalogue.
 function Home() {
   useDocumentTitle('');
-  const deals = useAsync(() => listBooks({ sort: 'discount', inStock: true, pageSize: HERO_BOOKS + ROW }), []);
-  const under = useAsync(() => listBooks({ sort: 'discount', inStock: true, maxPrice: UNDER_PRICE, pageSize: ROW }), []);
-  const combos = useAsync(() => listBooks({ sort: 'discount', inStock: true, category: COMBOS, pageSize: ROW }), []);
-  const regional = useAsync(() => listBooks({ sort: 'discount', collection: 'regional', pageSize: ROW }), []);
-  const summary = useAsync(() => listCategorySummary(), []);
-  const all = useAsync(() => listBooks({ pageSize: ALL }), []);
+  const deals = useAsync(() => listBooks({ sort: 'discount', inStock: true, pageSize: HERO_BOOKS + ROW }), [], { key: 'home:deals' });
+  const under = useAsync(() => listBooks({ sort: 'discount', inStock: true, maxPrice: UNDER_PRICE, pageSize: ROW }), [], { key: 'home:under' });
+  const combos = useAsync(() => listBooks({ sort: 'discount', inStock: true, category: COMBOS, pageSize: ROW }), [], { key: 'home:combos' });
+  const regional = useAsync(() => listBooks({ sort: 'discount', collection: 'regional', pageSize: ROW }), [], { key: 'home:regional' });
+  const summary = useAsync(() => listCategorySummary(), [], { key: 'category-summary' });
+  const all = useAsync(() => listBooks({ pageSize: ALL }), [], { key: 'home:all' });
 
   const dealBooks = deals.data?.books ?? [];
   const dealsRow = deals.data ? { ...deals, data: { ...deals.data, books: dealBooks.slice(HERO_BOOKS) } } : deals;

@@ -9,7 +9,6 @@ import { formatPrice, stockLevel } from '../utils/format';
 import { MAX_QUANTITY } from '../utils/storeForm';
 import BookCover from '../components/store/BookCover';
 import PriceBlock from '../components/store/PriceBlock';
-import QuantityStepper from '../components/store/QuantityStepper';
 import AddToCartButton from '../components/store/AddToCartButton';
 import SaveButton from '../components/store/SaveButton';
 import { LoadError, StateBlock } from '../components/store/States';
@@ -41,9 +40,6 @@ function BookView({ book }) {
   const images = book.image_urls ?? [];
   const [active, setActive] = useState(0);
   const limit = Math.min(book.stock_quantity, MAX_QUANTITY);
-  const room = Math.max(0, limit - quantityOf(book.id));
-  const [quantity, setQuantity] = useState(1);
-  const qty = Math.max(1, Math.min(quantity, room || 1));
   const stock = stockLevel(book.stock_quantity);
   const saving = Number(book.mrp) - Number(book.price);
   const specs = specRows(book);
@@ -51,7 +47,7 @@ function BookView({ book }) {
   // If the book is already in the cart, go straight there instead of adding it twice.
   function buyNow() {
     if (book.stock_quantity <= 0) return;
-    if (quantityOf(book.id) === 0) add(book.id, qty, limit);
+    if (quantityOf(book.id) === 0) add(book.id, 1, limit);
     navigate('/cart');
   }
 
@@ -114,16 +110,10 @@ function BookView({ book }) {
                 {stock.label}
               </p>
             </div>
-            {stock.level !== 'out' && room > 0 ? (
-              <div className="buy-row">
-                <QuantityStepper value={qty} max={room} onChange={setQuantity} label="Quantity" />
-                <AddToCartButton book={book} quantity={qty} />
-              </div>
-            ) : (
-              <div className="buy-row buy-row-single">
-                <AddToCartButton book={book} />
-              </div>
-            )}
+            {/* One control: Add to cart, which becomes the − count + stepper once added. */}
+            <div className="buy-row buy-row-single">
+              <AddToCartButton book={book} className="btn btn-primary btn-block" />
+            </div>
             <div className="buy-secondary">
               {stock.level !== 'out' && (
                 <button type="button" className="btn btn-outline" onClick={buyNow}>
@@ -169,7 +159,7 @@ function BookView({ book }) {
 
 function BookDetail() {
   const { id } = useParams();
-  const { data: book, loading, error, retry } = useAsync(() => getBook(id), [id]);
+  const { data: book, loading, error, retry } = useAsync(() => getBook(id), [id], { key: `book:${id}` });
 
   if (loading) return <DetailSkeleton />;
   if (error) {

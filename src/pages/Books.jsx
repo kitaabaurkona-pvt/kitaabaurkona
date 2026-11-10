@@ -11,6 +11,15 @@ import { BookGridSkeleton } from '../components/store/Skeletons';
 import { SearchIcon } from '../components/icons';
 import { FadeIn } from '../components/motion/FadeIn';
 
+// Pages added with Show more, per filter, for this visit: coming back to the list shows
+// the same books, so the scroll position can be restored.
+const morePages = new Map();
+function keepMore(entry) {
+  morePages.delete(entry.key);
+  morePages.set(entry.key, entry);
+  while (morePages.size > 20) morePages.delete(morePages.keys().next().value);
+}
+
 function Books() {
   useDocumentTitle('Books');
   const location = useLocation();
@@ -58,16 +67,16 @@ function Books() {
     return () => clearTimeout(timer);
   }, [term, q, setParams]);
 
-  const first = useAsync(() => listBooks({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey]);
-  const categories = useAsync(() => listCategories(), []);
+  const first = useAsync(() => listBooks({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey], { key: `books:${filterKey}` });
+  const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
 
-  const [more, setMore] = useState({ key: '', books: [], page: 0 });
+  const [more, setMore] = useState(() => morePages.get(filterKey) ?? { key: '', books: [], page: 0 });
   const [moreState, setMoreState] = useState({ loading: false, error: false });
   const keyRef = useRef(filterKey);
   useEffect(() => {
     keyRef.current = filterKey;
   }, [filterKey]);
-  const extra = more.key === filterKey ? more : { key: filterKey, books: [], page: 0 };
+  const extra = more.key === filterKey ? more : (morePages.get(filterKey) ?? { key: filterKey, books: [], page: 0 });
 
   async function loadMore() {
     if (moreState.loading) return;
@@ -76,7 +85,9 @@ function Books() {
     try {
       const next = await listBooks({ search: q, sort, inStock, category, maxPrice, collection, page: extra.page + 1 });
       if (keyRef.current !== key) return;
-      setMore({ key, books: [...extra.books, ...next.books], page: extra.page + 1 });
+      const grown = { key, books: [...extra.books, ...next.books], page: extra.page + 1 };
+      keepMore(grown);
+      setMore(grown);
       setMoreState({ loading: false, error: false });
     } catch {
       if (keyRef.current === key) setMoreState({ loading: false, error: true });

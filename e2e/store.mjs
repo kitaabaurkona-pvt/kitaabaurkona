@@ -229,29 +229,52 @@ try {
     await scrollThrough(page);
     await page.screenshot({ path: path.join(SHOTS, 'home-light-1280.png'), fullPage: true });
 
-    // ---------- Add to cart: feedback, header count ----------
-    const firstCard = await page.$('[aria-labelledby="deals-heading"] .book-card');
+    // ---------- Add to cart: + count − stepper, cover flies to the cart ----------
+    // The first card a visitor sees (the row's off-screen copies are inert); hovering it pauses the row.
+    const firstCard = await page.$('[aria-labelledby="deals-heading"] .carousel-slide:not([data-copy]):not([aria-hidden="true"]) .book-card');
     const price = await firstCard.$eval('.price', (e) => e.textContent.trim());
-    const button = await firstCard.$('.btn-card');
-    await button.click();
-    check('add: the cart panel slides in from the right', await waitSel(page, '.cart-panel[role="dialog"]', 3000));
-    const midway = await page.$eval('.cart-panel', (p) => getComputedStyle(p).transform);
-    check('add: the panel slides in (not already in place)', midway !== 'none' && midway !== 'matrix(1, 0, 0, 1, 0, 0)', midway);
-    await sleep(400);
-    check('add: no pop-up message', (await page.$('.toast')) === null);
-    const lineReady = await page
-      .waitForFunction(() => document.querySelectorAll('.cart-panel .line .line-title').length === 1, { timeout: 6000 })
+    await firstCard.evaluate((c) => c.scrollIntoView({ block: 'center' }));
+    await sleep(300);
+    await firstCard.hover();
+    await sleep(200);
+    const before = await firstCard.$eval('.btn-card', (b) => Math.round(b.getBoundingClientRect().height));
+    const yBefore = await page.evaluate(() => window.scrollY);
+    await firstCard.$eval('.btn-card', (b) => b.click());
+    check('add: a copy of the cover flies towards the cart', await waitSel(page, '.cart-flight img', 300));
+    check('add: the header count waits for the cover to land', (await page.$('.cart-count')) === null);
+    await sleep(180);
+    await page.screenshot({ path: path.join(SHOTS, 'flight-light-1280.png') });
+    const landed = await page
+      .waitForFunction(() => !document.querySelector('.cart-flight') && document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 })
       .then(() => true)
       .catch(() => false);
-    check('add: panel shows the book just added', lineReady, await page.$eval('.cart-panel', (p) => p.innerText.replace(/\s+/g, ' ').slice(0, 160)).catch(() => 'no panel'));
-    check('add: the page behind dims like the old store', (await page.$eval('.drawer-scrim', (e) => getComputedStyle(e).backgroundColor)) === 'rgba(0, 0, 0, 0.8)');
-    check('add: panel is 390px wide', (await page.$eval('.cart-panel', (p) => Math.round(p.getBoundingClientRect().width))) === 390);
-    check('add: header count becomes 1', (await text(page, '.cart-count')) === '1');
+    check('add: it lands, disappears and the header count becomes 1', landed);
+    await sleep(300);
+    check('add: the cart panel does not open', (await page.$('.cart-panel')) === null);
+    check('add: no pop-up message', (await page.$('.toast')) === null);
+    check('add: the page stays where it was', Math.abs((await page.evaluate(() => window.scrollY)) - yBefore) <= 1);
     check('add: header cart button names the count', /Cart, 1 item/.test(await page.$eval('.cart-button', (b) => b.getAttribute('aria-label'))));
-    check('add: the card button keeps its label', /Add to cart/i.test(await button.evaluate((b) => b.textContent)));
-    await page.keyboard.press('Escape');
-    check('add: Escape closes the panel', await gone(page, '.cart-panel'));
-    check('add: focus returns to the button that added the book', await button.evaluate((b) => b === document.activeElement));
+    check('add: the button becomes a − 1 + stepper', (await firstCard.$eval('.cart-stepper-number', (e) => e.textContent.trim()).catch(() => null)) === '1');
+    check('add: the stepper is the same height as the button (nothing moves)', (await firstCard.$eval('.cart-stepper', (e) => Math.round(e.getBoundingClientRect().height))) === before);
+    check('add: the stepper is black like the button', (await firstCard.$eval('.cart-stepper', (e) => getComputedStyle(e).backgroundColor)) === BLACK);
+    check('add: focus moves to the stepper', await firstCard.evaluate((c) => c.querySelector('.cart-stepper').contains(document.activeElement)));
+    await firstCard.$eval('[data-step="up"]', (b) => b.click());
+    const twoLanded = await page
+      .waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '2', { timeout: 3000 })
+      .then(() => true)
+      .catch(() => false);
+    check('stepper: + adds one more (card and header show 2)', twoLanded && (await firstCard.$$eval('.cart-stepper-number', (es) => es.at(-1).textContent.trim())) === '2');
+    await sleep(300);
+    await firstCard.$eval('[data-step="down"]', (b) => b.click());
+    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 }).catch(() => {});
+    check('stepper: − takes one away at once', (await text(page, '.cart-count')) === '1');
+    await sleep(300);
+    await firstCard.$eval('[data-step="down"]', (b) => b.click());
+    await sleep(300);
+    check('stepper: − on the last copy brings back Add to cart', (await firstCard.$('.btn-card')) !== null && (await gone(page, '.cart-count')));
+    await firstCard.$eval('.btn-card', (b) => b.click());
+    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 }).catch(() => {});
+    await page.evaluate(() => window.scrollTo(0, 0));
 
     // ---------- Cart panel ----------
     await page.click('.cart-button');
@@ -262,7 +285,6 @@ try {
     check('panel: subtotal matches', (await text(page, '.cart-panel-sum dd')) === price);
     check('panel: Checkout is a black primary button', (await page.$eval('.cart-panel .btn-primary', (b) => getComputedStyle(b).backgroundColor)) === BLACK);
     check('panel: Checkout button shows the total', /^Checkout\s*•\s*₹/i.test(await page.$eval('.cart-panel .btn-primary', (b) => b.textContent.trim())));
-    check('panel: Continue browsing link present', (await page.$('.cart-panel-links a[href="/books"]')) !== null);
     const inc = await page.$('.cart-panel .stepper button:last-child');
     if (inc) {
       await inc.click();
@@ -290,6 +312,61 @@ try {
     await page.click('.cart-panel-empty a');
     check('panel: a link inside the panel closes it and navigates', (await gone(page, '.cart-panel')) && new URL(page.url()).pathname === '/books');
     check('visitor flow: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  // ---------- Flow: back lands on the same spot, screens do not reload ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    let catalogue = 0;
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.hostname.endsWith('.supabase.co') && u.pathname.startsWith('/rest/v1/') && r.method() !== 'OPTIONS') catalogue += 1;
+    });
+    const settle = () => page.waitForNetworkIdle({ idleTime: 400, timeout: 8000 }).catch(() => {});
+    await goto(page, '/');
+    await waitSel(page, '[aria-labelledby="all-heading"] .book-card');
+    await settle();
+    const target = await page.$eval('[aria-labelledby="all-heading"]', (s) => Math.round(s.getBoundingClientRect().top + window.scrollY - 200));
+    await page.evaluate((y) => window.scrollTo(0, y), target);
+    await sleep(300);
+    const homeY = await page.evaluate(() => window.scrollY);
+    await page.$eval('[aria-labelledby="all-heading"] .book-card-link', (a) => a.click());
+    await page.waitForFunction(() => location.pathname.startsWith('/books/'), { timeout: 5000 }).catch(() => {});
+    await waitSel(page, '.detail-title');
+    check('flow: a new page opens at the top', (await page.evaluate(() => window.scrollY)) === 0);
+    await settle();
+    const requestsBefore = catalogue;
+    await page.goBack({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => location.pathname === '/', { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction((y) => Math.abs(window.scrollY - y) <= 2, { timeout: 3000 }, homeY).catch(() => {});
+    check('flow: Back returns to the exact spot on the home page', Math.abs((await page.evaluate(() => window.scrollY)) - homeY) <= 2, `${await page.evaluate(() => window.scrollY)} vs ${homeY}`);
+    await settle();
+    check('flow: going back reloads nothing (home rows come from memory)', catalogue === requestsBefore, `${catalogue - requestsBefore} requests`);
+    check('flow: no skeletons after going back', (await page.$('.skeleton')) === null);
+
+    // Header cart -> View cart -> Continue shopping returns to the same spot.
+    await page.$eval('[aria-labelledby="all-heading"] .book-card .btn-card:not([aria-disabled])', (b) => b.click());
+    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
+    const beforeCart = await page.evaluate(() => window.scrollY);
+    await page.click('.cart-button');
+    await waitSel(page, '.cart-panel');
+    await sleep(400);
+    await page.$$eval('.cart-panel-links button', (bs) => bs.find((b) => /continue shopping/i.test(b.textContent))?.click());
+    const panelGone = await gone(page, '.cart-panel');
+    const afterPanel = await page.evaluate(() => window.scrollY);
+    check('panel: Continue shopping closes it and keeps the place', panelGone && new URL(page.url()).pathname === '/' && Math.abs(afterPanel - beforeCart) <= 2, `gone=${panelGone} ${new URL(page.url()).pathname} ${afterPanel} vs ${beforeCart}`);
+    await page.click('.cart-button');
+    await waitSel(page, '.cart-panel');
+    await sleep(400);
+    await page.$$eval('.cart-panel-links a', (as) => as.find((a) => a.getAttribute('href') === '/cart')?.click());
+    await page.waitForFunction(() => location.pathname === '/cart', { timeout: 5000 }).catch(() => {});
+    await waitSel(page, 'main .line .line-inner');
+    await page.$$eval('main .btn-outline', (bs) => bs.find((b) => /continue shopping/i.test(b.textContent))?.click());
+    await page.waitForFunction(() => location.pathname === '/', { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction((y) => Math.abs(window.scrollY - y) <= 2, { timeout: 3000 }, beforeCart).catch(() => {});
+    check('cart page: Continue shopping goes back to the same spot', new URL(page.url()).pathname === '/' && Math.abs((await page.evaluate(() => window.scrollY)) - beforeCart) <= 2, `${await page.evaluate(() => window.scrollY)} vs ${beforeCart}`);
+    check('flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
@@ -505,10 +582,8 @@ try {
     await page.screenshot({ path: path.join(SHOTS, 'book-light-1280.png'), fullPage: true });
     await page.$$eval('.detail-buy .btn-primary', (bs) => bs[0].click());
     await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
-    check('book page: Add to cart opens the cart panel', await waitSel(page, '.cart-panel', 3000));
-    await sleep(350);
-    await page.keyboard.press('Escape');
-    await gone(page, '.cart-panel');
+    check('book page: Add to cart turns into the stepper, panel stays shut', (await waitSel(page, '.detail-buy .cart-stepper.is-block', 3000)) && (await page.$('.cart-panel')) === null);
+    check('book page: the stepper fills the buy row', (await page.$eval('.detail-buy .cart-stepper', (e) => e.getBoundingClientRect().width)) === (await page.$eval('.detail-buy .buy-row', (e) => e.getBoundingClientRect().width)));
     await page.$$eval('.buy-secondary button', (bs) => bs.find((b) => b.textContent.trim() === 'Buy now')?.click());
     await page.waitForFunction(() => location.pathname === '/cart', { timeout: 4000 }).catch(() => {});
     check('book page: Buy now goes to the cart page without adding twice', new URL(page.url()).pathname === '/cart' && (await text(page, '.cart-count')) === '1');
@@ -531,6 +606,8 @@ try {
     check('signed in: lands on the store', new URL(page.url()).pathname === '/');
     await waitSel(page, '[aria-labelledby="deals-heading"] .book-card');
     await (await page.$('[aria-labelledby="deals-heading"] .book-card .btn-card')).click();
+    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
+    await page.click('.cart-button');
     await waitSel(page, '.cart-panel');
     await sleep(400);
     await page.$$eval('.cart-panel a', (as) => as.find((a) => /^checkout/i.test(a.textContent.trim()))?.click());
@@ -704,6 +781,9 @@ try {
         await scrollThrough(page);
         await page.screenshot({ path: path.join(SHOTS, `home-${scheme}-${w}.png`), fullPage: true });
         await (await page.$('.product-row .book-card .btn-card')).click();
+        await sleep(1000);
+        await page.screenshot({ path: path.join(SHOTS, `stepper-${scheme}-${w}.png`) });
+        await page.evaluate(() => document.querySelector('.cart-button').click());
         await waitSel(page, '.cart-panel');
         await sleep(400);
         await page.screenshot({ path: path.join(SHOTS, `panel-${scheme}-${w}.png`) });
