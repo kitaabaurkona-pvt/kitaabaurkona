@@ -4,6 +4,7 @@ import PriceBlock from './PriceBlock';
 import AddToCartButton from './AddToCartButton';
 import SaveButton from './SaveButton';
 import { bookDisplay } from '../../utils/bookDisplay';
+import { romanceListingCovers } from '../../utils/listingCovers';
 // Small display-only trial; original catalogue images and detail galleries stay intact.
 const listingSamples = {
   '77ca1b22-6857-4e01-b649-13aeb9617c17': '/images/listing-samples/a-little-life.svg',
@@ -14,7 +15,7 @@ function BookCard({ book, eager = false }) {
   return <article className="book-card">
     <div className="book-card-media"><SaveButton bookId={book.id} title={title} className="card-save"/>
     <Link className="card-media card-media-link" to={`/books/${book.id}`} aria-label={`View ${title}`}>
-      <BookCover src={listingSamples[book.id] || book.image_urls?.[0]} title={title} eager={eager} className="cover card-photo" />
+      <BookCover src={romanceListingCovers[book.id] || listingSamples[book.id] || book.image_urls?.[0]} title={title} eager={eager} className="cover card-photo" />
     </Link></div>
     <div className="book-card-body">
       <h3 className="book-card-title"><Link to={`/books/${book.id}`} className="book-card-link">{title}</Link></h3>
