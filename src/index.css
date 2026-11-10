@@ -558,3 +558,35 @@ button {
 :root[data-motion='reduce'] *::after {
   transition-duration: 0.01ms !important;
 }
+
+/* ---------- Test site bar (only on the test build) ---------- */
+
+.test-site-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 16px;
+  padding: 6px 16px;
+  background: repeating-linear-gradient(135deg, #eaa800 0 14px, #f2bb2a 14px 28px);
+  color: #1f1f1f;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.test-site-bar p {
+  margin: 0;
+}
+
+.test-site-commit {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.test-site-bar a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

@@ -268,9 +268,10 @@ try {
       .waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '2', { timeout: 3000 })
       .then(() => true)
       .catch(() => false);
-    check('stepper: + adds one more (card and header show 2)', twoLanded && (await firstCard.$$eval('.cart-stepper-number', (es) => es.at(-1).textContent.trim())) === '2');
+    const stepDiag = async () => JSON.stringify(await firstCard.evaluate((c) => ({ connected: c.isConnected, inert: Boolean(c.closest('[inert]')), slide: c.closest('.carousel-slide')?.getAttribute('aria-label'), copy: c.closest('[data-copy]') !== null, card: c.innerText.replace(/s+/g, ' ').slice(-60), header: document.querySelector('.cart-count')?.textContent ?? null, flights: document.querySelectorAll('.cart-flight').length, active: document.activeElement?.outerHTML.slice(0, 80) })));
+    check('stepper: + adds one more (card and header show 2)', twoLanded && (await firstCard.$$eval('.cart-stepper-number', (es) => es.at(-1).textContent.trim()).catch(() => null)) === '2', await stepDiag());
     await sleep(300);
-    await firstCard.$eval('[data-step="down"]', (b) => b.click());
+    await firstCard.$eval('[data-step="down"]', (b) => b.click()).catch(async () => console.log('DIAG down missing', await stepDiag()));
     await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 }).catch(() => {});
     check('stepper: − takes one away at once', (await text(page, '.cart-count')) === '1');
     await sleep(300);
