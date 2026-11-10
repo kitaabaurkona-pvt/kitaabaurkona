@@ -56,7 +56,7 @@ function Wishlist() {
       {loading && !data && <LinesSkeleton label="Loading your wishlist…" />}
       {error && <LoadError onRetry={retry} what="your wishlist" />}
       {data && books.length === 0 && (
-        <StateBlock title="You haven't saved any books yet." icon={BookmarkIcon}>
+        <StateBlock title="No saved books yet." description="Tap the bookmark on any book to keep it here for later." icon={BookmarkIcon}>
           <Link to="/books" className="btn btn-dark">
             Browse books
           </Link>

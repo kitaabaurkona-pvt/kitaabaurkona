@@ -5,7 +5,8 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCart } from '../../hooks/useCart';
 import { useCartLines } from '../../hooks/useCartLines';
 import { formatPrice, plural } from '../../utils/format';
-import { LoadError } from '../store/States';
+import { LoadError, StateBlock } from '../store/States';
+import { ShoppingCart } from '@phosphor-icons/react';
 import { LinesSkeleton } from '../store/Skeletons';
 import { CloseIcon } from '../icons';
 import CartLine from './CartLine';
@@ -72,10 +73,9 @@ function CartPanel() {
 
                 {empty && (
                   <div className="cart-panel-empty">
-                    <p>Your cart is empty.</p>
-                    <Link to="/books" className="btn btn-outline">
-                      Continue shopping
-                    </Link>
+                    <StateBlock title="Your cart is empty." description="Found a book you like? Add it to your cart and it will appear here." icon={ShoppingCart}>
+                      <Link to="/books" className="btn btn-primary">Browse books</Link>
+                    </StateBlock>
                   </div>
                 )}
 

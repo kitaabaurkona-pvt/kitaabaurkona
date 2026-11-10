@@ -28,7 +28,7 @@ function Orders() {
       {loading && <LinesSkeleton label="Loading your orders…" />}
       {error && <LoadError onRetry={retry} what="your orders" />}
       {orders && orders.length === 0 && (
-        <StateBlock title="You haven't placed any orders yet." icon={ReceiptIcon}>
+        <StateBlock title="No orders yet." description="Once you place an order, you can find its details and status here." icon={ReceiptIcon}>
           <Link to="/books" className="btn btn-dark">
             Browse books
           </Link>

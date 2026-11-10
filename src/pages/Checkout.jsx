@@ -213,7 +213,7 @@ function Checkout() {
   let content;
   if (ids.length === 0) {
     content = (
-      <StateBlock title="Your cart is empty." icon={BagIcon}>
+      <StateBlock title="Your cart is empty." description="Add a book before heading to checkout." icon={BagIcon}>
         <Link to="/books" className="btn btn-dark">
           Browse books
         </Link>

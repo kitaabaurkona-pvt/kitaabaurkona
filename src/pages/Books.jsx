@@ -282,12 +282,15 @@ function Books() {
         {first.loading && <BookGridSkeleton />}
         {first.error && <LoadError onRetry={first.retry} what="books" />}
         {first.data && books.length === 0 && (
-          <StateBlock title={filtered ? 'No books match these filters.' : 'There are no books in the store yet.'} icon={filtered ? SearchIcon : undefined}>
+          <StateBlock title={q ? 'No books found for this search.' : filtered ? 'No books match these filters.' : 'The shelves are quiet right now.'}
+            description={q ? `Try a shorter title, an author’s name, or fewer filters. Your search: “${q}”.` : filtered ? 'Try another genre, increase your budget, or clear the filters to see more books.' : 'Check back shortly, or try loading the catalogue again.'}
+            icon={SearchIcon}>
             {filtered && (
               <button type="button" className="btn btn-dark" onClick={() => setParams({}, { replace: true })}>
-                Clear filters
+                {q ? 'Clear search and filters' : 'Clear filters'}
               </button>
             )}
+            {!filtered && <button type="button" className="btn btn-primary" onClick={first.retry}>Reload catalogue</button>}
           </StateBlock>
         )}
         {books.length > 0 && !first.loading && (
