@@ -9,17 +9,17 @@ import SignUp from './pages/SignUp';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import Home from './pages/Home';
-import Books from './pages/Books';
-import BookDetail from './pages/BookDetail';
-import Offers from './pages/Offers';
-import Cart from './pages/Cart';
-import Checkout from './pages/Checkout';
-import Orders from './pages/Orders';
-import OrderDetail from './pages/OrderDetail';
-import Wishlist from './pages/Wishlist';
-import Account from './pages/Account';
-import Forbidden from './pages/Forbidden';
-import NotFound from './pages/NotFound';
+const Books = lazy(() => import('./pages/Books'));
+const BookDetail = lazy(() => import('./pages/BookDetail'));
+const Offers = lazy(() => import('./pages/Offers'));
+const Cart = lazy(() => import('./pages/Cart'));
+const Checkout = lazy(() => import('./pages/Checkout'));
+const Orders = lazy(() => import('./pages/Orders'));
+const OrderDetail = lazy(() => import('./pages/OrderDetail'));
+const Wishlist = lazy(() => import('./pages/Wishlist'));
+const Account = lazy(() => import('./pages/Account'));
+const Forbidden = lazy(() => import('./pages/Forbidden'));
+const NotFound = lazy(() => import('./pages/NotFound'));
 
 // Pages most shoppers never open are split into their own files and loaded on demand.
 const Settings = lazy(() => import('./pages/Settings'));

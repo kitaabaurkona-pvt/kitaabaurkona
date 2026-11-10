@@ -7,8 +7,8 @@ import { bookDisplay } from '../../utils/bookDisplay';
 import { romanceListingCovers } from '../../utils/listingCovers';
 // Small display-only trial; original catalogue images and detail galleries stay intact.
 const listingSamples = {
-  '77ca1b22-6857-4e01-b649-13aeb9617c17': '/images/listing-samples/a-little-life.svg',
-  '99b66fb8-f61b-4f5d-9108-460ed7cd3d30': '/images/listing-samples/400-days.svg',
+  '77ca1b22-6857-4e01-b649-13aeb9617c17': '/images/listing-samples/a-little-life.webp',
+  '99b66fb8-f61b-4f5d-9108-460ed7cd3d30': '/images/listing-samples/400-days.webp',
 };
 function BookCard({ book, eager = false }) {
   const { title, author } = bookDisplay(book);

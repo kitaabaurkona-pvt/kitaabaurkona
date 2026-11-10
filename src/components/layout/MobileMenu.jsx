@@ -85,7 +85,7 @@ function MobileMenu() {
                 <div className="drawer-head">
                   <Dialog.Title asChild>
                     <span className="brand">
-                      <img src="/images/brand/emblem-transparent.png" alt="" width="28" height="28" />
+                      <img src="/images/brand/emblem-header.webp" alt="" width="28" height="28" />
                       <span>Menu</span>
                     </span>
                   </Dialog.Title>

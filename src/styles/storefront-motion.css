@@ -20,3 +20,14 @@
  .btn:active,.book-card:hover,.book-card:hover .card-photo img,.mood-tile:hover,.bento-small:hover,.hero-book:hover,.hero-book:focus-visible,.hero-cta:hover svg,.bento-small:hover .feature-link svg { transform:none!important; }
 }
 :root[data-motion='reduce'] .btn,:root[data-motion='reduce'] .book-card,:root[data-motion='reduce'] .card-photo img,:root[data-motion='reduce'] .mood-tile,:root[data-motion='reduce'] .bento-small,:root[data-motion='reduce'] .hero-book,:root[data-motion='reduce'] .hero-cta svg,:root[data-motion='reduce'] .feature-link svg { transition:none!important; transform:none!important; }
+
+/* Icon wrapper must not match the mobile rule that hides cart text spans. */
+.header-right .cart-icon-motion { display:inline-flex; flex:none; width:28px; height:28px; overflow:visible; }
+.cart-button { overflow:visible; justify-content:center; }
+/* One rounded focus boundary, instead of nested native input and form outlines. */
+.header-search:focus-within { outline:none; border-color:var(--c-focus); box-shadow:0 0 0 1px var(--c-focus); }
+.header-search input,.header-search input:focus,.header-search input:focus-visible { appearance:none; -webkit-appearance:none; border:0; border-radius:0; outline:none; box-shadow:none; background:transparent; }
+/* Leave enough room for the hero's physical cover angles; don't lift into its crop. */
+@media (hover:hover) and (pointer:fine) {
+ .hero-book:hover,.hero-book:focus-visible { transform:rotate(var(--book-angle)); }
+}
