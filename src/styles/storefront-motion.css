@@ -31,3 +31,13 @@
 @media (hover:hover) and (pointer:fine) {
  .hero-book:hover,.hero-book:focus-visible { transform:rotate(var(--book-angle)); }
 }
+/* Keep genre scrolling inside the content gutters, with space for lift/focus. */
+.mood-grid { padding-top:6px; padding-bottom:10px; }
+@media (max-width:767px) {
+ .mood-grid { width:100%; max-width:100%; margin:0; padding:6px 0 12px; gap:10px; scroll-padding-inline:0; scrollbar-width:thin; scrollbar-color:var(--c-line-strong) transparent; }
+ .mood-tile,.mood-tile:last-child { flex:0 0 calc((100% - 20px)/3); width:auto; min-width:0; }
+ .mood-tile:focus-visible { outline-offset:-3px; }
+ .mood-grid::-webkit-scrollbar { height:4px; }
+ .mood-grid::-webkit-scrollbar-track { background:transparent; }
+ .mood-grid::-webkit-scrollbar-thumb { background:var(--c-line-strong); border-radius:999px; }
+}
