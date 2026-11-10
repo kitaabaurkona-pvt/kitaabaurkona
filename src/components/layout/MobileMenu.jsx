@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion } from 'motion/react';
@@ -32,6 +32,8 @@ import {
 // traps focus inside, closes on Escape or a tap outside, and returns focus to the button.
 function MobileMenu() {
   const [open, setOpen] = useState(false);
+  const pointerOpen = useRef(false);
+  const panel = useRef(null);
   const { user, isAuthenticated, role, signOut } = useAuth();
   const { count: cartCount } = useCart();
   const { count: savedCount } = useWishlist();
@@ -64,7 +66,7 @@ function MobileMenu() {
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button type="button" className="icon-button menu-button" aria-label="Open menu">
+        <button type="button" className="icon-button menu-button" aria-label="Open menu" onPointerDown={() => { pointerOpen.current = true; }} onKeyDown={() => { pointerOpen.current = false; }}>
           <MenuIcon />
         </button>
       </Dialog.Trigger>
@@ -74,9 +76,12 @@ function MobileMenu() {
             <Dialog.Overlay asChild forceMount>
               <motion.div className="drawer-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} />
             </Dialog.Overlay>
-            <Dialog.Content asChild forceMount aria-describedby={undefined}>
+            <Dialog.Content asChild forceMount aria-describedby={undefined} onOpenAutoFocus={(event) => {
+              // A touch opening should focus the dialog, not draw a ring around its X.
+              if (pointerOpen.current) { event.preventDefault(); panel.current?.focus(); }
+            }}>
               <motion.div
-                className="drawer"
+                className="drawer" ref={panel} tabIndex={-1}
                 initial={{ x: '-100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '-100%' }}
@@ -90,7 +95,7 @@ function MobileMenu() {
                     </span>
                   </Dialog.Title>
                   <Dialog.Close asChild>
-                    <button type="button" className="icon-button" aria-label="Close menu">
+                    <button type="button" className="icon-button menu-close" aria-label="Close menu">
                       <CloseIcon />
                     </button>
                   </Dialog.Close>
