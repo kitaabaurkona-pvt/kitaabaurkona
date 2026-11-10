@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import '../../styles/auth.css';
 
-function AuthShell({ title, backTo, backLabel, children }) {
+function AuthShell({ title, subtitle, backTo, backLabel, children }) {
   useEffect(() => {
     document.title = `${title} - Kitaab Aur Kona`;
   }, [title]);
@@ -17,13 +17,14 @@ function AuthShell({ title, backTo, backLabel, children }) {
           </svg>
         </Link>
         <Link to="/" className="auth-brand">
-          <img src="/images/brand/emblem-transparent.png" alt="" width="28" height="28" />
+          <img src="/images/brand/emblem-header.webp" alt="" width="28" height="28" />
           Kitaab Aur Kona
         </Link>
       </header>
       <main className="auth-main">
         <div className="auth-card">
           <h1 className="auth-title">{title}</h1>
+          {subtitle && <p className="auth-subtitle">{subtitle}</p>}
           {children}
         </div>
       </main>
