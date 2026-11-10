@@ -77,7 +77,7 @@ export async function getShippingSettings() {
   return data?.[0] ?? null;
 }
 
-const SETTING_FIELDS = ['auto_book', 'hold_minutes', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
+const SETTING_FIELDS = ['auto_book', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
 
 export async function updateShippingSettings(patch) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([key]) => SETTING_FIELDS.includes(key)));

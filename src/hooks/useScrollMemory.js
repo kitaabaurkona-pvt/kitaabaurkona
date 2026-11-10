@@ -45,22 +45,37 @@ function record(key, y) {
 
 const scrollToY = (y) => window.scrollTo({ top: y, left: 0, behavior: 'instant' });
 
+// After the position is reached it is held a little longer: something above it (a
+// banner image, a row) may still settle by a few pixels, and the browser's scroll
+// anchoring would otherwise carry the page along with it. Anchoring is paused meanwhile.
+const HOLD_MS = 400;
+const GIVE_UP_MS = 2000;
+
 function restore(y) {
   let stopped = false;
   let frame = 0;
+  let reached = null;
   const started = performance.now();
+  const root = document.documentElement;
+  const anchoring = root.style.overflowAnchor;
+  root.style.overflowAnchor = 'none';
   const inputs = ['wheel', 'touchstart', 'keydown', 'pointerdown'];
   const stop = () => {
+    if (stopped) return;
     stopped = true;
     cancelAnimationFrame(frame);
+    root.style.overflowAnchor = anchoring;
     inputs.forEach((name) => window.removeEventListener(name, stop));
   };
   inputs.forEach((name) => window.addEventListener(name, stop, { passive: true }));
   const attempt = () => {
     if (stopped) return;
-    const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-    scrollToY(Math.min(y, max));
-    if (max >= y || performance.now() - started > 2000) stop();
+    const max = Math.max(0, root.scrollHeight - window.innerHeight);
+    const target = Math.min(y, max);
+    if (Math.abs(window.scrollY - target) >= 1) scrollToY(target);
+    const now = performance.now();
+    if (reached === null && max >= y) reached = now;
+    if ((reached !== null && now - reached > HOLD_MS) || now - started > GIVE_UP_MS) stop();
     else frame = requestAnimationFrame(attempt);
   };
   attempt();

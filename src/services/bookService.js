@@ -2,6 +2,7 @@ import { supabase } from '../clients/supabase';
 import { escapeLike } from '../utils/storeForm';
 import { isUuid, unwrap } from './request';
 import { COLLECTIONS } from '../utils/categories';
+import { buildIndex, rankBooks } from '../utils/bookSearch';
 
 export const LIST_FIELDS = 'id, title, price, mrp, discount_percent, stock_quantity, image_urls';
 const DETAIL_FIELDS =
@@ -15,6 +16,8 @@ export const SORTS = {
   price_desc: { label: 'Price: high to low', column: 'price', ascending: false },
   discount: { label: 'Biggest discount', column: 'discount_percent', ascending: false },
 };
+// The default order while searching: best match first.
+export const RELEVANCE = 'relevance';
 
 export async function listBooks({
   search = '',
@@ -44,6 +47,107 @@ export async function listBooks({
       .range(from, from + pageSize - 1),
   );
   return { books: data ?? [], total: count ?? 0 };
+}
+
+// ---------------------------------------------------------------------------------
+// Search
+//
+// The whole visible catalogue (a few fields per book) is read once and ranked in the
+// browser by utils/bookSearch, which forgives typos and reads Hindi, Tamil, Urdu and
+// other scripts. Only the books on the page being shown are then loaded in full, so
+// their prices and stock are current. A search never ends on an empty page: if nothing
+// is close, it offers books in stock instead and says so.
+
+const INDEX_FIELDS = 'id, title, category, price, stock_quantity, discount_percent';
+const INDEX_TTL = 10 * 60 * 1000;
+const INDEX_CHUNK = 1000;
+const SUGGESTIONS = 12;
+let searchIndex = null;
+
+async function readIndexRows() {
+  const rows = [];
+  for (let from = 0; from < 20 * INDEX_CHUNK; from += INDEX_CHUNK) {
+    const { data } = unwrap(
+      await supabase.from('books').select(INDEX_FIELDS).eq('is_visible', true).order('id', { ascending: true }).range(from, from + INDEX_CHUNK - 1),
+    );
+    rows.push(...(data ?? []));
+    if (!data || data.length < INDEX_CHUNK) break;
+  }
+  return rows;
+}
+
+function loadSearchIndex() {
+  if (searchIndex && Date.now() - searchIndex.at < INDEX_TTL) return searchIndex.promise;
+  const promise = readIndexRows().then(buildIndex);
+  searchIndex = { at: Date.now(), promise };
+  promise.catch(() => {
+    if (searchIndex?.promise === promise) searchIndex = null;
+  });
+  return promise;
+}
+
+function sortRows(rows, sort) {
+  const order = SORTS[sort];
+  if (!order) return rows;
+  const sign = order.ascending ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = a[order.column];
+    const y = b[order.column];
+    const diff = typeof x === 'string' ? x.localeCompare(y) : Number(x ?? 0) - Number(y ?? 0);
+    return diff !== 0 ? sign * diff : String(a.id).localeCompare(String(b.id));
+  });
+}
+
+const byDiscount = (a, b) => (b.discount_percent ?? 0) - (a.discount_percent ?? 0) || String(a.title).localeCompare(String(b.title));
+
+// Returns { books, total, note, relaxed, missing }:
+//   note     - null (good matches), 'close' (nearest books only) or 'none' (nothing
+//              near; `books` are suggestions),
+//   relaxed  - the filters left nothing, so matches from the whole store are shown,
+//   missing  - languages asked for that the store has no edition in yet.
+export async function searchBooks({
+  search = '',
+  sort = RELEVANCE,
+  inStock = false,
+  category = '',
+  maxPrice = null,
+  collection = '',
+  page = 0,
+  pageSize = PAGE_SIZE,
+} = {}) {
+  const index = await loadSearchIndex();
+  const ranked = rankBooks(index, search.trim().slice(0, 100));
+  const languages = COLLECTIONS[collection]?.languages?.map((word) => word.toLowerCase());
+  const passes = (book) =>
+    (!inStock || book.stock_quantity > 0) &&
+    (!category || book.category === category) &&
+    (!(Number.isFinite(maxPrice) && maxPrice > 0) || Number(book.price) <= maxPrice) &&
+    (!languages || languages.some((word) => book.title.toLowerCase().includes(word)));
+
+  let note = ranked.quality === 'close' ? 'close' : null;
+  let relaxed = false;
+  let rows = ranked.results.map((result) => result.book);
+  if (rows.length > 0) {
+    const kept = rows.filter(passes);
+    if (kept.length > 0) rows = kept;
+    else relaxed = true;
+    if (sort !== RELEVANCE) rows = sortRows(rows, sort);
+  } else {
+    note = 'none';
+    const all = index.entries.map((entry) => entry.book).filter((book) => book.stock_quantity > 0);
+    const kept = all.filter(passes);
+    rows = (kept.length > 0 ? kept : all).sort(byDiscount).slice(0, SUGGESTIONS);
+  }
+
+  const total = rows.length;
+  const ids = rows.slice(page * pageSize, (page + 1) * pageSize).map((book) => book.id);
+  let books = [];
+  if (ids.length > 0) {
+    const { data } = unwrap(await supabase.from('books').select(LIST_FIELDS).in('id', ids).eq('is_visible', true));
+    const byId = new Map((data ?? []).map((book) => [book.id, book]));
+    books = ids.map((id) => byId.get(id)).filter(Boolean);
+  }
+  return { books, total, note, relaxed, missing: ranked.missing };
 }
 
 export async function getBook(id) {

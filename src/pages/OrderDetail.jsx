@@ -179,7 +179,7 @@ function OrderDetail() {
             </address>
           </section>
 
-          {showParcel && <ShipmentCard orderId={order.id} onMoved={retry} />}
+          {showParcel && <ShipmentCard orderId={order.id} placedAt={order.created_at} onMoved={retry} />}
         </div>
 
         <aside className="stack-sm">

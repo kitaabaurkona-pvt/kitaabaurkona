@@ -3706,3 +3706,92 @@
 .home .banner-wrap {
   margin-top: 0;
 }
+
+/* ---------- Search note (near matches, suggestions) ---------- */
+
+.search-note {
+  margin-bottom: 20px;
+}
+
+.search-note .btn-link {
+  font-size: inherit;
+}
+
+/* ---------- Delivery steps on the order page: Order placed → Shipped → Delivered ---------- */
+
+.order-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 12px 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.order-steps li {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding-top: 22px;
+  text-align: center;
+}
+
+/* The line between dots: from this dot back to the previous one. */
+.order-steps li + li::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  right: 50%;
+  left: -50%;
+  height: 2px;
+  background: var(--c-line);
+}
+
+.order-steps li[data-state='done']::after,
+.order-steps li[data-state='current']::after {
+  background: var(--c-ink);
+}
+
+.order-step-dot {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--c-line-strong);
+  border-radius: 50%;
+  background: var(--c-surface);
+  transform: translateX(-50%);
+}
+
+.order-steps li[data-state='done'] .order-step-dot,
+.order-steps li[data-state='current'] .order-step-dot {
+  border-color: var(--c-ink);
+  background: var(--c-ink);
+}
+
+.order-steps li[data-state='current'] .order-step-dot {
+  box-shadow: 0 0 0 4px var(--c-gold-wash);
+}
+
+.order-step-label {
+  color: var(--c-muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.order-steps li[data-state='done'] .order-step-label,
+.order-steps li[data-state='current'] .order-step-label {
+  color: var(--c-ink);
+}
+
+.order-step-detail {
+  color: var(--c-muted);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.order-steps + .notice {
+  margin-bottom: 12px;
+}

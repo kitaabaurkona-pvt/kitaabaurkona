@@ -1,7 +1,7 @@
 // Database checks for cash on delivery and shipping, run on the real supabase/schema.sql
 // in PGlite (no network writes). Run: node e2e/shipping-db.mjs
 //
-// Covers: COD orders and stock, the parcel queue and its hold time, who may read and
+// Covers: COD orders and stock, the parcel queue (booked at once), who may read and
 // write what (customer, other customer, visitor, admin, service role), booking, retries,
 // cancellations before and after booking, tracking moving orders along, rate limits.
 
@@ -59,6 +59,14 @@ try {
   check('schema.sql runs a second time without errors', rerun === null, rerun);
 
   // ---------- Cash on delivery ----------
+  // Stand-in for the job runner from shipping_cron.sql, which in production asks the
+  // shipping function to book due parcels. It notes each call; a second variant fails.
+  await db.exec(`
+    create table public.job_calls (job text, at timestamptz default now());
+    create function public.shipping_run_job(p_job text) returns bigint language plpgsql security definer set search_path = '' as $$
+    begin insert into public.job_calls (job) values (p_job); return 1; end $$;
+    revoke execute on function public.shipping_run_job(text) from public, anon, authenticated, service_role;
+  `);
   const [b1, b2, b3] = inStock;
   const before = await stockOf(b1.id);
   const o1 = await placeCod(b1.id, 2);
@@ -66,9 +74,22 @@ try {
   check('COD order is confirmed at once', order1.status === 'confirmed' && order1.payment_method === 'cod', JSON.stringify(order1));
   check('COD takes the books out of stock immediately', (await stockOf(b1.id)) === before - 2);
   const s1 = await shipmentOf(o1);
-  const holdMin = (new Date(s1.book_after) - Date.now()) / 60000;
   check('a parcel is queued for the order', s1 && s1.status === 'queued');
-  check('booking waits about 30 minutes', holdMin > 29 && holdMin <= 30.1, holdMin);
+  check('the parcel is due for booking at once (no waiting time)', new Date(s1.book_after) <= new Date(), s1.book_after);
+  check('placing the order wakes the booking worker', (await one(`select count(*)::int as n from public.job_calls where job = 'book_due'`)).n === 1);
+  check('the old waiting-time setting is gone', !(await one(`select 1 as x from information_schema.columns where table_name = 'shipping_settings' and column_name = 'hold_minutes'`)));
+  await db.exec(`create or replace function public.shipping_run_job(p_job text) returns bigint language plpgsql security definer set search_path = '' as $$ begin raise exception 'vault secrets missing'; end $$;`);
+  let extra = null;
+  let stillPlaced = null;
+  try {
+    extra = await placeCod(b3.id, 1);
+  } catch (e) {
+    stillPlaced = e.message;
+  }
+  check('an order still goes through when the worker cannot be woken (the 5-minute round books it)', extra && stillPlaced === null, stillPlaced);
+  // Not part of the checks below: cancel it, which drops its unbooked parcel.
+  if (extra) await as(READER, `select public.cancel_order($1)`, [extra]);
+  await db.exec(`drop function public.shipping_run_job(text); drop table public.job_calls;`);
   check('the queueing is logged', Boolean(await one(`select 1 from public.shipment_events where order_id = $1 and action = 'queued'`, [o1])));
 
   const tooMany = await fails(READER, `select public.create_order($1::jsonb, $2::jsonb, 'cod')`, [JSON.stringify([{ book_id: b1.id, quantity: 999 }]), JSON.stringify(SHIP)]);
@@ -111,7 +132,6 @@ try {
   check('settings refuse an invalid PIN code', badSetting !== null);
 
   // ---------- Worker: claiming ----------
-  await db.query(`update public.shipments set book_after = now() - interval '1 minute' where id = $1`, [s1.id]);
   const noWarehouse = (await as(SERVICE, `select * from public.claim_due_shipments(10)`)).rows;
   check('nothing is booked until the warehouse name is set', noWarehouse.length === 0);
   check('Book now explains the missing warehouse', /warehouse/i.test((await fails(SERVICE, `select * from public.claim_shipment($1)`, [s1.id])) ?? ''));
@@ -120,7 +140,7 @@ try {
   check('automatic booking off: nothing is claimed', (await as(SERVICE, `select * from public.claim_due_shipments(10)`)).rows.length === 0);
   await as(ADMIN, `update public.shipping_settings set auto_book = true`);
   const claimed = (await as(SERVICE, `select * from public.claim_due_shipments(10)`)).rows;
-  check('due parcels are claimed once the hold time has passed', claimed.length === 1 && claimed[0].status === 'booking' && claimed[0].attempts === 1, JSON.stringify(claimed.map((c) => c.status)));
+  check('due parcels are claimed straight away', claimed.length === 1 && claimed[0].status === 'booking' && claimed[0].attempts === 1, JSON.stringify(claimed.map((c) => c.status)));
   check('a claimed parcel is not claimed twice', (await as(SERVICE, `select * from public.claim_due_shipments(10)`)).rows.length === 0);
   const data = (await as(SERVICE, `select public.shipment_booking_data($1) as d`, [s1.id])).rows[0].d;
   check('booking data comes from the database (order, items with weight, settings)', data.order.pincode === '313001' && data.items[0].weight_kg !== undefined && data.settings.warehouse_name === 'Kitaabaurkona Udaipur');

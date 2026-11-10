@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { ADMIN_SHIPMENT_LABELS, bookNow, bookReturnPickup, cancelShipment, getRates, setCourier } from '../../services/shippingService';
 import { formatPrice } from '../../utils/format';
 
-const time = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-
 // One order's parcel(s) for the admin: state, courier, AWB, cost, label, and the actions
 // that make sense right now. Every action runs in the shipping Edge Function.
 function ParcelPanel({ order, onChanged }) {
@@ -68,7 +66,7 @@ function ParcelPanel({ order, onChanged }) {
               s.courier_name,
               s.awb_number && `AWB ${s.awb_number}`,
               s.total_charges != null && `Courier cost ${formatPrice(s.total_charges)}`,
-              s.status === 'queued' && `Books automatically after ${time.format(new Date(s.book_after))} (if automatic booking is on)`,
+              s.status === 'queued' && 'Waiting to be booked (books within a few minutes while automatic booking is on)',
             ]
               .filter(Boolean)
               .join(' · ')}

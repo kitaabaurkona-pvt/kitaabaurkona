@@ -29,7 +29,7 @@ export function formatDate(value) {
 
 export const ORDER_STATUS_LABELS = {
   pending_payment: 'Awaiting payment',
-  confirmed: 'Confirmed',
+  confirmed: 'Order placed',
   paid: 'Paid',
   shipped: 'Shipped',
   delivered: 'Delivered',

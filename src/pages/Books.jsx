@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
-import { listBooks, listCategories, SORTS } from '../services/bookService';
+import { listBooks, listCategories, RELEVANCE, searchBooks, SORTS } from '../services/bookService';
 import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { formatPrice, plural } from '../utils/format';
@@ -20,12 +20,36 @@ function keepMore(entry) {
   while (morePages.size > 20) morePages.delete(morePages.keys().next().value);
 }
 
+// Names the languages a shopper asked for that the store has no edition in yet.
+const LANGUAGE_NAMES = {
+  hindi: 'Hindi', bengali: 'Bengali', tamil: 'Tamil', malayalam: 'Malayalam', marathi: 'Marathi', gujarati: 'Gujarati',
+  telugu: 'Telugu', kannada: 'Kannada', punjabi: 'Punjabi', urdu: 'Urdu', odia: 'Odia', english: 'English',
+};
+function listNames(names) {
+  const shown = names.map((name) => LANGUAGE_NAMES[name] ?? name);
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} or ${shown.at(-1)}` : shown[0];
+}
+
+// What to say above the results when they are not plain matches.
+function searchNote(data, q, describe) {
+  if (!data || !q) return null;
+  const parts = [];
+  if (data.missing?.length) parts.push(`We don't have ${listNames(data.missing)} editions yet.`);
+  if (data.note === 'none') parts.push(`Nothing in the store matches “${q}”. Here are some books in stock.`);
+  else if (data.note === 'close') parts.push(`No exact match for “${q}”. These are the closest.`);
+  if (data.relaxed) parts.push(`None of the matches are in ${describe.join(' · ') || 'these filters'}, so here are matches from all books.`);
+  return parts.length ? parts.join(' ') : null;
+}
+
 function Books() {
   useDocumentTitle('Books');
   const location = useLocation();
   const [params, setParams] = useSearchParams();
   const q = (params.get('q') ?? '').slice(0, 100);
-  const sort = SORTS[params.get('sort')] ? params.get('sort') : 'title';
+  // While searching, the best matches come first unless another order is picked.
+  const defaultSort = q ? RELEVANCE : 'title';
+  const sortParam = params.get('sort');
+  const sort = SORTS[sortParam] || (q && sortParam === RELEVANCE) ? sortParam : defaultSort;
   const inStock = params.get('stock') === '1';
   const category = params.get('category') ?? '';
   // Only known values are honoured, so a hand-edited URL cannot build other filters.
@@ -67,7 +91,8 @@ function Books() {
     return () => clearTimeout(timer);
   }, [term, q, setParams]);
 
-  const first = useAsync(() => listBooks({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey], { key: `books:${filterKey}` });
+  const find = q ? searchBooks : listBooks;
+  const first = useAsync(() => find({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey], { key: `books:${filterKey}` });
   const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
 
   const [more, setMore] = useState(() => morePages.get(filterKey) ?? { key: '', books: [], page: 0 });
@@ -83,7 +108,7 @@ function Books() {
     const key = filterKey;
     setMoreState({ loading: true, error: false });
     try {
-      const next = await listBooks({ search: q, sort, inStock, category, maxPrice, collection, page: extra.page + 1 });
+      const next = await find({ search: q, sort, inStock, category, maxPrice, collection, page: extra.page + 1 });
       if (keyRef.current !== key) return;
       const grown = { key, books: [...extra.books, ...next.books], page: extra.page + 1 };
       keepMore(grown);
@@ -102,16 +127,18 @@ function Books() {
     maxPrice ? `up to ${formatPrice(maxPrice)}` : '',
     collection ? COLLECTIONS[collection].label.toLowerCase() : '',
   ].filter(Boolean);
+  const note = searchNote(first.data, q, describe);
+  const suggestions = first.data?.note === 'none';
 
   return (
     <div className="container page">
       <div className="page-head">
         <h1 className="page-title">Books</h1>
-        {first.data && (
+        {first.data && !suggestions && (
           <p className="page-meta" aria-live="polite">
             {plural(total, 'book')}
-            {describe.length > 0 ? ` · ${describe.join(' · ')}` : ''}
-            {q ? ` matching “${q}”` : ''}
+            {describe.length > 0 && !first.data.relaxed ? ` · ${describe.join(' · ')}` : ''}
+            {q ? ` for “${q}”` : ''}
           </p>
         )}
       </div>
@@ -119,14 +146,14 @@ function Books() {
       <div className="toolbar">
         <form className="search-form" role="search" onSubmit={(event) => event.preventDefault()}>
           <label htmlFor="books-search" className="visually-hidden">
-            Search books by title
+            Search books
           </label>
           <input
             id="books-search"
             ref={inputRef}
             className="input"
             type="search"
-            placeholder="Search books by title"
+            placeholder="Search by title, author or language"
             maxLength={100}
             value={term}
             onChange={(event) => setTerm(event.target.value)}
@@ -140,8 +167,9 @@ function Books() {
             id="books-sort"
             className="select"
             value={sort}
-            onChange={(event) => update({ sort: event.target.value === 'title' ? null : event.target.value })}
+            onChange={(event) => update({ sort: event.target.value === defaultSort ? null : event.target.value })}
           >
+            {q && <option value={RELEVANCE}>Best match</option>}
             {Object.entries(SORTS).map(([value, { label }]) => (
               <option key={value} value={value}>
                 {label}
@@ -195,6 +223,19 @@ function Books() {
       )}
 
       <div className="results">
+        {note && !first.loading && (
+          <p className="notice search-note" role="status">
+            {note}
+            {first.data.relaxed && (
+              <>
+                {' '}
+                <button type="button" className="btn-link" onClick={() => update({ stock: null, max: null, collection: null, category: null })}>
+                  Clear filters
+                </button>
+              </>
+            )}
+          </p>
+        )}
         {first.loading && <BookGridSkeleton />}
         {first.error && <LoadError onRetry={first.retry} what="books" />}
         {first.data && books.length === 0 && (

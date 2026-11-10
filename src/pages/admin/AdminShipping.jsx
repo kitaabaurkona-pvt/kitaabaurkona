@@ -43,7 +43,7 @@ function SettingsForm({ initial }) {
     setSaving(true);
     setError(null);
     try {
-      const saved = await updateShippingSettings({ ...form, hold_minutes: Number(form.hold_minutes) });
+      const saved = await updateShippingSettings(form);
       if (saved) setForm(saved);
       show({ message: 'Shipping settings saved' });
     } catch (err) {
@@ -62,12 +62,6 @@ function SettingsForm({ initial }) {
       <div className="switch-row switch-row-flush">
         <span id="auto-book-label">Book parcels automatically</span>
         <button type="button" role="switch" className="switch" aria-checked={form.auto_book} aria-labelledby="auto-book-label" onClick={() => set('auto_book', !form.auto_book)} />
-      </div>
-      <div>
-        <label className="label" htmlFor="hold-minutes">
-          Wait before booking (minutes; the customer can cancel for free until then)
-        </label>
-        <input id="hold-minutes" className="input" type="number" min="0" max="1440" value={form.hold_minutes} onChange={(e) => set('hold_minutes', e.target.value)} />
       </div>
       {!form.warehouse_name && <p className="notice" data-tone="error">Nothing is booked until the warehouse name is filled in.</p>}
       <div className="form-grid form-grid-2">

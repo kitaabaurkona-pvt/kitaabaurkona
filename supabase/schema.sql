@@ -582,13 +582,12 @@ grant select on public.order_items to authenticated;
 -- tables: admins read them, customers see their own parcel through
 -- get_my_shipments(), and the function changes them through the service role.
 
--- One row of settings: the automatic booking switch, how long a new order waits before
--- it is booked (so a customer can still cancel for free), and the pickup warehouse as
--- registered in the Xpressbees panel. Returns go back to the same address.
+-- One row of settings: the automatic booking switch and the pickup warehouse as
+-- registered in the Xpressbees panel. Returns go back to the same address. A new order
+-- is booked straight away; the customer can still cancel until the courier picks it up.
 create table if not exists public.shipping_settings (
   id boolean primary key default true check (id),
   auto_book boolean not null default true,
-  hold_minutes integer not null default 30 check (hold_minutes between 0 and 1440),
   warehouse_name text not null default '' check (char_length(warehouse_name) <= 100),
   pickup_name text not null default 'Kitaabaurkona' check (char_length(pickup_name) between 2 and 80),
   pickup_address text not null default '59 Nakoda Nagar, Hiran Magri Sector 3'
@@ -601,6 +600,8 @@ create table if not exists public.shipping_settings (
 );
 
 insert into public.shipping_settings (id) values (true) on conflict (id) do nothing;
+-- The old wait before booking is gone: orders are booked as soon as they are placed.
+alter table public.shipping_settings drop column if exists hold_minutes;
 
 drop trigger if exists shipping_settings_set_updated_at on public.shipping_settings;
 create trigger shipping_settings_set_updated_at
@@ -1006,9 +1007,9 @@ as $$
   values (p_shipment, p_order, p_actor, left(p_action, 40), left(p_detail, 300));
 $$;
 
--- When an order is confirmed (cash on delivery) or marked paid, queue its parcel to be
--- booked after the hold time. When it is cancelled, drop a parcel not booked yet, or ask
--- the worker to cancel one that is booked.
+-- When an order is confirmed (cash on delivery) or marked paid, queue its parcel and ask
+-- the worker to book it now. When it is cancelled, drop a parcel not booked yet, or ask
+-- the worker to cancel one that is booked (possible until the courier picks it up).
 create or replace function public.orders_shipping_sync()
 returns trigger
 language plpgsql
@@ -1016,7 +1017,6 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_hold integer;
   v_shipment uuid;
 begin
   if new.status in ('confirmed', 'paid')
@@ -1025,11 +1025,20 @@ begin
        select 1 from public.shipments
        where order_id = new.id and kind = 'forward' and status <> 'cancelled'
      ) then
-    select hold_minutes into v_hold from public.shipping_settings where id;
     insert into public.shipments (order_id, kind, status, book_after)
-    values (new.id, 'forward', 'queued', now() + make_interval(mins => coalesce(v_hold, 30)))
+    values (new.id, 'forward', 'queued', now())
     returning id into v_shipment;
-    perform public.log_shipment_event(v_shipment, new.id, null, 'queued', 'Waiting ' || coalesce(v_hold, 30) || ' min before booking');
+    perform public.log_shipment_event(v_shipment, new.id, null, 'queued', 'Booking now');
+    -- Wake the booking worker now instead of at its next 5-minute round. The request is
+    -- sent only once this order is saved (pg_net sends after commit). Where the jobs are
+    -- not set up (shipping_cron.sql), or the call cannot be queued, the round books it.
+    begin
+      if to_regprocedure('public.shipping_run_job(text)') is not null then
+        execute 'select public.shipping_run_job($1)' using 'book_due';
+      end if;
+    exception when others then
+      null;
+    end;
   elsif tg_op = 'UPDATE' and new.status = 'cancelled' and old.status <> 'cancelled' then
     update public.shipments
     set status = case when status in ('booking', 'booked') then 'cancel_requested' else 'cancelled' end
@@ -1078,7 +1087,7 @@ begin
 end;
 $$;
 
--- An admin's "Book now" / "Retry": takes one parcel whatever the switch or hold time says.
+-- An admin's "Book now" / "Retry": takes one parcel whatever the switch says.
 create or replace function public.claim_shipment(p_shipment uuid)
 returns setof public.shipments
 language plpgsql

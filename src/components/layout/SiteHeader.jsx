@@ -106,13 +106,13 @@ function SiteHeader() {
 
         <form className="header-search" role="search" onSubmit={handleSearch}>
           <label htmlFor="header-search" className="visually-hidden">
-            Search books by title
+            Search books
           </label>
           <SearchIcon size={20} />
           <input
             id="header-search"
             type="search"
-            placeholder="Search books by title"
+            placeholder="Search by title, author or language"
             maxLength={100}
             value={term}
             onChange={(event) => setTerm(event.target.value)}

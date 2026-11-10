@@ -231,10 +231,15 @@ try {
 
     // ---------- Add to cart: + count − stepper, cover flies to the cart ----------
     // The first card a visitor sees (the row's off-screen copies are inert); hovering it pauses the row.
+    // Pause the row first (hover), let any slide in progress finish, then pick the card,
+    // so autoplay cannot move it away between picking and clicking.
+    const dealsRow = await page.$('[aria-labelledby="deals-heading"] .carousel');
+    await dealsRow.evaluate((c) => c.scrollIntoView({ block: 'center' }));
+    await sleep(300);
+    await dealsRow.hover();
+    await sleep(900);
     const firstCard = await page.$('[aria-labelledby="deals-heading"] .carousel-slide:not([data-copy]):not([aria-hidden="true"]) .book-card');
     const price = await firstCard.$eval('.price', (e) => e.textContent.trim());
-    await firstCard.evaluate((c) => c.scrollIntoView({ block: 'center' }));
-    await sleep(300);
     await firstCard.hover();
     await sleep(200);
     const before = await firstCard.$eval('.btn-card', (b) => Math.round(b.getBoundingClientRect().height));
@@ -367,6 +372,79 @@ try {
     await page.waitForFunction((y) => Math.abs(window.scrollY - y) <= 2, { timeout: 3000 }, beforeCart).catch(() => {});
     check('cart page: Continue shopping goes back to the same spot', new URL(page.url()).pathname === '/' && Math.abs((await page.evaluate(() => window.scrollY)) - beforeCart) <= 2, `${await page.evaluate(() => window.scrollY)} vs ${beforeCart}`);
     check('flow: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  // ---------- Search: any spelling, any script, never an empty page ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    let catalogue = 0;
+    page.on('request', (r) => {
+      const u = new URL(r.url());
+      if (u.hostname.endsWith('.supabase.co') && u.pathname.startsWith('/rest/v1/books') && r.method() !== 'OPTIONS') catalogue += 1;
+    });
+    const settle = () => page.waitForNetworkIdle({ idleTime: 300, timeout: 8000 }).catch(() => {});
+    const titles = () => page.$$eval('.book-grid .book-card-title', (es) => es.map((e) => e.textContent.trim()));
+    const search = async (q) => {
+      await goto(page, `/books?q=${encodeURIComponent(q)}`);
+      await waitSel(page, '.book-grid .book-card');
+      return titles();
+    };
+    const cases = [
+      ['atomik habbits', /^Atomic Habits/],
+      ['एटॉमिक हैबिट्स', /Atomic Habits/],
+      ['अमीर पिता गरीब पिता', /Rich Dad Poor Dad/],
+      ['रॉबिन शर्मा', /Robin Sharma/],
+      ['ایٹامک ہیبٹس', /Atomic Habits/],
+      ['psycology of mony', /Psychology of Money/i],
+      ['harrypotter', /Harry Potter/],
+      ['hector garcia', /Héctor García/],
+    ];
+    for (const [q, want] of cases) {
+      const found = await search(q);
+      check(`search: "${q}" puts the right book first`, found.length > 0 && want.test(found[0]), found.slice(0, 2).join(' / '));
+    }
+    const tamil = await search('தமிழ்');
+    check('search: Tamil in its own script finds only Tamil editions', tamil.length > 0 && tamil.every((t) => /tamil/i.test(t)), tamil.join(' / '));
+    check('search: results are ordered by Best match', (await page.$eval('#books-sort', (s) => s.value)) === 'relevance');
+    check('search: no empty-state block for a search', (await page.$('.state')) === null);
+
+    const nothing = await search('qwertyzxcv');
+    const nothingNote = await text(page, '.search-note');
+    check('search: gibberish still shows books, with an honest note', nothing.length > 0 && /Nothing in the store matches/.test(nothingNote ?? ''), nothingNote);
+    check('search: the suggestions are in stock', (await page.$$eval('.book-grid .book-card .btn-card', (bs) => bs.every((b) => !b.hasAttribute('aria-disabled')))) === true);
+    const hindi = await search('hindi books');
+    const hindiNote = await text(page, '.search-note');
+    check('search: a language the store lacks is said plainly', hindi.length > 0 && /don't have Hindi editions yet/.test(hindiNote ?? ''), hindiNote);
+
+    await goto(page, `/books?q=${encodeURIComponent('harry potter')}&category=Romance`);
+    await waitSel(page, '.book-grid .book-card');
+    const relaxed = await titles();
+    check('search: filters that leave nothing fall back to all matches', relaxed.length > 0 && relaxed.every((t) => /Harry Potter/.test(t)) && /None of the matches/.test((await text(page, '.search-note')) ?? ''), relaxed.slice(0, 2).join(' / '));
+    await page.$eval('.search-note .btn-link', (b) => b.click());
+    await page.waitForFunction(() => !new URL(location.href).searchParams.has('category'), { timeout: 4000 }).catch(() => {});
+    check('search: Clear filters keeps the search', new URL(page.url()).searchParams.get('q') === 'harry potter' && !new URL(page.url()).searchParams.has('category'));
+
+    // Typing in the box searches as you go, from the catalogue already in memory.
+    await settle();
+    const before = catalogue;
+    await page.focus('#books-search');
+    await page.keyboard.down('Control');
+    await page.keyboard.press('KeyA');
+    await page.keyboard.up('Control');
+    await page.keyboard.press('Backspace');
+    await page.type('#books-search', 'murakmi');
+    await page.waitForFunction(() => [...document.querySelectorAll('.book-grid .book-card-title')].some((e) => /Murakami/.test(e.textContent)), { timeout: 5000 }).catch(() => {});
+    const typed = await titles();
+    check('search: typing "murakmi" finds Murakami', typed.length > 0 && typed.every((t) => /Murakami/.test(t)), typed.slice(0, 2).join(' / '));
+    await settle();
+    check('search: a new query reads only the page of books, not the catalogue again', catalogue - before === 1, `${catalogue - before} requests`);
+    await page.select('#books-sort', 'price_asc');
+    await page.waitForFunction(() => new URL(location.href).searchParams.get('sort') === 'price_asc', { timeout: 4000 }).catch(() => {});
+    await settle();
+    const prices = await page.$$eval('.book-grid .book-card .price-block .price', (es) => es.map((e) => Number(e.textContent.replace(/[^\d.]/g, ''))).filter(Boolean));
+    check('search: sorting the matches by price works', prices.length > 1 && prices.every((p, i) => i === 0 || p >= prices[i - 1]), prices.join(','));
+    check('search: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
@@ -634,8 +712,8 @@ try {
     check('order page: "pay in cash when it arrives" notice', await page.waitForFunction(() => /Pay in cash when it arrives/i.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
     const placedId = new URL(page.url()).pathname.split('/').pop();
     check('order: saved as a confirmed cash on delivery order', (await one(`select status, payment_method from public.orders where id = $1`, [placedId]))?.status === 'confirmed');
-    check('order page: shows the order as Confirmed', (await text(page, '.page-head .status')) === 'Confirmed');
-    check('order page: the parcel is being prepared', await page.waitForFunction(() => /Preparing to ship/i.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
+    check('order page: shows the order as Order placed', (await text(page, '.page-head .status')) === 'Order placed');
+    check('order page: delivery steps show Order placed as the current step', await page.waitForFunction(() => document.querySelector('.order-steps li[aria-current="step"] .order-step-label')?.textContent === 'Order placed' && /Tracking appears here once the courier picks up/.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
     check('order page: the customer can still cancel before pickup', /Cancel order/i.test(await page.$eval('main', (m) => m.innerText)));
     check('order: cart emptied after ordering', await gone(page, '.cart-count', 4000));
     await page.screenshot({ path: path.join(SHOTS, 'order-light-1280.png'), fullPage: true });
@@ -725,7 +803,7 @@ try {
     await reader.page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
     const placed = await one(`select id from public.orders where payment_method = 'cod' order by created_at desc limit 1`);
     await goto(reader.page, `/orders/${placed.id}`);
-    check('customer: tracking shows the courier and AWB', await reader.page.waitForFunction(() => /Tracking number/i.test(document.body.innerText) && /On the way/i.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('customer: once picked up, Shipped is the current step with courier and AWB', await reader.page.waitForFunction(() => /Tracking number/i.test(document.body.innerText) && document.querySelector('.order-steps li[aria-current="step"] .order-step-label')?.textContent === 'Shipped', { timeout: 8000 }).then(() => true).catch(() => false));
     check('customer: picked up, so the order is Shipped', (await one(`select status from public.orders where id = $1`, [placed.id])).status === 'shipped');
     check('customer: the page updates the order to Shipped by itself', await reader.page.waitForFunction(() => document.querySelector('.page-head .status')?.textContent.trim() === 'Shipped', { timeout: 6000 }).then(() => true).catch(() => false));
     check('customer: no Cancel button once the parcel has left', !/Cancel order/i.test(await reader.page.$eval('main', (m) => m.innerText)));
