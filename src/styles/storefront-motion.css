@@ -1,4 +1,4 @@
-/* Motion timings: short feedback, slower entrances. No idle or looping animation. */
+/* Motion timings for feedback and entrances. */
 .cart-icon-motion { display:inline-flex; align-items:center; justify-content:center; }
 .btn { transition:transform .16s ease,background-color .16s ease,border-color .16s ease; }
 .btn:active:not(:disabled):not([aria-disabled='true']) { transform:scale(.97); }
@@ -40,6 +40,17 @@
  @media (hover:hover) and (pointer:fine) {
   :root:not([data-motion='reduce']) .hero-book:hover:not(:active) img { transform:translateY(-8px) rotate(calc(-1 * var(--book-angle))); }
  }
+}
+@media (max-width:767px) and (hover:none) and (prefers-reduced-motion:no-preference) {
+ :root:not([data-motion='reduce']) .hero-book:not(:active,:focus-visible) img {
+  animation:hero-cover-float 5s ease-in-out var(--float-delay,0s) infinite;
+ }
+ .hero-book-2 { --float-delay:-1.7s; }
+ .hero-book-3 { --float-delay:-3.3s; }
+}
+@keyframes hero-cover-float {
+ 0%,100% { transform:translateY(0); }
+ 50% { transform:translateY(-6px); }
 }
 /* Keep genre scrolling inside the content gutters, with space for lift/focus. */
 .mood-grid { padding-top:6px; padding-bottom:10px; }
@@ -85,7 +96,6 @@
 .site-header { --header-surface:#080808; --header-search:#181818; --header-line:#46433a; background:var(--header-surface); border-bottom:1px solid var(--header-line); }
 :root[data-theme='light'] .site-header { --header-surface:#fff1bd; --header-search:#fffaf0; --header-line:#bda96e; }
 .site-header { background-image:linear-gradient(110deg,#ffcf2414,transparent 52%); }
-.site-header::after { content:''; display:block; height:2px; background:linear-gradient(90deg,var(--c-gold) 0%,#dba83a 28%,transparent 85%); }
 .site-header .brand-word { color:var(--c-gold-deep); }
 .site-header .header-nav { background:transparent; }
 .site-header .header-nav-row { border-bottom:0; }
