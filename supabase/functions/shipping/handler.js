@@ -31,6 +31,10 @@ class AppError extends Error {
 }
 
 const TRACKABLE = ['booked', 'in_transit', 'out_for_delivery', 'exception'];
+// Couriers tried, cheapest first, when Xpressbees refuses one for a courier-specific reason.
+const COURIER_TRIES = 3;
+// Refusals that no other courier would get past.
+const ACCOUNT_WIDE = /wallet|balance|recharge|insufficient|duplicate|already (exist|been|booked|placed|used)|unauthori[sz]ed|suspend|block|kyc|inactive account|warehouse/i;
 const RECORDABLE = ['booked', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto', 'cancelled'];
 
 // Compares secrets without leaking their length or content through timing.
@@ -85,6 +89,38 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
 
   // ---------- Shared work ----------
 
+  // Books with the cheapest courier; if Xpressbees refuses that courier for a reason of
+  // its own (not available on this route or account, a courier-specific rule), the next
+  // cheapest is tried at once, up to COURIER_TRIES. Account-wide refusals (wallet
+  // balance, duplicate order number, the account itself) stop straight away, since
+  // another courier would be refused the same way. A courier the admin picked is the
+  // only one tried.
+  async function bookWithCouriers(shipment, data, pkg, options) {
+    const candidates = shipment.courier_chosen_by_admin
+      ? [chooseCourier(options, shipment.courier_id)].filter(Boolean)
+      : listCouriers(options).slice(0, COURIER_TRIES);
+    const refusals = [];
+    for (const courier of candidates) {
+      try {
+        const answer = await xb().book(bookingPayload(data, pkg, courier));
+        if (refusals.length) {
+          log.warn(JSON.stringify({ event: 'booked_with_next_courier', shipment: shipment.id, courier: courier.name, refused: refusals.map((r) => r.courier) }));
+        }
+        return { answer, courier, refusals };
+      } catch (e) {
+        if (!(e instanceof XpressbeesError) || e.retryable || ACCOUNT_WIDE.test(`${e.reason} ${e.message}`)) throw e;
+        refusals.push({ courier: courier.name, status: e.status, reason: e.reason || 'Xpressbees gave no reason' });
+      }
+    }
+    // Every courier tried was refused: one message naming each, shortest wording first.
+    const same = new Set(refusals.map((r) => `${r.status}|${r.reason}`)).size === 1;
+    const code = (r) => (r.status && r.status !== 200 ? `HTTP ${r.status}, ` : '');
+    const message = same
+      ? `Booking refused (${code(refusals[0])}${refusals.map((r) => r.courier).join(', ')}): ${refusals[0].reason}`
+      : `Booking refused: ${refusals.map((r) => `${r.courier} (${code(r)}${r.reason})`).join(' · ')}`;
+    throw new XpressbeesError(message.slice(0, 300), { status: refusals[0]?.status ?? 0, reason: refusals[0]?.reason ?? '' });
+  }
+
   async function bookOne(shipment, actor = null) {
     try {
       const data = await rpc('shipment_booking_data', { p_shipment: shipment.id });
@@ -100,21 +136,44 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         order_amount: data.order.subtotal,
         ...pkg,
       });
-      const courier = chooseCourier(options, shipment.courier_chosen_by_admin ? shipment.courier_id : null);
-      if (!courier) {
+      if (!chooseCourier(options, shipment.courier_chosen_by_admin ? shipment.courier_id : null)) {
         await rpc('record_booking_failure', {
           p_shipment: shipment.id,
-          p_error: `No Xpressbees courier delivers this parcel to PIN ${data.order.pincode}`,
+          p_error: shipment.courier_chosen_by_admin
+            ? `The courier chosen for this parcel no longer delivers to PIN ${data.order.pincode}; choose another`
+            : `No Xpressbees courier delivers this parcel to PIN ${data.order.pincode}`,
           p_retry: false,
           p_actor: actor,
         });
         return { ok: false, reason: 'not_serviceable' };
       }
-      const answer = await xb().book(bookingPayload(data, pkg, courier));
+      const { answer, courier, refusals } = await bookWithCouriers(shipment, data, pkg, options);
+      for (const r of refusals) {
+        await rpc('log_shipment_event', {
+          p_shipment: shipment.id,
+          p_order: shipment.order_id,
+          p_actor: actor,
+          p_action: 'courier_refused',
+          p_detail: `${r.courier}: ${r.status && r.status !== 200 ? `HTTP ${r.status}, ` : ''}${r.reason}`.slice(0, 300),
+        });
+      }
       const record = bookingRecord(answer, pkg, courier);
       if (!record) {
         await rpc('record_booking_failure', { p_shipment: shipment.id, p_error: 'Xpressbees answered without an AWB number', p_retry: false, p_actor: actor });
         return { ok: false, reason: 'bad_answer' };
+      }
+      // Label and manifest links are kept only from Xpressbees' file host. When one is set
+      // aside (or missing), say so, with the host only, so the allowed host can be checked.
+      for (const [field, kept] of [['label', record.label_url], ['manifest', record.manifest_url]]) {
+        if (kept) continue;
+        const value = answer?.[field];
+        let host = null;
+        try {
+          host = typeof value === 'string' && value ? new URL(value).host : null;
+        } catch {
+          host = 'not a link';
+        }
+        log.warn(JSON.stringify({ event: host ? 'file_link_set_aside' : 'file_link_missing', shipment: shipment.id, field, host }));
       }
       try {
         await rpc('record_booking', { p_shipment: shipment.id, p: { ...record, actor } });
@@ -122,6 +181,16 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         // Booked with Xpressbees but not saved: keep the AWB in the logs so it can be recovered.
         log.error(JSON.stringify({ event: 'booked_not_saved', shipment: shipment.id, awb: record.awb_number }));
         throw e;
+      }
+      // The customer cancelled while this booking was in flight: cancel it with
+      // Xpressbees now (the background job would otherwise do it on its next run).
+      const now_ = (await select(db.from('shipments').select('*').eq('id', shipment.id).limit(1)))[0];
+      if (now_?.status === 'cancel_requested') {
+        try {
+          await cancelWithXpressbees(now_, actor);
+        } catch (e) {
+          if (!(e instanceof XpressbeesError)) throw e;
+        }
       }
       return { ok: true, awb: record.awb_number };
     } catch (e) {
@@ -143,6 +212,8 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
 
   async function refreshTracking(shipment) {
     const data = await xb().track(shipment.awb_number);
+    // No tracking events yet (just booked): nothing to change.
+    if (!data) return shipment.status;
     const mapped = mapStatus(data?.status) ?? (RECORDABLE.includes(shipment.status) ? shipment.status : null);
     if (!mapped) return shipment.status;
     await rpc('record_tracking', {

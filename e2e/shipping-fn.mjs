@@ -54,6 +54,10 @@ const xbServer = http.createServer(async (req, res) => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(value));
   };
+  const sendHtml = (status, html) => {
+    res.writeHead(status, { 'content-type': 'text/html' });
+    res.end(html);
+  };
   const p = new URL(req.url, 'http://x').pathname;
   XB.calls.push(p);
   if (XB.mode.slow) await sleep(600);
@@ -74,6 +78,12 @@ const xbServer = http.createServer(async (req, res) => {
   if (p === '/api/shipments2') {
     XB.books.push(json);
     if (XB.mode.duplicate) return send(400, { status: false, message: 'Order number already exists' });
+    // The refusal shapes seen from Xpressbees-style APIs.
+    if (XB.mode.refuse?.has(json.courier_id)) return send(404, { status: false, message: '' });
+    if (XB.mode.htmlNotFound) return sendHtml(404, '<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1></body></html>');
+    if (XB.mode.badWarehouse) return send(422, { message: 'The given data was invalid.', errors: { 'pickup.warehouse_name': ['The selected pickup.warehouse_name is invalid.'] } });
+    if (XB.mode.wallet) return send(200, { status: false, message: 'Wallet balance is low.' });
+    if (XB.mode.echoPhone) return send(400, { status: false, error: `Invalid consignee phone ${json.consignee.phone} for ops@example.com` });
     const awb = String(awbSeq++);
     return send(200, {
       status: true,
@@ -89,6 +99,7 @@ const xbServer = http.createServer(async (req, res) => {
     return send(200, { status: true, data: { order_id: 1, shipment_id: 2, awb_number: String(awbSeq++), courier_id: '8', courier_name: 'Express Reverse', status: 'booked', label: 'https://xb-files.s3.amazonaws.com/labels/r.pdf' } });
   }
   if (p.startsWith('/api/shipments2/track/')) {
+    if (XB.mode.trackEmpty) return send(200, { status: false, message: 'No record found' });
     return send(200, { status: true, data: { awb_number: p.split('/').pop(), status: XB.trackStatus, history: [{ status_code: 'IT', location: 'Udaipur <script>', event_time: '2026-11-10 10:00', message: 'In Transit' }] } });
   }
   if (p === '/api/shipments2/cancel') {
@@ -99,6 +110,7 @@ const xbServer = http.createServer(async (req, res) => {
     return send(200, { status: true, data: XB.mode.evilManifest ? 'https://evil.example.com/m.pdf' : 'https://xb-files.s3.amazonaws.com/manifest/20240210112211-26.pdf' });
   }
   if (p === '/api/ndr') {
+    if (XB.mode.ndrEmpty) return send(200, { status: false, message: 'No record found' });
     return send(200, { status: true, data: [...XB.ndr, { awb_number: '99999999999', event_date: '2026-11-10', courier_remarks: 'Not ours', total_attempts: '1' }] });
   }
   if (p === '/api/ndr/create') {
@@ -131,7 +143,7 @@ const handle = createHandler({
   cronSecret: CRON,
   allowedOrigins: [ORIGIN, 'http://localhost:5199'],
   log,
-  makeXpressbees: () => createXpressbees({ baseUrl: XB_URL, email: 'ops@example.com', password: 'correct-horse', tokenStore, timeoutMs: 400 }),
+  makeXpressbees: () => createXpressbees({ baseUrl: XB_URL, email: 'ops@example.com', password: 'correct-horse', tokenStore, timeoutMs: 400, log }),
 });
 
 const reader = sessionFor('reader@example.com').access_token;
@@ -245,6 +257,7 @@ try {
   const s2b = await shipmentOf(o2);
   check('admin "Book now" books a failed parcel', retry.status === 200 && s2b.status === 'booked', JSON.stringify(retry.json));
   check('a label link from another host is never saved', s2b.label_url === null);
+  check('a set-aside label link is logged with its host only', logs.some((l) => /"event":"file_link_set_aside".*"field":"label","host":"evil.example.com"/.test(l)) && !logs.some((l) => l.includes('evil.example.com/label.pdf')));
   XB.mode.evilLabel = false;
   check('booking the same parcel twice is refused', (await call({ action: 'book_now', order_id: o2 }, { token: admin })).status === 409);
   XB.mode.slow = true;
@@ -252,6 +265,64 @@ try {
   await cron('book_due');
   check('a slow Xpressbees times out and is retried later', (await shipmentOf(o3)).status === 'queued' && /time/i.test((await shipmentOf(o3)).last_error ?? ''));
   XB.mode.slow = false;
+
+  // ---------- Refusals: the real reason is kept, another courier is tried ----------
+  const lastError = async (orderId) => (await shipmentOf(orderId)).last_error ?? '';
+  const booksBefore = () => XB.books.length;
+
+  XB.mode.refuse = new Set(['1']);
+  const oA = await placeCod(books[0], 1);
+  let n0 = booksBefore();
+  await cron('book_due');
+  const sA = await shipmentOf(oA);
+  check('a courier refused with a bare 404: the next cheapest is booked at once', sA.status === 'booked' && sA.courier_id === '6' && XB.books.length - n0 === 2, `${sA.status} ${sA.courier_id} ${sA.last_error}`);
+  const refusedEvent = (await db.query(`select detail from public.shipment_events where order_id = $1 and action = 'courier_refused'`, [oA])).rows[0]?.detail ?? '';
+  check('the refused courier and the reason are written down', /Surface Xpressbees 0\.5 K\.G: HTTP 404, Xpressbees gave no reason/.test(refusedEvent), refusedEvent);
+
+  XB.mode.refuse = new Set(['1', '6', '2']);
+  const oB = await placeCod(books[1], 1);
+  n0 = booksBefore();
+  await cron('book_due');
+  const eB = await lastError(oB);
+  check('every courier refused: the parcel fails after 3 couriers, naming them', (await shipmentOf(oB)).status === 'failed' && XB.books.length - n0 === 3 && /HTTP 404/.test(eB) && /Surface Xpressbees 0\.5 K\.G/.test(eB) && /Air Xpressbees/.test(eB), eB);
+  XB.mode.refuse = null;
+
+  XB.mode.htmlNotFound = true;
+  const oC = await placeCod(books[2], 1);
+  await cron('book_due');
+  const eC = await lastError(oC);
+  check('an HTML 404 page: the status and page title are kept', /HTTP 404/.test(eC) && /404 Not Found/.test(eC) && !/<title>|<h1>/.test(eC), eC);
+  XB.mode.htmlNotFound = false;
+
+  XB.mode.badWarehouse = true;
+  const oD = await placeCod(books[3], 1);
+  n0 = booksBefore();
+  await cron('book_due');
+  const eD = await lastError(oD);
+  check('a wrong warehouse name: the field-by-field reason is shown, and no other courier is tried', /HTTP 422/.test(eD) && /pickup\.warehouse_name: The selected pickup\.warehouse_name is invalid/.test(eD) && XB.books.length - n0 === 1, eD);
+  XB.mode.badWarehouse = false;
+
+  XB.mode.wallet = true;
+  const oE = await placeCod(books[4], 1);
+  n0 = booksBefore();
+  await cron('book_due');
+  const eE = await lastError(oE);
+  check("low wallet balance: stops at once with Xpressbees' words", eE === 'Booking refused: Wallet balance is low.' && XB.books.length - n0 === 1 && (await shipmentOf(oE)).status === 'failed', eE);
+  XB.mode.wallet = false;
+  const retryE = await call({ action: 'book_now', order_id: oE }, { token: admin });
+  check('after the wallet is topped up, admin Retry books it', retryE.status === 200 && (await shipmentOf(oE)).status === 'booked', JSON.stringify(retryE.json));
+
+  XB.mode.echoPhone = true;
+  const oF = await placeCod(books[0], 1);
+  await cron('book_due');
+  const eF = await lastError(oF);
+  check('a refusal that echoes the phone or email keeps neither', /\[phone\]/.test(eF) && /\[email\]/.test(eF) && !/9876543210|ops@example\.com/.test(eF), eF);
+  XB.mode.echoPhone = false;
+  check(
+    'every refusal is logged with its path, status and reason',
+    logs.some((l) => /"event":"xpressbees_refused","path":"\/api\/shipments2","status":404,"reason":"404 Not Found"/.test(l)),
+    logs.filter((l) => /xpressbees_refused/.test(l)).slice(0, 2).join(' | '),
+  );
 
   // ---------- Tracking ----------
   const other = sessionFor('admin@example.com');
@@ -262,7 +333,7 @@ try {
   check('picked up: the order shows as shipped', (await orderStatus(o1)) === 'shipped');
   const trackCalls = XB.calls.filter((c) => c.includes('/track/')).length;
   await call({ action: 'track', order_id: o1 }, { token: reader });
-  check('tracking is not asked again within 10 minutes', XB.calls.filter((c) => c.includes('/track/')).length === trackCalls);
+  check('tracking is not asked again within 2 minutes', XB.calls.filter((c) => c.includes('/track/')).length === trackCalls);
   const randomOrder = '9d1c3b5e-4a7f-4c2b-8e6d-1f2a3b4c5d6e';
   check('tracking an order that is not yours finds nothing', (await call({ action: 'track', order_id: randomOrder }, { token: reader })).status === 404);
   check('admins can track any order', (await call({ action: 'track', order_id: o1 }, { token: other.access_token })).status === 200);
@@ -301,6 +372,15 @@ try {
   XB.mode.evilManifest = false;
   const s5 = await shipmentOf(o5);
   XB.ndr = [{ awb_number: s5.awb_number, event_date: '2026-11-10', courier_remarks: 'Customer not available', total_attempts: '1' }];
+  XB.mode.ndrEmpty = true;
+  const ndrNone = await call({ action: 'ndr_list' }, { token: admin });
+  check('no failed deliveries ("No record found") is an empty list, not an error', ndrNone.status === 200 && Array.isArray(ndrNone.json.data.items) && ndrNone.json.data.items.length === 0, JSON.stringify(ndrNone.json));
+  XB.mode.ndrEmpty = false;
+  XB.mode.trackEmpty = true;
+  await db.query(`update public.shipments set last_tracked_at = null where order_id = $1 and kind = 'forward'`, [o5]);
+  const trEmpty = await call({ action: 'track', order_id: o5 }, { token: admin });
+  check('a parcel with no tracking events yet keeps its status quietly', trEmpty.status === 200 && trEmpty.json.data.shipments[0].status === 'booked', JSON.stringify(trEmpty.json));
+  XB.mode.trackEmpty = false;
   const ndr = await call({ action: 'ndr_list' }, { token: admin });
   check('NDR list shows only our parcels, with the order', ndr.status === 200 && ndr.json.data.items.length === 1 && ndr.json.data.items[0].awb === s5.awb_number);
   const today = new Date().toISOString().slice(0, 10);

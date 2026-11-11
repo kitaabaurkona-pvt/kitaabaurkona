@@ -1009,7 +1009,8 @@ $$;
 
 -- When an order is confirmed (cash on delivery) or marked paid, queue its parcel and ask
 -- the worker to book it now. When it is cancelled, drop a parcel not booked yet, or ask
--- the worker to cancel one that is booked (possible until the courier picks it up).
+-- the worker to cancel one that is booked with Xpressbees now (possible until the
+-- courier picks it up). The 5-minute jobs only catch anything these wake-ups miss.
 create or replace function public.orders_shipping_sync()
 returns trigger
 language plpgsql
@@ -1018,6 +1019,7 @@ set search_path = ''
 as $$
 declare
   v_shipment uuid;
+  v_status text;
 begin
   if new.status in ('confirmed', 'paid')
      and (tg_op = 'INSERT' or old.status is distinct from new.status)
@@ -1043,9 +1045,18 @@ begin
     update public.shipments
     set status = case when status in ('booking', 'booked') then 'cancel_requested' else 'cancelled' end
     where order_id = new.id and kind = 'forward' and status in ('queued', 'failed', 'booking', 'booked')
-    returning id into v_shipment;
+    returning id, status into v_shipment, v_status;
     if v_shipment is not null then
       perform public.log_shipment_event(v_shipment, new.id, null, 'order_cancelled', null);
+    end if;
+    if v_status = 'cancel_requested' then
+      begin
+        if to_regprocedure('public.shipping_run_job(text)') is not null then
+          execute 'select public.shipping_run_job($1)' using 'cancel_requested';
+        end if;
+      exception when others then
+        null;
+      end;
     end if;
   end if;
   return new;

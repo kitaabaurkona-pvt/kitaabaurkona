@@ -26,8 +26,10 @@ export const LIMITS = {
   pinChecksPerUserPerHour: 20,
   pinChecksPerIpPerHour: 60,
   adminActionsPerMinute: 60,
-  trackRefreshMinutes: 10,
-  backgroundTrackMinutes: 110,
+  // Opening an order page asks Xpressbees again once its last answer is 2 minutes old;
+  // the background job (every 15 minutes) refreshes every parcel on the move.
+  trackRefreshMinutes: 2,
+  backgroundTrackMinutes: 14,
   bookBatch: 10,
   pinCacheMinutes: 24 * 60,
   manifestOrders: 50,

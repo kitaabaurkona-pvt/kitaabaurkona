@@ -5,9 +5,11 @@
 -- Replace <project-ref> below with the project's reference (Settings -> General).
 -- Safe to run again: secrets are kept, the helper functions and jobs are replaced.
 --
---   every 5 minutes   book parcels whose hold time is over (if automatic booking is on)
---   every 5 minutes   cancel booked parcels of cancelled orders with Xpressbees
---   every 2 hours     refresh tracking of parcels on the way
+--   every 5 minutes   book any parcel still waiting (a safety net: each order already
+--                     wakes the booking worker the moment it is placed)
+--   every 5 minutes   cancel booked parcels of cancelled orders with Xpressbees (also a
+--                     safety net: a cancellation wakes the worker at once)
+--   every 15 minutes  refresh tracking of parcels on the way (Xpressbees has no webhooks)
 --
 -- The jobs call the function with a secret header. The secret is generated here, inside
 -- the database, straight into Supabase Vault: nobody types, sees or copies it. The
@@ -80,7 +82,7 @@ where jobname in ('shipping-book-due', 'shipping-cancel-requested', 'shipping-tr
 
 select cron.schedule('shipping-book-due', '*/5 * * * *', $$select public.shipping_run_job('book_due')$$);
 select cron.schedule('shipping-cancel-requested', '2-59/5 * * * *', $$select public.shipping_run_job('cancel_requested')$$);
-select cron.schedule('shipping-track-active', '17 */2 * * *', $$select public.shipping_run_job('track_active')$$);
+select cron.schedule('shipping-track-active', '*/15 * * * *', $$select public.shipping_run_job('track_active')$$);
 
 -- Expected: three rows.
 select jobname, schedule, active from cron.job where jobname like 'shipping-%' order by jobname;

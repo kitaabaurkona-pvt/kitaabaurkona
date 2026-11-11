@@ -159,8 +159,16 @@ try {
   check('the booking is saved (AWB, courier, label)', booked.status === 'booked' && booked.awb_number === booking.awb_number && booked.label_url === booking.label_url);
 
   // ---------- Customer cancels a booked (not picked up) order ----------
+  // The job-runner stand-in again, to see the cancellation wake the worker at once.
+  await db.exec(`
+    create table public.job_calls (job text, at timestamptz default now());
+    create function public.shipping_run_job(p_job text) returns bigint language plpgsql security definer set search_path = '' as $$
+    begin insert into public.job_calls (job) values (p_job); return 1; end $$;
+  `);
   const stockBeforeCancel = await stockOf(b1.id);
   await as(READER, `select public.cancel_order($1)`, [o1]);
+  check('cancelling a booked parcel wakes the cancel worker at once', (await one(`select count(*)::int as n from public.job_calls where job = 'cancel_requested'`)).n === 1);
+  await db.exec(`drop function public.shipping_run_job(text); drop table public.job_calls;`);
   check('customer can cancel a COD order before pickup', (await one(`select status from public.orders where id = $1`, [o1])).status === 'cancelled');
   check('cancelling returns the books to stock', (await stockOf(b1.id)) === stockBeforeCancel + 2);
   check('the booked parcel is marked for cancellation with Xpressbees', (await shipmentOf(o1)).status === 'cancel_requested');
