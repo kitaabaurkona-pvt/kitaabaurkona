@@ -33,6 +33,14 @@ function SettingsForm({ initial }) {
   const { show } = useToast();
   const busy = useRef(false);
   const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const [newSkip, setNewSkip] = useState('');
+  const skips = form.skip_couriers ?? [];
+  function addSkip() {
+    const name = newSkip.trim().replace(/\s+/g, ' ').slice(0, 100);
+    if (!name || skips.some((x) => x.toLowerCase() === name.toLowerCase())) return setNewSkip('');
+    set('skip_couriers', [...skips, name]);
+    setNewSkip('');
+  }
 
   async function save(event) {
     event.preventDefault();
@@ -64,6 +72,35 @@ function SettingsForm({ initial }) {
         <button type="button" role="switch" className="switch" aria-checked={form.auto_book} aria-labelledby="auto-book-label" onClick={() => set('auto_book', !form.auto_book)} />
       </div>
       {!form.warehouse_name && <p className="notice" data-tone="error">Nothing is booked until the warehouse name is filled in.</p>}
+      <div className="stack-sm">
+        <p className="label" id="skip-label">
+          Couriers never booked automatically
+        </p>
+        <p className="page-meta">A courier lands here by itself when Xpressbees answers a booking with it unclearly. Remove it to use it again.</p>
+        {skips.length > 0 ? (
+          <ul className="skip-list" aria-labelledby="skip-label">
+            {skips.map((name) => (
+              <li key={name}>
+                <span>{name}</span>
+                <button type="button" className="btn-link" onClick={() => set('skip_couriers', skips.filter((x) => x !== name))}>
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="page-meta">None.</p>
+        )}
+        <div className="inline-actions">
+          <label className="visually-hidden" htmlFor="skip-new">
+            Courier name to skip
+          </label>
+          <input id="skip-new" className="input input-sm" maxLength={100} placeholder="Courier name, as Xpressbees lists it" value={newSkip} onChange={(e) => setNewSkip(e.target.value)} />
+          <button type="button" className="btn btn-outline btn-sm" onClick={addSkip}>
+            Add
+          </button>
+        </div>
+      </div>
       <div className="form-grid form-grid-2">
         {FIELDS.map(([key, label, max]) => (
           <div key={key} className={key === 'warehouse_name' || key === 'pickup_address' ? 'span-2' : undefined}>
@@ -209,7 +246,9 @@ function AdminShipping() {
             {problems.data.map((p) => (
               <li key={p.id} className="ndr-row">
                 <p>
-                  <span className="status" data-status={p.status}>{ADMIN_SHIPMENT_LABELS[p.status] ?? p.status}</span>{' '}
+                  <span className="status" data-status={p.needs_check && p.status === 'failed' ? 'exception' : p.status}>
+                    {p.needs_check && p.status === 'failed' ? ADMIN_SHIPMENT_LABELS.needs_check : (ADMIN_SHIPMENT_LABELS[p.status] ?? p.status)}
+                  </span>{' '}
                   {p.kind === 'reverse' ? 'Return pickup' : 'Parcel'}
                   {p.awb_number ? ` · AWB ${p.awb_number}` : ''} · updated {formatDate(p.updated_at)}
                 </p>

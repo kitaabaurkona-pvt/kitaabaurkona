@@ -8,12 +8,16 @@ import { clean } from './text.js';
 export class XpressbeesError extends Error {
   // retryable: a later attempt may work (network, timeout, 5xx, 429).
   // reason: Xpressbees' own words, without our prefix ('' when it gave none).
-  constructor(message, { status = 0, retryable = false, reason = '' } = {}) {
+  // afterSend: the request itself may have reached Xpressbees.
+  // uncertain: a booking whose outcome is unknown; Xpressbees may have booked it.
+  constructor(message, { status = 0, retryable = false, reason = '', afterSend = false, uncertain = false } = {}) {
     super(message);
     this.name = 'XpressbeesError';
     this.status = status;
     this.retryable = retryable;
     this.reason = reason;
+    this.afterSend = afterSend;
+    this.uncertain = uncertain;
   }
 }
 
@@ -121,18 +125,30 @@ export function createXpressbees({ baseUrl, email, password, tokenStore, fetchIm
     return token;
   }
 
+  // The request itself (not the login before it): a failure here may come after
+  // Xpressbees already acted on it.
+  async function send(path, options) {
+    try {
+      return await call(path, options);
+    } catch (e) {
+      if (e instanceof XpressbeesError) e.afterSend = true;
+      throw e;
+    }
+  }
+
   async function authed(path, options = {}) {
     let token = (await tokenStore.get()) ?? (await login());
-    let result = await call(path, { ...options, token });
+    let result = await send(path, { ...options, token });
     if (result.status === 401 || result.status === 403) {
       token = await login();
-      result = await call(path, { ...options, token });
+      result = await send(path, { ...options, token });
     }
     const { status, json, text } = result;
     if (status >= 500 || status === 429) {
       const reason = explain(json, text);
       note(path, status, reason);
-      throw new XpressbeesError(`Xpressbees is unavailable (HTTP ${status})`, { status, retryable: true, reason });
+      // 429 means "slow down": nothing was done. A 5xx may come after the work was done.
+      throw new XpressbeesError(`Xpressbees is unavailable (HTTP ${status})`, { status, retryable: true, reason, afterSend: status !== 429 });
     }
     if (status === 401 || status === 403) {
       note(path, status, explain(json, text));
@@ -178,8 +194,29 @@ export function createXpressbees({ baseUrl, email, password, tokenStore, fetchIm
       note(path, r.status, explain(r.json, r.text));
       throw new XpressbeesError(`PIN check failed (HTTP ${r.status})`, { status: r.status });
     },
+    // Books one parcel. Only a clear refusal (Xpressbees says no and why) is a plain
+    // error. Anything else after the request was sent (an error with no reason such as
+    // the bare 404 Xpressbees sometimes answers after booking anyway, a server error, a
+    // timeout) is "uncertain": the parcel may be booked, so it must not be sent again.
     async book(payload) {
-      return expectOk(await authed('/api/shipments2', { method: 'POST', body: payload }), '/api/shipments2', 'Booking refused').data;
+      const path = '/api/shipments2';
+      let r;
+      try {
+        r = await authed(path, { method: 'POST', body: payload });
+      } catch (e) {
+        if (e instanceof XpressbeesError && e.afterSend) {
+          e.uncertain = true;
+          e.retryable = false;
+        }
+        throw e;
+      }
+      if (r.json?.status === true) return r.json.data;
+      const reason = explain(r.json, r.text);
+      note(path, r.status, reason);
+      const isObject = r.json !== null && typeof r.json === 'object' && !Array.isArray(r.json);
+      const clear = Boolean(reason) && isObject && (r.json.status === false || [400, 409, 422].includes(r.status));
+      const code = r.status && r.status !== 200 ? ` (HTTP ${r.status})` : '';
+      throw new XpressbeesError(`Booking refused${code}: ${reason || 'Xpressbees gave no reason'}`, { status: r.status, reason, afterSend: true, uncertain: !clear });
     },
     async bookReturn(payload) {
       return expectOk(await authed('/api/reverseshipments', { method: 'POST', body: payload }), '/api/reverseshipments', 'Return pickup refused').data;

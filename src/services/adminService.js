@@ -66,7 +66,7 @@ export async function adminListOrders({ status = 'all', page = 0 } = {}) {
   let query = supabase
     .from('orders')
     .select(
-      '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, status, awb_number, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at)',
+      '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at)',
       { count: 'exact' },
     );
   if (status !== 'all') query = query.eq('status', status);

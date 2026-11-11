@@ -89,16 +89,23 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
 
   // ---------- Shared work ----------
 
-  // Books with the cheapest courier; if Xpressbees refuses that courier for a reason of
-  // its own (not available on this route or account, a courier-specific rule), the next
-  // cheapest is tried at once, up to COURIER_TRIES. Account-wide refusals (wallet
-  // balance, duplicate order number, the account itself) stop straight away, since
-  // another courier would be refused the same way. A courier the admin picked is the
-  // only one tried.
+  // Books with the cheapest courier not on the skip list (Admin > Shipping). Only a
+  // clear refusal of that courier (Xpressbees says no and why) moves on to the next
+  // cheapest, up to COURIER_TRIES. Account-wide refusals (wallet balance, duplicate order
+  // number, warehouse, the account itself) stop straight away. An unclear answer (an
+  // error with no reason, a server error, a timeout) also stops at once and is never
+  // retried by itself: Xpressbees may have booked the parcel anyway, as it did with its
+  // bare 404s, and sending it again makes a second booking. A courier the admin picked is
+  // the only one tried, skip list or not.
   async function bookWithCouriers(shipment, data, pkg, options) {
-    const candidates = shipment.courier_chosen_by_admin
-      ? [chooseCourier(options, shipment.courier_id)].filter(Boolean)
-      : listCouriers(options).slice(0, COURIER_TRIES);
+    const skip = new Set((data.settings?.skip_couriers ?? []).map((x) => String(x).trim().toLowerCase()));
+    const skipped = (c) => skip.has(c.id) || skip.has(c.name.toLowerCase());
+    const available = shipment.courier_chosen_by_admin ? [chooseCourier(options, shipment.courier_id)].filter(Boolean) : listCouriers(options);
+    const candidates = shipment.courier_chosen_by_admin ? available : available.filter((c) => !skipped(c)).slice(0, COURIER_TRIES);
+    if (candidates.length === 0) {
+      throw new XpressbeesError(`Every courier Xpressbees offers for this parcel is on the skip list (Admin > Shipping): ${available.map((c) => c.name).join(', ')}`.slice(0, 300));
+    }
+    const orderNumber = `KAK-${data.order.order_number}`;
     const refusals = [];
     for (const courier of candidates) {
       try {
@@ -108,6 +115,24 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         }
         return { answer, courier, refusals };
       } catch (e) {
+        if (e instanceof XpressbeesError && e.uncertain) {
+          // A courier that answers a booking unclearly is not used automatically again.
+          if (e.status >= 400 && e.status < 500) {
+            try {
+              await rpc('add_skip_courier', { p_name: courier.name });
+            } catch {
+              // the parcel is still marked for checking below
+            }
+          }
+          const why = e.status ? `HTTP ${e.status}${e.reason ? `: ${e.reason}` : ', no reason given'}` : e.message;
+          throw Object.assign(
+            new XpressbeesError(
+              `Xpressbees answered unclearly (${why}) when booking ${orderNumber} with ${courier.name}, so it may have booked it anyway. Check the Xpressbees dashboard (Orders, search ${orderNumber}): link its AWB here if it is booked, or retry once you are sure it is not.`.slice(0, 300),
+              { status: e.status, reason: e.reason, uncertain: true },
+            ),
+            { refusals },
+          );
+        }
         if (!(e instanceof XpressbeesError) || e.retryable || ACCOUNT_WIDE.test(`${e.reason} ${e.message}`)) throw e;
         refusals.push({ courier: courier.name, status: e.status, reason: e.reason || 'Xpressbees gave no reason' });
       }
@@ -159,7 +184,14 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       }
       const record = bookingRecord(answer, pkg, courier);
       if (!record) {
-        await rpc('record_booking_failure', { p_shipment: shipment.id, p_error: 'Xpressbees answered without an AWB number', p_retry: false, p_actor: actor });
+        // Xpressbees said yes but gave no AWB: it may well be booked, so it is checked, not resent.
+        await rpc('record_booking_failure', {
+          p_shipment: shipment.id,
+          p_error: `Xpressbees accepted KAK-${data.order.order_number} but sent no AWB number. Check the Xpressbees dashboard and link its AWB here.`,
+          p_retry: false,
+          p_actor: actor,
+          p_needs_check: true,
+        });
         return { ok: false, reason: 'bad_answer' };
       }
       // Label and manifest links are kept only from Xpressbees' file host. When one is set
@@ -195,18 +227,28 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       return { ok: true, awb: record.awb_number };
     } catch (e) {
       const message = e instanceof XpressbeesError ? e.message : 'Internal error while booking';
+      const uncertain = e instanceof XpressbeesError && e.uncertain;
       if (!(e instanceof XpressbeesError)) log.error(JSON.stringify({ event: 'book_error', shipment: shipment.id, error: String(e.message).slice(0, 120) }));
+      if (uncertain) log.warn(JSON.stringify({ event: 'booking_uncertain', shipment: shipment.id, status: e.status }));
+      for (const r of e?.refusals ?? []) {
+        try {
+          await rpc('log_shipment_event', { p_shipment: shipment.id, p_order: shipment.order_id, p_actor: actor, p_action: 'courier_refused', p_detail: `${r.courier}: ${r.status && r.status !== 200 ? `HTTP ${r.status}, ` : ''}${r.reason}`.slice(0, 300) });
+        } catch {
+          // the failure itself is still recorded below
+        }
+      }
       try {
         await rpc('record_booking_failure', {
           p_shipment: shipment.id,
           p_error: message,
-          p_retry: e instanceof XpressbeesError ? e.retryable : true,
+          p_retry: uncertain ? false : e instanceof XpressbeesError ? e.retryable : true,
           p_actor: actor,
+          p_needs_check: uncertain,
         });
       } catch {
         // the stuck "booking" row is picked up again after 15 minutes
       }
-      return { ok: false, reason: 'error', message };
+      return { ok: false, reason: uncertain ? 'uncertain' : 'error', message };
     }
   }
 
@@ -313,14 +355,41 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       return { courier };
     },
 
-    async book_now({ order_id }, { user }) {
+    async book_now({ order_id, checked }, { user }) {
       const s = await forwardShipment(order_id);
       if (!s) throw new AppError(404, 'This order has no parcel');
+      // After an unclear answer the parcel may already be booked with Xpressbees: book
+      // again only once the admin confirms they checked the dashboard.
+      if (s.needs_check && !checked) {
+        throw new AppError(409, 'Xpressbees may already have booked this order. Check the Xpressbees dashboard first, then confirm.');
+      }
       const claimed = await rpc('claim_shipment', { p_shipment: s.id });
       if (!Array.isArray(claimed) || claimed.length === 0) throw new AppError(409, 'This parcel is already booked or being booked');
       const result = await bookOne(claimed[0], user.id);
       if (!result.ok) throw new AppError(502, result.message ?? 'Booking failed. See the parcel for details.');
       return { awb_number: result.awb };
+    },
+
+    // An admin found the parcel booked in the Xpressbees dashboard (after an unclear
+    // answer) and links its AWB, so tracking, cancelling and labels work from here.
+    async link_awb({ order_id, awb }, { user }) {
+      const s = await forwardShipment(order_id);
+      if (!s || !['queued', 'failed'].includes(s.status)) throw new AppError(409, 'Only a parcel that is not booked yet can be linked to an AWB');
+      const taken = (await select(db.from('shipments').select('id').eq('awb_number', awb).limit(1)))[0];
+      if (taken) throw new AppError(409, 'That AWB already belongs to another parcel');
+      let tracked = null;
+      try {
+        tracked = await xb().track(awb);
+      } catch (e) {
+        if (!(e instanceof XpressbeesError)) throw e;
+      }
+      const claimed = await rpc('claim_shipment', { p_shipment: s.id });
+      if (!Array.isArray(claimed) || claimed.length === 0) throw new AppError(409, 'This parcel is already being booked');
+      const data = await rpc('shipment_booking_data', { p_shipment: s.id });
+      const record = bookingRecord({ awb_number: awb, status: tracked?.status ?? 'booked' }, buildPackage(data.items), null);
+      await rpc('record_booking', { p_shipment: s.id, p: { ...record, courier_name: s.courier_name, actor: user.id } });
+      await rpc('log_shipment_event', { p_shipment: s.id, p_order: s.order_id, p_actor: user.id, p_action: 'awb_linked', p_detail: `AWB ${awb} linked from the Xpressbees dashboard` });
+      return { awb_number: awb };
     },
 
     async cancel_shipment({ order_id }, { user }) {
