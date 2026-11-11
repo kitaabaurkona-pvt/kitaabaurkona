@@ -57,7 +57,7 @@ function SignIn() {
   }
 
   return (
-    <AuthShell title="Log in" backTo="/" backLabel="Back to home">
+    <AuthShell title="Log in" subtitle="Your saved books and orders, in one little corner." backTo="/" backLabel="Back to home">
       <form className="auth-form" onSubmit={handleSubmit} noValidate>
         <TextField
           id="email"
@@ -100,7 +100,7 @@ function SignIn() {
       <AuthDivider />
       <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
       <p className="auth-switch">
-        New to Kitaabaurkona?
+        New to Kitaab Aur Kona?
         <Link to="/sign-up">Sign up</Link>
       </p>
     </AuthShell>

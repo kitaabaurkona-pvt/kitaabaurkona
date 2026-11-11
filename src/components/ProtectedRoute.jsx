@@ -1,3 +1,4 @@
+import { previewMode } from '../preview/mode';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { PageSkeleton } from './store/Skeletons';
@@ -9,6 +10,8 @@ import { PageSkeleton } from './store/Skeletons';
 function ProtectedRoute() {
   const { isAuthenticated, loading } = useAuth();
   const location = useLocation();
+
+  if (previewMode && location.pathname === '/checkout') return <Outlet />;
 
   if (loading) return <PageSkeleton />;
 

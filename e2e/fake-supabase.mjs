@@ -165,6 +165,24 @@ export async function createBackend({ schemaPath, books }) {
       [JSON.stringify(categories)],
     );
   }
+  // The store also picks some books by id (home page hero and shelf), so keep the live ids.
+  const ids = books.filter((b) => b.id && b.sku).map((b) => ({ sku: b.sku, id: b.id }));
+  if (ids.length) {
+    // book_internal points at books.id too: move both, with key checks paused for this setup step.
+    await db.exec('set session_replication_role = replica');
+    await db.query(
+      `update public.book_internal bi set book_id = c.id::uuid
+       from public.books b, jsonb_to_recordset($1::jsonb) as c(sku text, id text)
+       where bi.book_id = b.id and b.sku = c.sku`,
+      [JSON.stringify(ids)],
+    );
+    await db.query(
+      `update public.books b set id = c.id::uuid
+       from jsonb_to_recordset($1::jsonb) as c(sku text, id text) where b.sku = c.sku`,
+      [JSON.stringify(ids)],
+    );
+    await db.exec('set session_replication_role = origin');
+  }
   return db;
 }
 

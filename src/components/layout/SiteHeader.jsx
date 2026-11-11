@@ -1,182 +1,85 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
+import { usePreferences } from '../../hooks/usePreferences';
+import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { MagnifyingGlass, User, ShoppingCart, BookmarkSimple } from '@phosphor-icons/react';
 import { useAuth } from '../../hooks/useAuth';
-import { useCart } from '../../hooks/useCart';
 import { useCartLines } from '../../hooks/useCartLines';
+import { CATEGORIES, FICTION, NON_FICTION, categoryHref, underPriceHref, regionalHref } from '../../utils/categories';
+import { searchBooks } from '../../services/bookService';
 import { useAsync } from '../../hooks/useAsync';
-import { listCategories } from '../../services/bookService';
-import {
-  COLLECTIONS,
-  FICTION,
-  NON_FICTION,
-  UNDER_PRICE,
-  categoryHref,
-  dealsHref,
-  regionalHref,
-  underPriceHref,
-} from '../../utils/categories';
-import { formatCount, formatPrice } from '../../utils/format';
-import { cartFlights } from '../../utils/flyToCart';
-import { BagIcon, BookmarkIcon, SearchIcon, UserIcon } from '../icons';
-import MobileMenu from './MobileMenu';
+import { bookDisplay } from '../../utils/bookDisplay';
+import BrandLink from './BrandLink';
 import NavMenu from './NavMenu';
+import MobileMenu from './MobileMenu';
+import { useCartBadge } from '../../hooks/useCartBadge';
+import { SEARCH_HINTS, SEARCH_HINT_MS } from '../../utils/searchHints';
 
-const toLinks = (names) => names.map((name) => ({ to: categoryHref(name), label: name }));
-
-// Slims the header once the page is scrolled. Two thresholds (on past 80px, off above
-// 20px) so it never flickers while the header itself changes height.
-function useScrolled() {
-  const [scrolled, setScrolled] = useState(false);
+// The empty search box suggests a real book or author, changing every 30 seconds with
+// a short fade (no fade with Reduce animations).
+function useSearchHint(reduceMotion) {
+  const [index, setIndex] = useState(0);
+  const [fading, setFading] = useState(false);
   useEffect(() => {
-    let frame = 0;
-    const update = () => {
-      frame = 0;
-      setScrolled((was) => (was ? window.scrollY > 20 : window.scrollY > 80));
-    };
-    const onScroll = () => {
-      if (!frame) frame = requestAnimationFrame(update);
-    };
-    update();
-    window.addEventListener('scroll', onScroll, { passive: true });
+    let swap = 0;
+    const timer = setInterval(() => {
+      if (reduceMotion) {
+        setIndex((i) => (i + 1) % SEARCH_HINTS.length);
+        return;
+      }
+      setFading(true);
+      swap = setTimeout(() => {
+        setIndex((i) => (i + 1) % SEARCH_HINTS.length);
+        setFading(false);
+      }, 260);
+    }, SEARCH_HINT_MS);
     return () => {
-      window.removeEventListener('scroll', onScroll);
-      cancelAnimationFrame(frame);
+      clearInterval(timer);
+      clearTimeout(swap);
     };
-  }, []);
-  return scrolled;
+  }, [reduceMotion]);
+  return { hint: SEARCH_HINTS[index], fading };
 }
-
-// Store header: logo and name on the left, a wide search in the middle, account,
-// wishlist and bag on the right, and an UPPERCASE nav row underneath (tablets and up).
-// Phones get the menu button and a search icon instead.
-function SiteHeader() {
-  const scrolled = useScrolled();
-  const { isAuthenticated, role } = useAuth();
-  const { count } = useCart();
-  const { cartOpen, openCart } = useCartLines();
-  // While a cover is flying in, the badge keeps the old number and changes as it lands.
-  const flying = useSyncExternalStore(cartFlights.subscribe, cartFlights.count);
-  const [badge, setBadge] = useState(count);
-  if (badge !== count && (flying === 0 || count < badge)) setBadge(count);
-  const navigate = useNavigate();
-  const { pathname, search } = useLocation();
-  const [term, setTerm] = useState('');
-  const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
-
-  // Before the category list arrives, offer the known ones; afterwards only those with books.
-  const present = (names) => (categories.data ? names.filter((name) => categories.data.includes(name)) : names);
-  const activeCategory = pathname === '/books' ? new URLSearchParams(search).get('category') : null;
-
-  function handleSearch(event) {
-    event.preventDefault();
-    const q = term.trim().slice(0, 100);
-    navigate(q ? `/books?q=${encodeURIComponent(q)}` : '/books', { state: { focusSearch: !q } });
-    setTerm('');
-  }
-
-  const categoryLink = (name, text) => (
-    <Link to={categoryHref(name)} className="nav-link" aria-current={activeCategory === name ? 'page' : undefined}>
-      {text}
-    </Link>
-  );
-
-  const more = [
-    { to: dealsHref, label: 'Biggest discounts' },
-    { to: underPriceHref, label: `Up to ${formatPrice(UNDER_PRICE)}` },
-    { to: regionalHref, label: COLLECTIONS.regional.label },
-    ...toLinks(present(['Biography & Memoir', 'Mythology & History'])),
-    { to: '/books', label: 'All books' },
-    { to: '/orders', label: 'Orders' },
-    ...(role === 'admin' ? [{ to: '/admin', label: 'Admin' }] : []),
-  ];
-
-  return (
-    <header className="site-header" data-scrolled={scrolled || undefined}>
-      <div className="container header-top">
-        <div className="header-left">
-          <MobileMenu />
-          <Link to="/" className="brand-logo" aria-label="Kitaabaurkona home">
-            <img src="/logo-192.png" alt="" width="48" height="48" />
-            <span className="brand-word" aria-hidden="true">
-              Kitaabaurkona
-            </span>
-          </Link>
-        </div>
-
-        <form className="header-search" role="search" onSubmit={handleSearch}>
-          <label htmlFor="header-search" className="visually-hidden">
-            Search books
-          </label>
-          <SearchIcon size={20} />
-          <input
-            id="header-search"
-            type="search"
-            placeholder="Search by title, author or language"
-            maxLength={100}
-            value={term}
-            onChange={(event) => setTerm(event.target.value)}
-          />
-        </form>
-
-        <div className="header-right">
-          <Link to="/books" state={{ focusSearch: true }} className="icon-button header-search-icon" aria-label="Search books">
-            <SearchIcon />
-          </Link>
-          <Link
-            to={isAuthenticated ? '/account' : '/sign-in'}
-            className="icon-button header-account"
-            aria-label={isAuthenticated ? 'Account' : 'Sign in'}
-          >
-            <UserIcon />
-          </Link>
-          <Link to="/wishlist" className="icon-button header-wishlist" aria-label="Wishlist">
-            <BookmarkIcon />
-          </Link>
-          <button
-            type="button"
-            className="icon-button cart-button"
-            aria-label={`Cart, ${count} ${count === 1 ? 'item' : 'items'}`}
-            aria-haspopup="dialog"
-            aria-expanded={cartOpen}
-            onClick={openCart}
-          >
-            <BagIcon />
-            {badge > 0 && (
-              <motion.span
-                key={`count-${badge}`}
-                className="cart-count"
-                aria-hidden="true"
-                initial={{ scale: 0.6 }}
-                animate={{ scale: 1 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 18 }}
-              >
-                {badge > 99 ? '99+' : formatCount(badge)}
-              </motion.span>
-            )}
-          </button>
-        </div>
-      </div>
-
-      <nav className="header-nav" aria-label="Main">
-        <div className="container header-nav-row">
-          <NavLink to="/" end className="nav-link">
-            Home
-          </NavLink>
-          <NavMenu label="Fiction" links={toLinks(present(FICTION))} current={FICTION.includes(activeCategory)} />
-          <NavMenu
-            label="Non-fiction"
-            links={toLinks(present(NON_FICTION))}
-            current={NON_FICTION.includes(activeCategory)}
-          />
-          {categoryLink('Self-Help', 'Self-Help')}
-          {categoryLink('Money & Business', 'Money & Business')}
-          {categoryLink('Box Sets & Combos', 'Box Sets')}
-          <NavMenu label="More" links={more} />
-        </div>
-      </nav>
-    </header>
-  );
+export default function SiteHeader() {
+ const systemReduced=useReducedMotion(); const {motion:motionPreference}=usePreferences(); const reduceMotion=systemReduced || motionPreference==='reduce';
+ const {isAuthenticated}=useAuth(); const {cartOpen,openCart}=useCartLines();
+ // While a cover is flying to the cart the count waits, and updates as it lands.
+ const badge=useCartBadge();
+ const {hint,fading}=useSearchHint(reduceMotion);
+ const location=useLocation();
+ const [term,setTerm]=useState(()=>new URLSearchParams(location.search).get('q') || '');
+ const [focused,setFocused]=useState(false);
+ useEffect(()=>{setTerm(new URLSearchParams(location.search).get('q') || '');setFocused(false);},[location.pathname,location.search]);
+ const navigate=useNavigate();
+ const [suggestionTerm,setSuggestionTerm]=useState('');
+ useEffect(()=>{const timer=setTimeout(()=>setSuggestionTerm(term.trim()),200);return()=>clearTimeout(timer);},[term]);
+ const suggestions=useAsync(async () => {
+   if(suggestionTerm.length<2)return {books:[],total:0};
+   const result=await searchBooks({search:suggestionTerm,pageSize:24});
+   const query=suggestionTerm.toLowerCase();
+   const score=book=>{const title=bookDisplay(book).title.toLowerCase().replace(/^the /,'');return (title===query?100:0)+(title.startsWith(query)?50:0)+(book.category!=='Box Sets & Combos'?10:0);};
+   return {...result,books:[...result.books].sort((a,b)=>score(b)-score(a)).slice(0,4)};
+ },[suggestionTerm]);
+ const showSuggestions=focused&&term.trim().length>=2;
+ const links=names=>names.map(c=>({to:categoryHref(c),label:c}));
+ const groups=[{label:'Fiction',links:links(FICTION)},{label:'Non-fiction',links:links(NON_FICTION.filter(c=>c!=='Box Sets & Combos'))},{label:'Explore more',links:[{to:underPriceHref,label:'₹299 & under'},{to:categoryHref('Box Sets & Combos'),label:'Box sets & combos'},{to:regionalHref,label:'Regional editions'},{to:'/books',label:'Browse books'}]}];
+ function search(e){e.preventDefault(); setFocused(false); const q=term.trim();navigate(q ? `/books?q=${encodeURIComponent(q)}`:'/books');}
+ if (location.pathname === '/checkout') {
+   return (
+     <header className="checkout-masthead">
+       <div className="checkout-header container">
+         <BrandLink />
+         <Link to="/cart" className="checkout-back">Back to cart</Link>
+       </div>
+     </header>
+   );
+ }
+ return <header className="site-header">
+  <div className="container header-top">
+   <div className="header-left"><MobileMenu/><BrandLink /></div>
+   <form className="header-search" role="search" onSubmit={search} onFocus={()=>setFocused(true)} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setFocused(false);}} onKeyDown={e=>{if(e.key==='Escape')setFocused(false);}}><label className="visually-hidden" htmlFor="header-search">Search books by title</label><MagnifyingGlass size={23}/><input id="header-search" type="search" className={fading?'search-hint-fading':undefined} placeholder={hint} value={term} maxLength={100} onChange={e=>setTerm(e.target.value)}/><button type="submit" aria-label="Search books"><MagnifyingGlass size={19} weight="regular" aria-hidden="true"/></button>{showSuggestions&&<section className="search-suggestions" aria-label="Search suggestions"><p className="suggestion-heading">Matching books</p>{suggestions.loading || term.trim()!==suggestionTerm ? <p role="status">Finding books…</p> : suggestions.error ? <p>Suggestions are unavailable. You can still search.</p> : suggestions.data?.books.length ? <ul>{suggestions.data.books.map(book=><li key={book.id}><Link to={`/books/${book.id}`} onClick={()=>setFocused(false)}><img src={book.image_urls?.[0]} alt=""/><span><strong>{bookDisplay(book).title}</strong><small>{bookDisplay(book).author || book.category}</small></span></Link></li>)}</ul> : <p>No matching titles. Try another title or browse all books.</p>}<Link className="search-all-link" to={`/books?q=${encodeURIComponent(term.trim())}`} onClick={()=>setFocused(false)}>See all results for “{term.trim()}”</Link></section>}</form>
+   <div className="header-right"><Link className="icon-button header-wishlist" to="/wishlist" aria-label="Wishlist"><BookmarkSimple size={18} weight="regular" aria-hidden="true"/></Link><Link className="header-utility" aria-label={isAuthenticated ? 'Account' : 'Sign in'} to={isAuthenticated?'/account':'/sign-in'}><User size={23} weight="regular" aria-hidden="true"/><span>{isAuthenticated?'Account':'Sign in'}</span></Link><button className="header-utility cart-button" onClick={openCart} aria-label={`Cart, ${badge} ${badge===1?'item':'items'}`} aria-haspopup="dialog" aria-expanded={cartOpen}><motion.div key={badge} className="cart-icon-motion" initial={false} animate={{ scale: reduceMotion || !badge ? 1 : [1, 1.18, 1], rotate: reduceMotion || !badge ? 0 : [0, -7, 0] }} transition={{ duration: 0.32 }}><ShoppingCart size={26} weight="regular" aria-hidden="true"/></motion.div><span>Cart{badge>0?` (${badge})`:''}</span>{badge>0&&<small className="mobile-cart-count" aria-hidden="true">{badge>99?'99+':badge}</small>}</button></div>
+  </div>
+  <nav className="header-nav" aria-label="Main"><div className="container header-nav-row"><NavLink to="/books" className="nav-link">Browse books</NavLink><NavMenu label="Categories" links={CATEGORIES.map(c=>({to:categoryHref(c),label:c}))} groups={groups}/><Link to={underPriceHref} className="nav-link">Budget reads</Link><Link to="/about" className="nav-link nav-about">Our story</Link></div></nav>
+ </header>;
 }
-
-export default SiteHeader;

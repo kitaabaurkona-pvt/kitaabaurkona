@@ -58,6 +58,7 @@ export const ADMIN_SHIPMENT_LABELS = {
   queued: 'Queued',
   booking: 'Booking…',
   failed: 'Booking failed',
+  needs_check: 'Check Xpressbees',
   cancel_requested: 'Cancel with courier pending',
 };
 
@@ -65,7 +66,12 @@ export const ADMIN_SHIPMENT_LABELS = {
 
 export const getRates = (orderId) => invoke('rates', { order_id: orderId });
 export const setCourier = (orderId, courierId) => invoke('set_courier', { order_id: orderId, courier_id: courierId });
-export const bookNow = (orderId) => invoke('book_now', { order_id: orderId });
+// checked: the admin confirmed the Xpressbees dashboard has no booking for this order
+// (needed after an unclear answer, when Xpressbees may have booked it anyway).
+export const bookNow = (orderId, checked = false) => invoke('book_now', { order_id: orderId, ...(checked ? { checked: true } : {}) });
+export const linkAwb = (orderId, awb) => invoke('link_awb', { order_id: orderId, awb });
+// The Xpressbees panel, where an order can be looked up by its KAK number.
+export const XPRESSBEES_PANEL = 'https://shipment.xpressbees.com/';
 export const cancelShipment = (orderId) => invoke('cancel_shipment', { order_id: orderId });
 export const makeManifest = (orderIds) => invoke('manifest', { order_ids: orderIds });
 export const listNdr = () => invoke('ndr_list');
@@ -77,7 +83,7 @@ export async function getShippingSettings() {
   return data?.[0] ?? null;
 }
 
-const SETTING_FIELDS = ['auto_book', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
+const SETTING_FIELDS = ['auto_book', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
 
 export async function updateShippingSettings(patch) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([key]) => SETTING_FIELDS.includes(key)));
@@ -89,7 +95,7 @@ export async function listProblemShipments() {
   const { data } = unwrap(
     await supabase
       .from('shipments')
-      .select('id, order_id, kind, status, last_error, attempts, awb_number, updated_at')
+      .select('id, order_id, kind, status, needs_check, last_error, attempts, awb_number, updated_at')
       .in('status', ['failed', 'cancel_requested', 'exception', 'rto'])
       .order('updated_at', { ascending: false })
       .limit(50),

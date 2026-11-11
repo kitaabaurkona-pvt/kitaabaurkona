@@ -18,8 +18,8 @@ function Cart() {
   const { lines, totals, blocked, pending, data, loading, error, retry } = useCartLines();
   const navigate = useNavigate();
   const { key } = useLocation();
-  // Opened from a page in the store: go back to it, at the same spot, instead of
-  // starting the book list again from the top.
+  // Came here from a page of the store: "Continue shopping" goes back to it, at the
+  // same spot. Opened directly (or from checkout): it goes to the books.
   const from = previousPage(key);
   const canGoBack = Boolean(from) && from !== '/checkout';
 
@@ -36,7 +36,7 @@ function Cart() {
       </div>
 
       {ids.length === 0 && (
-        <StateBlock title="Your cart is empty." icon={BagIcon}>
+        <StateBlock title="Your cart is empty." description="Find a book you like and add it here. Your next read is a few shelves away." icon={BagIcon}>
           <Link to="/books" className="btn btn-dark">
             Browse books
           </Link>

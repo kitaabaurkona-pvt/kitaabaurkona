@@ -1,3 +1,5 @@
+import { previewMode } from '../preview/mode';
+import PreviewCheckout from '../preview/PreviewCheckout';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
@@ -211,7 +213,7 @@ function Checkout() {
   let content;
   if (ids.length === 0) {
     content = (
-      <StateBlock title="Your cart is empty." icon={BagIcon}>
+      <StateBlock title="Your cart is empty." description="Add a book before heading to checkout." icon={BagIcon}>
         <Link to="/books" className="btn btn-dark">
           Browse books
         </Link>
@@ -250,4 +252,4 @@ function Checkout() {
   );
 }
 
-export default Checkout;
+export default function CheckoutRoute() { return previewMode ? <PreviewCheckout /> : <Checkout />; }

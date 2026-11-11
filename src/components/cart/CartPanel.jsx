@@ -5,7 +5,8 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCart } from '../../hooks/useCart';
 import { useCartLines } from '../../hooks/useCartLines';
 import { formatPrice, plural } from '../../utils/format';
-import { LoadError } from '../store/States';
+import { LoadError, StateBlock } from '../store/States';
+import { ShoppingCart } from '@phosphor-icons/react';
 import { LinesSkeleton } from '../store/Skeletons';
 import { CloseIcon } from '../icons';
 import CartLine from './CartLine';
@@ -19,6 +20,7 @@ function CartPanel() {
   const saving = totals.mrp - totals.subtotal;
   const empty = ids.length === 0;
   const returnTo = useRef(null);
+  const panel = useRef(null);
 
   return (
     <Dialog.Root open={cartOpen} onOpenChange={setCartOpen}>
@@ -38,8 +40,12 @@ function CartPanel() {
               asChild
               forceMount
               aria-describedby={undefined}
-              onOpenAutoFocus={() => {
+              onOpenAutoFocus={(event) => {
                 returnTo.current = document.activeElement;
+                if (!returnTo.current?.matches(':focus-visible')) {
+                  event.preventDefault();
+                  panel.current?.focus();
+                }
               }}
               onCloseAutoFocus={(event) => {
                 // Return focus to what opened the panel, or to the header cart button when
@@ -50,7 +56,7 @@ function CartPanel() {
               }}
             >
               <motion.div
-                className="cart-panel"
+                className="cart-panel" ref={panel} tabIndex={-1}
                 onClick={(event) => {
                   // Any link inside the panel closes it, even one to the page already open.
                   if (event.target.closest('a')) setCartOpen(false);
@@ -58,13 +64,13 @@ function CartPanel() {
                 initial={{ x: '100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '100%' }}
-                transition={{ duration: 0.3, ease: 'easeInOut' }}
+                transition={{ type: 'spring', stiffness: 340, damping: 36 }}
               >
                 <div className="cart-panel-head">
                   <Dialog.Title className="cart-panel-title">Your cart</Dialog.Title>
                   {!empty && <span className="cart-panel-count">{plural(totals.count, 'item')}</span>}
                   <Dialog.Close asChild>
-                    <button type="button" className="icon-button" aria-label="Close cart">
+                    <button type="button" className="icon-button cart-close" aria-label="Close cart">
                       <CloseIcon />
                     </button>
                   </Dialog.Close>
@@ -72,10 +78,9 @@ function CartPanel() {
 
                 {empty && (
                   <div className="cart-panel-empty">
-                    <p>Your cart is empty.</p>
-                    <Link to="/books" className="btn btn-outline">
-                      Continue shopping
-                    </Link>
+                    <StateBlock title="Your cart is empty." description="Found a book you like? Add it to your cart and it will appear here." icon={ShoppingCart}>
+                      <Link to="/books" className="btn btn-primary">Browse books</Link>
+                    </StateBlock>
                   </div>
                 )}
 
@@ -136,7 +141,7 @@ function CartPanel() {
                       </Link>
                     )}
                     <div className="cart-panel-links">
-                      {/* Closes the panel: the page underneath is exactly where it was. */}
+                      {/* Just closes the panel: the page underneath stays exactly where it was. */}
                       <Dialog.Close asChild>
                         <button type="button" className="btn-link">
                           Continue shopping

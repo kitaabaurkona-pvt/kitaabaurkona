@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { List } from '@phosphor-icons/react';
+import { useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion } from 'motion/react';
@@ -14,7 +15,6 @@ import {
   BookmarkIcon,
   CloseIcon,
   LogoutIcon,
-  MenuIcon,
   ReceiptIcon,
   SettingsIcon,
   ShieldIcon,
@@ -27,6 +27,8 @@ import {
 // traps focus inside, closes on Escape or a tap outside, and returns focus to the button.
 function MobileMenu() {
   const [open, setOpen] = useState(false);
+  const pointerOpen = useRef(false);
+  const panel = useRef(null);
   const { user, isAuthenticated, role, signOut } = useAuth();
   const { count: cartCount } = useCart();
   const { count: savedCount } = useWishlist();
@@ -58,8 +60,8 @@ function MobileMenu() {
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
-        <button type="button" className="icon-button menu-button" aria-label="Open menu">
-          <MenuIcon />
+        <button type="button" className="icon-button menu-button" aria-label="Open menu" onPointerDown={() => { pointerOpen.current = true; }} onKeyDown={() => { pointerOpen.current = false; }}>
+          <List size={22} weight="regular" aria-hidden="true" />
         </button>
       </Dialog.Trigger>
       <AnimatePresence>
@@ -68,9 +70,12 @@ function MobileMenu() {
             <Dialog.Overlay asChild forceMount>
               <motion.div className="drawer-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} />
             </Dialog.Overlay>
-            <Dialog.Content asChild forceMount aria-describedby={undefined}>
+            <Dialog.Content asChild forceMount aria-describedby={undefined} onOpenAutoFocus={(event) => {
+              // A touch opening should focus the dialog, not draw a ring around its X.
+              if (pointerOpen.current) { event.preventDefault(); panel.current?.focus(); }
+            }}>
               <motion.div
-                className="drawer"
+                className="drawer" ref={panel} tabIndex={-1}
                 initial={{ x: '-100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '-100%' }}
@@ -79,15 +84,29 @@ function MobileMenu() {
                 <div className="drawer-head">
                   <Dialog.Title asChild>
                     <span className="brand">
-                      <img src="/logo-64.png" alt="" width="28" height="28" />
+                      <img src="/images/brand/emblem-header.webp" alt="" width="28" height="28" />
                       <span>Menu</span>
                     </span>
                   </Dialog.Title>
                   <Dialog.Close asChild>
-                    <button type="button" className="icon-button" aria-label="Close menu">
+                    <button type="button" className="icon-button menu-close" aria-label="Close menu">
                       <CloseIcon />
                     </button>
                   </Dialog.Close>
+                </div>
+
+                <div className="drawer-section">
+                  <div className="switch-row">
+                    <span id="drawer-dark-label">Dark theme</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      className="switch"
+                      aria-checked={dark}
+                      aria-labelledby="drawer-dark-label"
+                      onClick={() => setTheme(dark ? 'light' : 'dark')}
+                    />
+                  </div>
                 </div>
 
                 {isAuthenticated && (
@@ -100,7 +119,7 @@ function MobileMenu() {
                 <nav aria-label="Shop" className="drawer-section">
                   <h2>Shop</h2>
                   {item('/', 'Store', StoreIcon, { end: true })}
-                  {item('/books', 'Books', BookIcon)}
+                  {item('/books', 'Browse books', BookIcon)}
                   {item('/cart', 'Cart', BagIcon, { count: cartCount })}
                 </nav>
 
@@ -122,30 +141,7 @@ function MobileMenu() {
                   </nav>
                 )}
 
-                <nav aria-label="Help" className="drawer-section">
-                  <h2>Help</h2>
-                  {POLICY_LINKS.map((link) => (
-                    <NavLink key={link.to} to={link.to} className="drawer-link drawer-link-plain" onClick={close}>
-                      {link.label}
-                    </NavLink>
-                  ))}
-                </nav>
-
-                <div className="drawer-section">
-                  <div className="switch-row">
-                    <span id="drawer-dark-label">Dark theme</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      className="switch"
-                      aria-checked={dark}
-                      aria-labelledby="drawer-dark-label"
-                      onClick={() => setTheme(dark ? 'light' : 'dark')}
-                    />
-                  </div>
-                </div>
-
-                <div className="drawer-foot">
+                <div className="drawer-section drawer-auth">
                   {isAuthenticated ? (
                     <button type="button" className="btn btn-outline btn-block" onClick={handleSignOut}>
                       <LogoutIcon size={18} />
@@ -162,6 +158,19 @@ function MobileMenu() {
                     </>
                   )}
                 </div>
+
+                <nav aria-label="Help" className="drawer-section">
+                  <h2>Help</h2>
+                  {POLICY_LINKS.map((link) => (
+                    <NavLink key={link.to} to={link.to} className="drawer-link drawer-link-plain" onClick={close}>
+                      {link.label}
+                    </NavLink>
+                  ))}
+                </nav>
+
+
+
+
               </motion.div>
             </Dialog.Content>
           </Dialog.Portal>

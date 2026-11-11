@@ -42,7 +42,7 @@ function AddToCartButton({ book, className = 'btn btn-primary', label = 'Add to 
     const want = focusAfter.current;
     focusAfter.current = null;
     if (!want || !ref.current) return;
-    const next = want === 'stepper' ? ref.current.querySelector('[data-step="up"]:not([aria-disabled])') ?? ref.current.querySelector('[data-step="down"]') : ref.current;
+    const next = want === 'stepper' ? (ref.current.querySelector('[data-step="up"]:not([aria-disabled])') ?? ref.current.querySelector('[data-step="down"]')) : ref.current;
     next?.focus({ preventScroll: true });
   }, [showStepper]);
 

@@ -23,14 +23,17 @@ export const cartFlights = {
 };
 
 // The picture to copy: the photo currently shown on the card (hover can swap it), the
-// cover image, or the cover box itself when the image failed to load.
+// cover image, or the cover box itself when the image failed to load. On a book's own
+// page the buy buttons (also the phone's purchase bar) take the main gallery cover.
 export function coverFrom(element) {
-  const root = element?.closest('.book-card, .hero-deal, .detail, .line');
+  const root = element?.closest('.book-card, .hero-deal, .detail, .line, .product-page');
   if (!root) return null;
   return root.querySelector('.card-photo-extra[data-shown]') ?? root.querySelector('.cover img') ?? root.querySelector('.cover');
 }
 
 function bounce(target) {
+  // The header animates its own icon when the count changes; do not bounce it twice.
+  if (target.querySelector('.cart-icon-motion')) return;
   const icon = target.querySelector('svg') ?? target;
   icon.animate?.(
     [{ transform: 'scale(1)' }, { transform: 'scale(1.22) rotate(-6deg)', offset: 0.35 }, { transform: 'scale(0.96)', offset: 0.7 }, { transform: 'scale(1)' }],
@@ -38,8 +41,18 @@ function bounce(target) {
   );
 }
 
+// The cart button the cover flies to: the header's, or the floating one that stands in
+// for it once the header has scrolled away.
+function cartTarget() {
+  const onScreen = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.bottom > 0 && r.top < window.innerHeight;
+  };
+  return [...document.querySelectorAll('.floating-cart, .cart-button')].find(onScreen) ?? null;
+}
+
 export function flyToCart(source) {
-  const target = document.querySelector('.cart-button');
+  const target = cartTarget();
   if (!source || !target || typeof source.getBoundingClientRect !== 'function' || !document.body.animate) return;
   const from = source.getBoundingClientRect();
   const to = target.getBoundingClientRect();

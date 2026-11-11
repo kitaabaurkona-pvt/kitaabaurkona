@@ -16,8 +16,17 @@ function vercelHeaders() {
   return headers
 }
 
+// Which version this build is: Vercel provides the git branch, environment and commit
+// while building. Local builds and test runs have none (see src/utils/release.js).
+const release = {
+  'import.meta.env.VITE_RELEASE_BRANCH': JSON.stringify(process.env.VERCEL_GIT_COMMIT_REF ?? ''),
+  'import.meta.env.VITE_RELEASE_ENV': JSON.stringify(process.env.VERCEL_ENV ?? 'local'),
+  'import.meta.env.VITE_RELEASE_COMMIT': JSON.stringify((process.env.VERCEL_GIT_COMMIT_SHA ?? '').slice(0, 7)),
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  define: release,
   preview: { headers: vercelHeaders() },
 })

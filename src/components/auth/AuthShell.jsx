@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import BrandLink from '../layout/BrandLink';
 import '../../styles/auth.css';
 
-function AuthShell({ title, backTo, backLabel, children }) {
+function AuthShell({ title, subtitle, backTo, backLabel, children }) {
   useEffect(() => {
-    document.title = `${title} - Kitaabaurkona`;
+    document.title = `${title} - Kitaab Aur Kona`;
   }, [title]);
 
   return (
@@ -16,14 +17,12 @@ function AuthShell({ title, backTo, backLabel, children }) {
             <path d="m12 19-7-7 7-7" />
           </svg>
         </Link>
-        <Link to="/" className="auth-brand">
-          <img src="/logo-64.png" alt="" width="28" height="28" />
-          Kitaabaurkona
-        </Link>
+        <BrandLink />
       </header>
       <main className="auth-main">
         <div className="auth-card">
           <h1 className="auth-title">{title}</h1>
+          {subtitle && <p className="auth-subtitle">{subtitle}</p>}
           {children}
         </div>
       </main>

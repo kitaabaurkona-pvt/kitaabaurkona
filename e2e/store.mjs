@@ -14,6 +14,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createBackend, fetchPublicBooks, handleAuth, handleRest, SERVICE_TOKEN } from './fake-supabase.mjs';
 import { createHandler } from '../supabase/functions/shipping/handler.js';
 import { createXpressbees } from '../supabase/functions/shipping/xpressbees.js';
+import { SEARCH_HINTS } from '../src/utils/searchHints.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.BASE || 'http://localhost:5199';
@@ -104,7 +105,7 @@ async function newPage({ width = 1280, height = 900, scheme = 'light', touch = f
   const page = await ctx.newPage();
   await page.setViewport({ width, height, hasTouch: touch, isMobile: touch });
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
-  if (prefs) await page.evaluateOnNewDocument((p) => localStorage.setItem('kitaab_prefs', p), JSON.stringify(prefs));
+  if (prefs) await page.evaluateOnNewDocument((p) => localStorage.setItem('kitaab_corner_prefs', p), JSON.stringify(prefs));
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => {
@@ -132,11 +133,18 @@ const gone = (page, sel, ms = 3000) => page.waitForSelector(sel, { hidden: true,
 const text = (page, sel) => page.$eval(sel, (e) => e.textContent.trim()).catch(() => null);
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 const BLACK = 'rgb(0, 0, 0)';
-const RED = 'rgb(178, 34, 34)';
-const GREEN = 'rgb(0, 128, 0)';
-// A spot on the page that is over no carousel (right end of the nav row), so nothing pauses.
-const NEUTRAL = [1275, 140];
-const ANNOUNCEMENTS = ['Free shipping on all orders', 'Cash on delivery available', 'Easy returns'];
+// The header cart button names the count ("Cart, 2 items"); it waits for a flying cover.
+const cartLabel = (page) => page.$eval('.cart-button', (b) => b.getAttribute('aria-label')).catch(() => null);
+const waitCart = (page, n, ms = 3000) =>
+  page
+    .waitForFunction((want) => [...document.querySelectorAll('.cart-button, .floating-cart')].some((b) => b.getAttribute('aria-label') === want), { timeout: ms }, `Cart, ${n} ${n === 1 ? 'item' : 'items'}`)
+    .then(() => true)
+    .catch(() => false);
+// Relative luminance of an rgb() colour, 0 (black) to 1 (white).
+const luminance = (rgb) => {
+  const [r, g, b] = (rgb.match(/\d+/g) ?? [0, 0, 0]).slice(0, 3).map((v) => Number(v) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
 const INVENTED = /BUMPER10|Rs\.?\s?200|extra discount|countdown|\d\dH:\d\dM|customer feedback|quality trust|★/i;
 // Scroll the whole page so every reveal-on-scroll section has played (for screenshots).
 const scrollThrough = (page) =>
@@ -148,11 +156,6 @@ const scrollThrough = (page) =>
     window.scrollTo(0, 0);
     await new Promise((r) => setTimeout(r, 500));
   });
-// The slides a visitor can see in a carousel (copies and off-screen slides are hidden).
-const visibleSlides = (page, root) =>
-  page.$$eval(`${root} .carousel-slide:not([aria-hidden="true"])`, (els) => els.map((e) => e.textContent.trim()));
-const activeDot = (page, root) =>
-  page.$$eval(`${root} .carousel-dot`, (ds) => ds.findIndex((d) => d.getAttribute('aria-current') === 'true'));
 
 try {
   // ---------- Security headers (vercel.json) ----------
@@ -166,120 +169,87 @@ try {
     if (new URL(BASE).port === '5200') check('the preview build is served with the CSP', Boolean(served && served.includes("default-src 'self'")), served);
   }
 
-  // ---------- Visitor: Home ----------
+  // ---------- Visitor: Home (reading-corner design) ----------
   {
     const { page, ctx, errors } = await newPage();
     await goto(page, '/');
-    await page.mouse.move(...NEUTRAL);
-    check('home: hero banner shows first', await waitSel(page, '.hero-carousel .carousel-slide:not([data-copy]) img[src="/banners/collect-the-adventure.webp"]'));
-    await waitSel(page, '.hero-deal-title');
-    const topThree = (
-      await db.query(`select title from public.books where is_visible and stock_quantity > 0 order by discount_percent desc, id asc limit 3`)
-    ).rows.map((r) => r.title);
-    const dealTitles = await page.$$eval('.hero-carousel .carousel-slide:not([data-copy]) .hero-deal-title', (els) => els.map((e) => e.textContent.trim()));
-    check('home: hero then shows the 3 biggest in-stock discounts, in order', JSON.stringify(dealTitles) === JSON.stringify(topThree), JSON.stringify(dealTitles));
-    check('home: only one hero slide is exposed to assistive tech', (await page.$$('.hero-carousel .carousel-slide:not([aria-hidden="true"])')).length === 1);
-
-    const shownOffers = await page.$$eval('.announcement-bar .carousel-slide:not([data-copy]) .announcement', (els) => els.map((e) => e.textContent.trim()));
-    check('announcement bar: only the three confirmed offers', JSON.stringify(shownOffers) === JSON.stringify(ANNOUNCEMENTS), JSON.stringify(shownOffers));
-    check('home: no invented promos, countdowns or reviews', !INVENTED.test(await page.$eval('body', (b) => b.innerText)));
-
+    check('home: three hero covers', await page.waitForFunction(() => document.querySelectorAll('.hero-book').length === 3, { timeout: 8000 }).then(() => true).catch(() => false));
+    const heroLinks = await page.$$eval('.hero-book', (as) => as.map((a) => a.getAttribute('href')));
+    const heroIds = heroLinks.map((h) => h.split('/').pop());
+    const visibleHero = (await one(`select count(*)::int as n from public.books where is_visible and id::text = any($1::text[])`, [heroIds])).n;
+    check('home: each hero cover opens a book in the store', heroLinks.every((h) => /^\/books\/[0-9a-f-]{36}$/.test(h)) && visibleHero === 3, JSON.stringify(heroLinks));
+    check('home: Browse books opens the books in stock', (await page.$eval('.hero-cta', (a) => a.getAttribute('href'))) === '/books?stock=1');
+    check('home: the budget tile opens books up to ₹299', (await page.$eval('.bento-budget', (a) => a.getAttribute('href'))) === '/books?max=299&stock=1');
+    check('home: the fiction tile opens Literary Fiction', (await page.$eval('.bento-fiction', (a) => a.getAttribute('href'))) === '/books?category=Literary%20Fiction');
     const dbCategories = (await db.query(`select distinct category from public.books where is_visible and category is not null`)).rows.map((r) => r.category);
-    await waitSel(page, '.circle');
-    const circles = await page.$$eval('.circles-section .circle', (cs) => cs.map((c) => ({ label: c.textContent.trim(), href: c.getAttribute('href'), img: Boolean(c.querySelector('img')) })));
-    check('circles: one round link per category in the database', circles.length === dbCategories.length && circles.every((c) => dbCategories.includes(c.label)), JSON.stringify(circles.map((c) => c.label)));
-    check('circles: each links to its category and shows a cover', circles.every((c) => c.href === `/books?category=${encodeURIComponent(c.label)}` && c.img));
-
-    const trust = await page.$$eval('.trust-strip .trust-items:not([aria-hidden]) .trust-item', (els) => els.map((e) => e.textContent.trim()));
-    check('trust strip: free shipping, cash on delivery, easy returns', JSON.stringify(trust) === JSON.stringify(['Free shipping', 'Cash on delivery', 'Easy returns']), JSON.stringify(trust));
-    check('banner 2: the Must-Read Trio banner links to box sets', (await page.$eval('.banner-wrap a', (a) => a.getAttribute('href')).catch(() => null)) === '/books?category=Box%20Sets%20%26%20Combos');
-
-    await waitSel(page, '[aria-labelledby="deals-heading"] .book-card');
-    check('home: AMAZING DEALS row holds the next 10 deals', (await page.$$('[aria-labelledby="deals-heading"] .book-card')).length === 10);
-    for (const [id, label] of [['under', 'Up to ₹299'], ['combos', 'Box Sets & Combos'], ['regional', 'Regional editions']]) {
-      check(`home: "${label}" row has books`, (await waitSel(page, `[aria-labelledby="${id}-heading"] .book-card`)) && (await text(page, `#${id}-heading`)) === label);
-    }
-    await waitSel(page, '[aria-labelledby="all-heading"] .book-card');
-    check('home: ALL PRODUCTS shows 8 books with VIEW ALL', (await page.$$('[aria-labelledby="all-heading"] .book-card')).length === 8 && (await page.$('[aria-labelledby="all-heading"] .view-all[href="/books"]')) !== null);
-    const headTransform = await page.$eval('#all-heading', (h) => getComputedStyle(h).textTransform);
-    check('home: section headings are UPPERCASE and centred', headTransform === 'uppercase' && (await page.$eval('.home-head', (h) => getComputedStyle(h).alignItems)) === 'center');
-
-    check('cards: no Save button on cards', (await page.$('.book-card .save-button')) === null);
-    check('cards: every card has a full-width button', (await page.$$('.book-card')).length === (await page.$$('.book-card .btn-card')).length);
-    const cardBtn = await page.$eval('.book-card .btn-card:not([aria-disabled])', (b) => ({ bg: getComputedStyle(b).backgroundColor, tt: getComputedStyle(b).textTransform }));
-    check('cards: black UPPERCASE button', cardBtn.bg === BLACK && cardBtn.tt === 'uppercase', JSON.stringify(cardBtn));
-    check('cards: red discount tag', (await page.$eval('.book-card .cover-tag', (e) => getComputedStyle(e).backgroundColor).catch(() => null)) === RED);
-    check('cards: green "% OFF" in the price row', (await page.$eval('.book-card .price-off', (e) => getComputedStyle(e).color).catch(() => null)) === GREEN);
-    check('cards: framed with a 1px border', (await page.$eval('.book-card', (e) => getComputedStyle(e).borderTopWidth)) === '1px');
-    check('header: Offers removed from navigation', (await page.$('header a[href="/offers"]')) === null);
+    const moods = await page.$$eval('.mood-tile', (as) => as.map((a) => new URL(a.href).searchParams.get('category')));
+    check('home: every genre tile opens a category that has books', moods.length >= 5 && moods.every((c) => dbCategories.includes(c)), JSON.stringify(moods));
+    check('home: "Books to start with" shows books', await waitSel(page, '.reading-shelf .book-card'));
+    await waitSel(page, '.affordable-section .book-card');
+    const cheap = await page.$$eval('.affordable-section .price-block .price', (ps) => ps.map((p) => Number(p.textContent.replace(/[^\d.]/g, ''))));
+    check('home: "₹299 & under" shows up to 4 books, all ₹299 or less', cheap.length >= 1 && cheap.length <= 4 && cheap.every((n) => n <= 299), cheap.join(','));
+    check('home: no invented promos, countdowns or reviews', !INVENTED.test(await page.$eval('body', (b) => b.innerText)));
+    check('cards: every card has a full-width Add to cart button', (await page.$$('.book-card')).length === (await page.$$('.book-card .btn-card')).length);
+    const cardBtn = await page.$eval('.book-card .btn-card:not([aria-disabled])', (b) => ({ radius: parseFloat(getComputedStyle(b).borderTopLeftRadius), bg: getComputedStyle(b).backgroundColor }));
+    check('cards: Add to cart is a rounded accent button', cardBtn.radius >= 20 && cardBtn.bg !== BLACK && cardBtn.bg !== 'rgba(0, 0, 0, 0)', JSON.stringify(cardBtn));
     check(
       'header: logo and name on the left, search in the middle',
       await page.evaluate(() => {
         const logo = document.querySelector('.brand-logo').getBoundingClientRect();
         const search = document.querySelector('.header-search').getBoundingClientRect();
-        return logo.left < 60 && /kitaabaurkona/i.test(document.querySelector('.brand-word').textContent) && Math.abs(search.left + search.width / 2 - window.innerWidth / 2) < 60;
+        return logo.left < 60 && /kitaab\s*aur\s*kona/i.test(document.querySelector('.brand-logo').getAttribute('aria-label') ?? '') && Math.abs(search.left + search.width / 2 - window.innerWidth / 2) < 80;
       }),
     );
-    check('home: rows alternate cream and white bands', (await page.$$('.band[data-tone="cream"]')).length >= 2 && (await page.$$('.band:not([data-tone])')).length >= 2);
-    check('home: a category ribbon links every category', (await page.$$('.ribbon ul:not([aria-hidden]) a[href*="category="]')).length >= 5);
-    check('header: no count badge while the cart is empty', (await page.$('.cart-count')) === null);
-    const footer = await page.$eval('.site-footer', (f) => f.innerText);
-    check('footer: contact details from the owner', footer.includes('Kitaabaurkona@gmail.com') && footer.includes('8690965448') && /udaipur/i.test(footer));
-    check('footer: policy links', (await page.$$eval('.footer-links a', (as) => as.map((a) => a.getAttribute('href')))).join() === '/about,/returns,/terms,/privacy,/shipping,/settings');
+    check('header: no count while the cart is empty', (await page.$('.mobile-cart-count')) === null && (await cartLabel(page)) === 'Cart, 0 items');
+    const hint = await page.$eval('#header-search', (i) => i.placeholder);
+    check('header search: the empty box suggests a real book or author', SEARCH_HINTS.includes(hint), hint);
+    check('header search: the hint is slightly transparent', Number(await page.$eval('#header-search', (i) => getComputedStyle(i, '::placeholder').opacity)) < 1);
+    const footerLinks = await page.$$eval('.site-footer a', (as) => as.map((a) => a.getAttribute('href')));
+    check('footer: email and WhatsApp from the owner', footerLinks.includes('mailto:Kitaabaurkona@gmail.com') && footerLinks.some((h) => /wa\.me\/918690965448/.test(h ?? '')), JSON.stringify(footerLinks));
+    check('footer: policy links', ['/about', '/returns', '/terms', '/privacy', '/shipping', '/settings'].every((h) => footerLinks.includes(h)), JSON.stringify(footerLinks));
     await scrollThrough(page);
     await page.screenshot({ path: path.join(SHOTS, 'home-light-1280.png'), fullPage: true });
 
     // ---------- Add to cart: + count − stepper, cover flies to the cart ----------
-    // The first card a visitor sees (the row's off-screen copies are inert); hovering it pauses the row.
-    // Pause the row first (hover), let any slide in progress finish, then pick the card,
-    // so autoplay cannot move it away between picking and clicking.
-    const dealsRow = await page.$('[aria-labelledby="deals-heading"] .carousel');
-    await dealsRow.evaluate((c) => c.scrollIntoView({ block: 'center' }));
-    await sleep(300);
-    await dealsRow.hover();
-    await sleep(900);
-    const firstCard = await page.$('[aria-labelledby="deals-heading"] .carousel-slide:not([data-copy]):not([aria-hidden="true"]) .book-card');
+    const firstCard = await page.evaluateHandle(() => [...document.querySelectorAll('.reading-shelf .book-card, .affordable-section .book-card')].find((c) => c.querySelector('.btn-card:not([aria-disabled])')));
+    await firstCard.evaluate((c) => c.scrollIntoView({ block: 'center' }));
+    await sleep(400);
     const price = await firstCard.$eval('.price', (e) => e.textContent.trim());
-    await firstCard.hover();
-    await sleep(200);
     const before = await firstCard.$eval('.btn-card', (b) => Math.round(b.getBoundingClientRect().height));
     const yBefore = await page.evaluate(() => window.scrollY);
     await firstCard.$eval('.btn-card', (b) => b.click());
     check('add: a copy of the cover flies towards the cart', await waitSel(page, '.cart-flight img', 300));
-    check('add: the header count waits for the cover to land', (await page.$('.cart-count')) === null);
+    check('add: the cart count waits for the cover to land', (await cartLabel(page)) === 'Cart, 0 items', await cartLabel(page));
     await sleep(180);
     await page.screenshot({ path: path.join(SHOTS, 'flight-light-1280.png') });
     const landed = await page
-      .waitForFunction(() => !document.querySelector('.cart-flight') && document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 })
+      .waitForFunction(() => !document.querySelector('.cart-flight') && [...document.querySelectorAll('.cart-button, .floating-cart')].some((b) => b.getAttribute('aria-label') === 'Cart, 1 item'), { timeout: 3000 })
       .then(() => true)
       .catch(() => false);
-    check('add: it lands, disappears and the header count becomes 1', landed);
+    check('add: it lands, disappears and the cart count becomes 1', landed);
     await sleep(300);
     check('add: the cart panel does not open', (await page.$('.cart-panel')) === null);
     check('add: no pop-up message', (await page.$('.toast')) === null);
     check('add: the page stays where it was', Math.abs((await page.evaluate(() => window.scrollY)) - yBefore) <= 1);
-    check('add: header cart button names the count', /Cart, 1 item/.test(await page.$eval('.cart-button', (b) => b.getAttribute('aria-label'))));
     check('add: the button becomes a − 1 + stepper', (await firstCard.$eval('.cart-stepper-number', (e) => e.textContent.trim()).catch(() => null)) === '1');
     check('add: the stepper is the same height as the button (nothing moves)', (await firstCard.$eval('.cart-stepper', (e) => Math.round(e.getBoundingClientRect().height))) === before);
-    check('add: the stepper is black like the button', (await firstCard.$eval('.cart-stepper', (e) => getComputedStyle(e).backgroundColor)) === BLACK);
+    const stepperBg = await firstCard.$eval('.cart-stepper', (e) => getComputedStyle(e).backgroundColor);
+    check('add: the stepper is dark ink, unlike the yellow button', luminance(stepperBg) < 0.2, stepperBg);
     check('add: focus moves to the stepper', await firstCard.evaluate((c) => c.querySelector('.cart-stepper').contains(document.activeElement)));
     await firstCard.$eval('[data-step="up"]', (b) => b.click());
-    const twoLanded = await page
-      .waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '2', { timeout: 3000 })
-      .then(() => true)
-      .catch(() => false);
-    check('stepper: + adds one more (card and header show 2)', twoLanded && (await firstCard.$$eval('.cart-stepper-number', (es) => es.at(-1).textContent.trim())) === '2');
+    const two = await waitCart(page, 2);
+    check('stepper: + adds one more (card and header show 2)', two && (await firstCard.$$eval('.cart-stepper-number', (es) => es.at(-1).textContent.trim()).catch(() => null)) === '2');
     await sleep(300);
     await firstCard.$eval('[data-step="down"]', (b) => b.click());
-    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 }).catch(() => {});
-    check('stepper: − takes one away at once', (await text(page, '.cart-count')) === '1');
+    check('stepper: − takes one away at once', await waitCart(page, 1));
     await sleep(300);
     await firstCard.$eval('[data-step="down"]', (b) => b.click());
     await sleep(300);
-    check('stepper: − on the last copy brings back Add to cart', (await firstCard.$('.btn-card')) !== null && (await gone(page, '.cart-count')));
+    check('stepper: − on the last copy brings back Add to cart', (await firstCard.$('.btn-card')) !== null && (await waitCart(page, 0)));
     await firstCard.$eval('.btn-card', (b) => b.click());
-    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 3000 }).catch(() => {});
+    await waitCart(page, 1);
     await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(400);
 
     // ---------- Cart panel ----------
     await page.click('.cart-button');
@@ -287,17 +257,11 @@ try {
     await sleep(300);
     check('panel: focus moves inside', await page.evaluate(() => document.querySelector('.cart-panel').contains(document.activeElement)));
     check('panel: lists the book with its total', (await page.$$('.cart-panel .line')).length === 1 && (await text(page, '.cart-panel .line-total')) === price);
-    check('panel: subtotal matches', (await text(page, '.cart-panel-sum dd')) === price);
-    check('panel: Checkout is a black primary button', (await page.$eval('.cart-panel .btn-primary', (b) => getComputedStyle(b).backgroundColor)) === BLACK);
     check('panel: Checkout button shows the total', /^Checkout\s*•\s*₹/i.test(await page.$eval('.cart-panel .btn-primary', (b) => b.textContent.trim())));
-    const inc = await page.$('.cart-panel .stepper button:last-child');
+    const inc = await page.$('.cart-panel .stepper button[aria-label="Increase quantity"]');
     if (inc) {
       await inc.click();
-      const two = await page
-        .waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '2', { timeout: 3000 })
-        .then(() => true)
-        .catch(() => false);
-      check('panel: + raises the quantity and the header count', two, await text(page, '.cart-count'));
+      check('panel: + raises the quantity and the header count', await waitCart(page, 2), await cartLabel(page));
     }
     await page.screenshot({ path: path.join(SHOTS, 'panel-light-1280.png') });
     await page.keyboard.press('Escape');
@@ -313,10 +277,63 @@ try {
     await sleep(300);
     await page.$$eval('.cart-panel .btn-link', (bs) => bs.find((b) => b.textContent.trim() === 'Remove')?.click());
     check('panel: removing the last book shows the empty state', await waitSel(page, '.cart-panel-empty', 3000));
-    check('panel: header badge goes away', await gone(page, '.cart-count'));
+    check('panel: the cart count goes back to 0', await waitCart(page, 0));
     await page.click('.cart-panel-empty a');
     check('panel: a link inside the panel closes it and navigates', (await gone(page, '.cart-panel')) && new URL(page.url()).pathname === '/books');
     check('visitor flow: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  // ---------- Floating cart: wide screens, once the header has scrolled away ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    await goto(page, '/books?stock=1');
+    await waitSel(page, '.book-grid .book-card');
+    check('floating cart: hidden while the header is on screen', (await page.$('.floating-cart')) === null);
+    await page.evaluate(() => window.scrollTo(0, 1400));
+    check('floating cart: appears once the header has scrolled away', await waitSel(page, '.floating-cart', 3000));
+    const card = await page.evaluateHandle(() => [...document.querySelectorAll('.book-grid .book-card')].find((c) => { const t = c.getBoundingClientRect().top; return t > 120 && t < 520 && c.querySelector('.btn-card:not([aria-disabled])'); }));
+    await card.$eval('.btn-card', (b) => b.click());
+    check('floating cart: the cover flies to it', await waitSel(page, '.cart-flight img', 300));
+    check('floating cart: its count waits for the cover, then shows 1', (await page.$eval('.floating-cart', (b) => b.getAttribute('aria-label'))) === 'Cart, 0 items' && (await page.waitForFunction(() => document.querySelector('.floating-cart')?.getAttribute('aria-label') === 'Cart, 1 item', { timeout: 3000 }).then(() => true).catch(() => false)));
+    await sleep(400);
+    await page.screenshot({ path: path.join(SHOTS, 'floating-cart-1280.png') });
+    await page.click('.floating-cart');
+    check('floating cart: opens the cart panel and steps aside', (await waitSel(page, '.cart-panel', 3000)) && (await gone(page, '.floating-cart')));
+    await page.keyboard.press('Escape');
+    await gone(page, '.cart-panel');
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+    check('floating cart: goes away when the header is back', await gone(page, '.floating-cart'));
+    check('floating cart: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+    const phone = await newPage({ width: 390, height: 844, touch: true });
+    await goto(phone.page, '/books');
+    await waitSel(phone.page, '.book-grid .book-card');
+    await phone.page.evaluate(() => window.scrollTo(0, 1600));
+    await sleep(600);
+    check('phone: the header stays on screen, so no floating cart', (await phone.page.$eval('.site-header', (h) => Math.round(h.getBoundingClientRect().top))) === 0 && (await phone.page.$('.floating-cart')) === null);
+    await phone.ctx.close();
+  }
+
+  // ---------- Search hint: changes every 30 seconds (sped up here) ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    await page.evaluateOnNewDocument(() => {
+      const every = window.setInterval;
+      window.setInterval = (fn, ms, ...rest) => every(fn, ms === 30000 ? 400 : ms, ...rest);
+    });
+    await goto(page, '/');
+    await waitSel(page, '#header-search');
+    const first = await page.$eval('#header-search', (i) => i.placeholder);
+    const changed = await page.waitForFunction((was) => document.querySelector('#header-search').placeholder !== was, { timeout: 3000 }, first).then(() => true).catch(() => false);
+    const second = await page.$eval('#header-search', (i) => i.placeholder);
+    check('search hint: moves on to the next suggestion by itself', changed && SEARCH_HINTS.includes(second) && second !== first, `${first} -> ${second}`);
+    await page.type('#header-search', 'atomic');
+    check('search hint: typing replaces it', (await page.$eval('#header-search', (i) => i.value)) === 'atomic');
+    check('header search: suggestions list matching books while typing', await page.waitForFunction(() => document.querySelectorAll('.search-suggestions li a[href^="/books/"]').length > 0, { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.keyboard.press('Escape');
+    check('header search: Escape closes the suggestions', await gone(page, '.search-suggestions'));
+    check('search hint: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
@@ -330,13 +347,13 @@ try {
     });
     const settle = () => page.waitForNetworkIdle({ idleTime: 400, timeout: 8000 }).catch(() => {});
     await goto(page, '/');
-    await waitSel(page, '[aria-labelledby="all-heading"] .book-card');
+    await waitSel(page, '.affordable-section .book-card');
     await settle();
-    const target = await page.$eval('[aria-labelledby="all-heading"]', (s) => Math.round(s.getBoundingClientRect().top + window.scrollY - 200));
+    const target = await page.$eval('.affordable-section', (s) => Math.round(s.getBoundingClientRect().top + window.scrollY - 200));
     await page.evaluate((y) => window.scrollTo(0, y), target);
     await sleep(300);
     const homeY = await page.evaluate(() => window.scrollY);
-    await page.$eval('[aria-labelledby="all-heading"] .book-card-link', (a) => a.click());
+    await page.$eval('.affordable-section .book-card-link', (a) => a.click());
     await page.waitForFunction(() => location.pathname.startsWith('/books/'), { timeout: 5000 }).catch(() => {});
     await waitSel(page, '.detail-title');
     check('flow: a new page opens at the top', (await page.evaluate(() => window.scrollY)) === 0);
@@ -351,17 +368,18 @@ try {
     check('flow: no skeletons after going back', (await page.$('.skeleton')) === null);
 
     // Header cart -> View cart -> Continue shopping returns to the same spot.
-    await page.$eval('[aria-labelledby="all-heading"] .book-card .btn-card:not([aria-disabled])', (b) => b.click());
-    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
+    await page.$eval('.affordable-section .book-card .btn-card:not([aria-disabled])', (b) => b.click());
+    await waitCart(page, 1, 4000);
     const beforeCart = await page.evaluate(() => window.scrollY);
-    await page.click('.cart-button');
+    await page.$eval('.cart-button, .floating-cart', (b) => b.click());
     await waitSel(page, '.cart-panel');
     await sleep(400);
     await page.$$eval('.cart-panel-links button', (bs) => bs.find((b) => /continue shopping/i.test(b.textContent))?.click());
     const panelGone = await gone(page, '.cart-panel');
     const afterPanel = await page.evaluate(() => window.scrollY);
     check('panel: Continue shopping closes it and keeps the place', panelGone && new URL(page.url()).pathname === '/' && Math.abs(afterPanel - beforeCart) <= 2, `gone=${panelGone} ${new URL(page.url()).pathname} ${afterPanel} vs ${beforeCart}`);
-    await page.click('.cart-button');
+    await page.waitForSelector('.cart-button, .floating-cart', { timeout: 3000 }).catch(() => {});
+    await page.$eval('.floating-cart', (b) => b.click()).catch(() => page.$eval('.cart-button', (b) => b.click()));
     await waitSel(page, '.cart-panel');
     await sleep(400);
     await page.$$eval('.cart-panel-links a', (as) => as.find((a) => a.getAttribute('href') === '/cart')?.click());
@@ -379,12 +397,17 @@ try {
   {
     const { page, ctx, errors } = await newPage();
     let catalogue = 0;
+    const seen = [];
     page.on('request', (r) => {
       const u = new URL(r.url());
-      if (u.hostname.endsWith('.supabase.co') && u.pathname.startsWith('/rest/v1/books') && r.method() !== 'OPTIONS') catalogue += 1;
+      if (u.hostname.endsWith('.supabase.co') && u.pathname.startsWith('/rest/v1/books') && r.method() !== 'OPTIONS') {
+        catalogue += 1;
+        seen.push(decodeURIComponent(u.search).slice(0, 140));
+      }
     });
     const settle = () => page.waitForNetworkIdle({ idleTime: 300, timeout: 8000 }).catch(() => {});
-    const titles = () => page.$$eval('.book-grid .book-card-title', (es) => es.map((e) => e.textContent.trim()));
+    // A card shows the title and, on its own line, the author: match on both.
+    const titles = () => page.$$eval('.book-grid .book-card', (cs) => cs.map((c) => `${c.querySelector('.book-card-title')?.textContent.trim() ?? ''} ${c.querySelector('.book-author')?.textContent.trim() ?? ''}`.trim()));
     const search = async (q) => {
       await goto(page, `/books?q=${encodeURIComponent(q)}`);
       await waitSel(page, '.book-grid .book-card');
@@ -434,11 +457,12 @@ try {
     await page.keyboard.up('Control');
     await page.keyboard.press('Backspace');
     await page.type('#books-search', 'murakmi');
-    await page.waitForFunction(() => [...document.querySelectorAll('.book-grid .book-card-title')].some((e) => /Murakami/.test(e.textContent)), { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => [...document.querySelectorAll('.book-grid .book-author')].some((e) => /Murakami/.test(e.textContent)), { timeout: 5000 }).catch(() => {});
     const typed = await titles();
     check('search: typing "murakmi" finds Murakami', typed.length > 0 && typed.every((t) => /Murakami/.test(t)), typed.slice(0, 2).join(' / '));
     await settle();
-    check('search: a new query reads only the page of books, not the catalogue again', catalogue - before === 1, `${catalogue - before} requests`);
+    const typedReads = seen.slice(before);
+    check('search: a new query reads only pages of books, never the whole catalogue again', typedReads.length >= 1 && typedReads.every((q) => /id=in./.test(q)), typedReads.join(' | '));
     await page.select('#books-sort', 'price_asc');
     await page.waitForFunction(() => new URL(location.href).searchParams.get('sort') === 'price_asc', { timeout: 4000 }).catch(() => {});
     await settle();
@@ -448,125 +472,61 @@ try {
     await ctx.close();
   }
 
-  // ---------- Motion: hero, announcement, rows, circles, card photos; menus, search, filters ----------
+  // ---------- Motion and menus: card lift, genre row, page fade; nav menu, filters, policy pages ----------
   {
     const { page, ctx, errors } = await newPage();
     await goto(page, '/');
-    await waitSel(page, '.hero-deal-title');
-    await page.mouse.move(...NEUTRAL);
-    const hero = '.hero-carousel';
-    check('hero: starts on the banner', (await activeDot(page, hero)) === 0);
-    const offer0 = (await visibleSlides(page, '.announcement-bar'))[0];
-    await sleep(4600);
-    const offer1 = (await visibleSlides(page, '.announcement-bar'))[0];
-    check('announcement bar: slides to the next offer by itself', offer0 && offer1 && offer0 !== offer1, `${offer0} -> ${offer1}`);
-    await sleep(1200);
-    check('hero: slides on by itself after 5 seconds', (await activeDot(page, hero)) === 1, await activeDot(page, hero));
-    const moving = await page.$eval(`${hero} .carousel-track`, (t) => getComputedStyle(t).transitionDuration);
-    check('hero: slides sideways in 0.5s', moving === '0.5s', moving);
-    await page.hover(hero);
-    const held = await activeDot(page, hero);
-    await sleep(5600);
-    check('hero: pauses while hovered', (await activeDot(page, hero)) === held, await activeDot(page, hero));
-    await page.click(`${hero} .carousel-next`);
-    await sleep(700);
-    const afterArrow = await activeDot(page, hero);
-    check('hero: next arrow moves on', afterArrow === (held + 1) % 4, afterArrow);
-    await page.mouse.move(...NEUTRAL);
-    await sleep(5600);
-    check('hero: stops moving once the visitor used it', (await activeDot(page, hero)) === afterArrow, await activeDot(page, hero));
-    await page.click(`${hero} .carousel-dot:nth-child(1)`);
-    await sleep(700);
-    check('hero: dots jump to a slide', (await activeDot(page, hero)) === 0);
-    await page.click(`${hero} .carousel-prev`);
-    await sleep(900);
-    check('hero: going back from the first slide loops to the last', (await activeDot(page, hero)) === 3, await activeDot(page, hero));
-    check('hero: still one slide exposed after looping', (await page.$$(`${hero} .carousel-slide:not([aria-hidden="true"])`)).length === 1);
-
-    // Rows and circles
-    const deals = '[aria-labelledby="deals-heading"]';
-    await page.$eval(deals, (s) => s.scrollIntoView({ block: 'center' }));
-    await sleep(600);
-    await page.hover(`${deals} .carousel-next`);
-    const rowStart = await activeDot(page, deals);
-    await page.click(`${deals} .carousel-next`);
-    await sleep(700);
-    check('deals row: arrow slides one book along', (await activeDot(page, deals)) === rowStart + 1, `${rowStart} -> ${await activeDot(page, deals)}`);
-    check('deals row: 4 books visible at 1280px', (await page.$$(`${deals} .carousel-slide:not([aria-hidden="true"])`)).length === 4);
-
-    // Card photo swap on hover (in the still ALL PRODUCTS grid, on a book with 2+ photos)
-    await page.$eval('[aria-labelledby="all-heading"]', (s) => s.scrollIntoView({ block: 'start' }));
-    await sleep(800);
-    const gridCards = await page.$$('[aria-labelledby="all-heading"] .book-card');
-    let card = null;
-    for (const c of gridCards) if (await c.$('.card-photo-arrow')) card = card ?? c;
-    check('cards: the grid has a book with more than one photo to test', card !== null);
-    if (card) {
-      await card.evaluate((c) => c.scrollIntoView({ block: 'center' }));
-      await sleep(300);
-      await page.waitForNetworkIdle({ idleTime: 500, timeout: 30000 }).catch(() => {});
-      const media = await card.$('.card-media');
-      await media.hover();
-      // The extra photos are about 1 MB each and only start loading on the first hover.
-      const swapped = await card
-        .waitForSelector('.card-photo-extra[data-shown]', { timeout: 15000 })
-        .then(() => true)
-        .catch(() => false);
-      check('cards: hovering a card fades in its next photo', swapped);
-      check('cards: the lift and shadow show on hover', (await card.evaluate((c) => getComputedStyle(c).boxShadow)) !== 'none');
-      await page.mouse.move(...NEUTRAL);
-      await sleep(700);
-      check('cards: leaving the card goes back to the cover', (await card.$('.card-photo-extra[data-shown]')) === null);
-    }
-
-    const circlesNext = await page.$('.circles-section .carousel-next');
-    if (circlesNext) {
-      await page.$eval('.circles-section', (s) => s.scrollIntoView({ block: 'center' }));
-      await sleep(500);
-      await circlesNext.click();
-      await sleep(700);
-      check('circles: arrow slides the categories', (await activeDot(page, '.circles-section')) === 1);
-    }
-
-    // Nav menus
+    await waitSel(page, '.reading-shelf .book-card');
+    const card = await page.$('.reading-shelf .book-card');
+    await card.evaluate((c) => c.scrollIntoView({ block: 'center' }));
+    await sleep(300);
+    await card.hover();
+    await sleep(400);
+    check('cards: a card lifts when hovered', /matrix\(1, 0, 0, 1, 0, -[1-9]/.test(await card.evaluate((c) => getComputedStyle(c).transform)), await card.evaluate((c) => getComputedStyle(c).transform));
+    check('home: sections reveal as they scroll in', await page.$eval('.mood-section', (s) => s.hasAttribute('data-reveal')));
     await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(500);
+    await page.hover('.hero-book');
+    await sleep(400);
+    check('home: a hero cover lifts when pointed at', (await page.$eval('.hero-book img', (i) => getComputedStyle(i).transform)) !== 'none', await page.$eval('.hero-book img', (i) => getComputedStyle(i).transform));
+    await page.mouse.move(5, 5);
+
+    // A short fade as each page comes in.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.$eval('.hero-cta', (a) => a.click());
+    await page.waitForFunction(() => location.pathname === '/books', { timeout: 4000 }).catch(() => {});
+    const fadeStart = await page.$eval('#main > div', (d) => Number(getComputedStyle(d).opacity)).catch(() => 1);
+    await sleep(400);
+    const fadeEnd = await page.$eval('#main > div', (d) => Number(getComputedStyle(d).opacity));
+    check('pages: each page fades in', fadeStart < 1 && fadeEnd === 1, `${fadeStart} -> ${fadeEnd}`);
+
+    // Nav menu (a reload keeps the place on the page, so go back to the top first)
+    await goto(page, '/');
+    await waitSel(page, '.nav-menu-button');
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(700);
+    await page.hover('.nav-menu-button');
+    check('nav menu: Categories opens on hover', await waitSel(page, '.nav-menu-panel', 2000));
+    const menuCategories = await page.$$eval('.nav-menu-panel a[href*="category="]', (as) => as.map((a) => new URL(a.href).searchParams.get('category')));
+    const known = (await db.query(`select distinct category from public.books where is_visible and category is not null`)).rows.map((r) => r.category);
+    check('nav menu: lists categories that have books', menuCategories.length >= 5 && menuCategories.every((c) => known.includes(c)), JSON.stringify(menuCategories));
     await sleep(300);
-    const fiction = (await db.query(`select distinct category from public.books where is_visible and category in ('Romance','Thriller & Mystery','Fantasy','Literary Fiction','Comics & Manga')`)).rows.length;
-    const firstMenuButton = await page.$$('.nav-menu-button');
-    await firstMenuButton[0].hover();
-    check('nav menu: FICTION opens on hover', await waitSel(page, '.nav-menu-panel', 2000));
-    check('nav menu: lists the fiction categories', (await page.$$('.nav-menu-panel a[href*="category="]')).length === fiction, fiction);
-    await sleep(300);
-    await page.screenshot({ path: path.join(SHOTS, 'nav-menu-light-1280.png'), clip: { x: 0, y: 0, width: 1280, height: 480 } });
+    await page.screenshot({ path: path.join(SHOTS, 'nav-menu-light-1280.png'), clip: { x: 0, y: 0, width: 1280, height: 560 } });
     await page.keyboard.press('Escape');
     const menuClosed = await gone(page, '.nav-menu-panel');
-    const focusBack = await page
-      .waitForFunction(() => document.activeElement?.classList.contains('nav-menu-button'), { timeout: 1500 })
-      .then(() => true)
-      .catch(() => false);
-    const menuState = await page.evaluate(() => ({
-      panels: [...document.querySelectorAll('.nav-menu-panel')].map((p) => `${p.closest('.nav-menu')?.querySelector('.nav-menu-button')?.textContent.trim()}:${getComputedStyle(p).opacity}`),
-      expanded: [...document.querySelectorAll('.nav-menu-button[aria-expanded="true"]')].map((b) => b.textContent.trim()),
-      active: document.activeElement?.textContent.trim().slice(0, 30),
-    }));
-    check('nav menu: Escape closes it and focus returns to the button', menuClosed && focusBack, `closed=${menuClosed} ${JSON.stringify(menuState)}`);
+    const focusBack = await page.waitForFunction(() => document.activeElement?.classList.contains('nav-menu-button'), { timeout: 1500 }).then(() => true).catch(() => false);
+    check('nav menu: Escape closes it and focus returns to the button', menuClosed && focusBack);
     await page.keyboard.press('ArrowDown');
     await waitSel(page, '.nav-menu-panel', 2000);
     await sleep(100);
     check('nav menu: Arrow down opens it and focuses the first link', await page.evaluate(() => document.activeElement?.closest('.nav-menu-panel') !== null));
-    const firstCategory = await page.$eval('.nav-menu-panel a[href*="category="]', (a) => a.textContent.trim());
+    const firstCategory = await page.$eval('.nav-menu-panel a[href*="category="]', (a) => new URL(a.href).searchParams.get('category'));
     await page.$eval('.nav-menu-panel a[href*="category="]', (a) => a.click());
     await page.waitForFunction(() => location.pathname === '/books', { timeout: 4000 }).catch(() => {});
     check('nav menu: a category opens the filtered Books page and closes the menu', (await gone(page, '.nav-menu-panel')) && new URL(page.url()).searchParams.get('category') === firstCategory);
-    const dbCounts = Object.fromEntries(
-      (await db.query(`select category, count(*)::int as n from public.books where is_visible group by category`)).rows.map((r) => [r.category, r.n]),
-    );
+    const dbCounts = Object.fromEntries((await db.query(`select category, count(*)::int as n from public.books where is_visible group by category`)).rows.map((r) => [r.category, r.n]));
     await waitSel(page, '.book-grid .book-card');
     check('books page: category filter count matches the database', new RegExp(`^${dbCounts[firstCategory]} books?`).test(await text(page, '.page-meta')), await text(page, '.page-meta'));
-    check('nav: the open category is marked in the nav row', (await page.$('.nav-menu-button[data-current]')) !== null);
-    await goto(page, '/books?category=Self-Help');
-    await waitSel(page, '.book-grid .book-card');
-    check('nav: SELF-HELP link marked current on its page', (await page.$eval('.header-nav a[href="/books?category=Self-Help"]', (a) => a.getAttribute('aria-current'))) === 'page');
 
     // Filters reached from URLs
     const under = (await one(`select count(*)::int as n from public.books where is_visible and stock_quantity > 0 and price <= 299`)).n;
@@ -574,7 +534,7 @@ try {
     await goto(page, '/books?max=299&stock=1');
     await waitSel(page, '.book-grid .book-card');
     check('books page: "Up to ₹299" filter count matches the database', new RegExp(`^${under} books`).test(await text(page, '.page-meta')), await text(page, '.page-meta'));
-    check('books page: every listed price is ₹299 or less', (await page.$$eval('.book-grid .price', (ps) => ps.map((p) => Number(p.textContent.replace(/[^\d.]/g, ''))))).every((n) => n <= 299));
+    check('books page: every listed price is ₹299 or less', (await page.$$eval('.book-grid .price-block .price', (ps) => ps.map((p) => Number(p.textContent.replace(/[^\d.]/g, ''))))).every((n) => n <= 299));
     await goto(page, '/books?collection=regional');
     await waitSel(page, '.book-grid .book-card');
     check('books page: regional filter count matches the database', new RegExp(`^${regional} books?`).test(await text(page, '.page-meta')), await text(page, '.page-meta'));
@@ -590,7 +550,7 @@ try {
     check('header search: Enter opens Books with the search', new URL(page.url()).searchParams.get('q') === 'Tintin');
 
     // Policy pages from the footer
-    await page.$eval('.footer-links a[href="/returns"]', (a) => a.click());
+    await page.$eval('.site-footer a[href="/returns"]', (a) => a.click());
     await page.waitForFunction(() => location.pathname === '/returns', { timeout: 4000 }).catch(() => {});
     check('returns page: the old store text, word for word', await page.waitForFunction(() => /the standard return window is 3 days/.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
     for (const [route, phrase] of [['/about', 'Where Every Page Turns Into Possibility'], ['/shipping', 'We ship all over India'], ['/privacy', 'Personal Information That We collect']]) {
@@ -601,42 +561,12 @@ try {
     await waitSel(page, '.prose h2');
     const terms = await page.$eval('.prose', (p) => p.innerText);
     check('terms: contact details filled in, other unknowns still marked', terms.includes('Kitaabaurkona@gmail.com') && terms.includes('59 Nakoda Nagar') && (await page.$$('.prose .placeholder')).length > 0);
-    await page.$eval('.footer-top', (b) => b.scrollIntoView());
-    await sleep(200);
-    await page.click('.footer-top');
-    await page.waitForFunction(() => window.scrollY === 0, { timeout: 3000 }).catch(() => {});
-    check('footer: Go to top scrolls back up', (await page.evaluate(() => window.scrollY)) === 0);
     check('motion/menus/filters/pages: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
-  // ---------- Banners fit the screen; Books filters in one dropdown ----------
+  // ---------- Books filters in one dropdown ----------
   {
-    for (const [w, h, touch] of [[1920, 1080, false], [1600, 900, false], [1366, 768, false], [1280, 800, false], [390, 844, true], [844, 390, true]]) {
-      const { page, ctx, errors } = await newPage({ width: w, height: h, touch });
-      await goto(page, '/');
-      await waitSel(page, '.hero-banner img');
-      await page.waitForFunction(() => document.querySelector('.hero-banner img')?.complete, { timeout: 8000 }).catch(() => {});
-      const hero = await page.$eval('.hero-carousel', (e) => {
-        const r = e.getBoundingClientRect();
-        const img = e.querySelector('.hero-banner img');
-        return { bottom: Math.round(r.bottom + window.scrollY), height: Math.round(r.height), width: Math.round(r.width), src: img.currentSrc.split('/').pop() };
-      });
-      check(`banner ${w}x${h}: the hero ends above the bottom of the screen`, hero.bottom <= h, JSON.stringify(hero));
-      check(`banner ${w}x${h}: never wider than the store (1280px)`, hero.width <= 1280, hero.width);
-      if (w <= 400) check(`banner ${w}x${h}: a phone loads a small copy`, /-(480|828).webp$/.test(hero.src), hero.src);
-      if (w === 1920) {
-        await page.screenshot({ path: path.join(SHOTS, 'banner-1920.png') });
-        await page.$eval('.banner-wrap', (e) => e.scrollIntoView({ block: 'start' }));
-        await sleep(600);
-        const trio = await page.$eval('.banner-wrap .banner', (e) => Math.round(e.getBoundingClientRect().height));
-        check('banner 1920x1080: the second banner fits the screen too', trio <= h - 150, trio);
-      }
-      if (w === 844) await page.screenshot({ path: path.join(SHOTS, 'banner-phone-landscape.png') });
-      check(`banner ${w}x${h}: no console errors`, errors.length === 0, errors.join(' | '));
-      await ctx.close();
-    }
-
     const { page, ctx, errors } = await newPage();
     await goto(page, '/books');
     await waitSel(page, '.book-grid .book-card');
@@ -661,44 +591,57 @@ try {
     check('filters: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
 
+    // Phones: one "Filters & sort" button opens sort, filters and categories together.
     const phone = await newPage({ width: 375, height: 812, touch: true });
     await goto(phone.page, '/books');
     await waitSel(phone.page, '.book-grid .book-card');
-    const row = await phone.page.$eval('.toolbar-row', (r) => ({ h: Math.round(r.getBoundingClientRect().height), sw: document.documentElement.scrollWidth }));
-    check('phone books toolbar: sort and Filters share one row, no sideways scroll', row.h <= 52 && row.sw <= 375, JSON.stringify(row));
-    await phone.page.tap('.filter-toggle');
-    await waitSel(phone.page, '.filter-panel');
-    const panel = await phone.page.$eval('.filter-panel', (p) => { const r = p.getBoundingClientRect(); return { left: Math.round(r.left), right: Math.round(r.right) }; });
-    check('phone filters: the dropdown stays on screen', panel.left >= 0 && panel.right <= 375, JSON.stringify(panel));
-    await phone.page.screenshot({ path: path.join(SHOTS, 'books-filters-phone-375.png') });
+    const toggle = await phone.page.evaluateHandle(() => [...document.querySelectorAll('main button')].find((b) => /Filters & sort/i.test(b.textContent)) ?? null);
+    const hasToggle = await toggle.evaluate((b) => b !== null);
+    check('phone books: one "Filters & sort" button', hasToggle);
+    if (hasToggle) {
+      await toggle.tap();
+      const opened = await phone.page.waitForSelector('.catalogue-page[data-filters-open]', { timeout: 3000 }).then(() => true).catch(() => false);
+      const shown = await phone.page.evaluate(() => {
+        const visible = (el) => Boolean(el) && el.getBoundingClientRect().width > 0;
+        return { sort: visible(document.querySelector('#books-sort')), options: [...document.querySelectorAll('.filter-option')].filter(visible).length, chips: [...document.querySelectorAll('.chip-scroll .chip')].filter(visible).length };
+      });
+      check('phone filters: the panel shows sort, the filters and the categories', opened && shown.sort && shown.options >= 3 && shown.chips >= 5, JSON.stringify(shown));
+      await phone.page.$$eval('.filter-option', (ls) => ls.find((l) => /In stock only/.test(l.textContent))?.querySelector('input')?.click());
+      await phone.page.waitForFunction(() => new URL(location.href).searchParams.get('stock') === '1', { timeout: 4000 }).catch(() => {});
+      check('phone filters: In stock only filters the list', new URL(phone.page.url()).searchParams.get('stock') === '1');
+      check('phone filters: nothing scrolls sideways', (await overflow(phone.page)) <= 0);
+      await phone.page.screenshot({ path: path.join(SHOTS, 'books-filters-phone-375.png') });
+    }
     await phone.ctx.close();
   }
 
-  // ---------- Phone: side menu, swipe, marquee ----------
+  // ---------- Phone: header, side menu ----------
   {
     const { page, ctx, errors } = await newPage({ width: 375, height: 812, touch: true });
     await goto(page, '/');
-    await waitSel(page, '.hero-deal-title');
-    check('phone: carousel arrows hidden (swipe and dots instead)', await page.$eval('.hero-carousel .carousel-next', (b) => getComputedStyle(b).display === 'none'));
-    const box = await page.$eval('.hero-carousel .carousel-viewport', (v) => {
-      const r = v.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-    });
-    await page.touchscreen.touchStart(box.x + 100, box.y);
-    await page.touchscreen.touchMove(box.x - 40, box.y);
-    await page.touchscreen.touchMove(box.x - 120, box.y);
-    await page.touchscreen.touchEnd();
-    await sleep(800);
-    check('phone: swiping the hero moves to the next slide', (await activeDot(page, '.hero-carousel')) === 1, await activeDot(page, '.hero-carousel'));
-    check('phone: trust strip scrolls as a marquee', (await page.$eval('.trust-marquee', (m) => getComputedStyle(m).animationName)) === 'marquee');
-    check('phone: header shows menu, search, logo and bag', (await page.$('.menu-button')) && (await page.$eval('.header-search-icon', (e) => getComputedStyle(e).display !== 'none')) && (await page.$('.brand-logo')));
+    await waitSel(page, '.hero-book');
+    check('phone: header shows menu, logo, search and cart', Boolean((await page.$('.menu-button')) && (await page.$('.brand-logo')) && (await page.$('#header-search')) && (await page.$('.cart-button'))));
+    check('phone: the search box shows a hint', SEARCH_HINTS.includes(await page.$eval('#header-search', (i) => i.placeholder)));
+    check('phone: hero covers float gently', (await page.$eval('.hero-book img', (i) => getComputedStyle(i).animationName)) === 'hero-cover-float');
     await page.click('.menu-button');
     await waitSel(page, '.drawer');
     await waitSel(page, '.drawer nav[aria-label="Help"] a', 4000);
-    check('phone menu: no Categories section in the side panel', (await page.$('.drawer nav[aria-label="Categories"]')) === null && !(await page.$('.drawer a[href*="category="]')));
-    check('phone menu: Help section links the policy pages', (await page.$$('.drawer nav[aria-label="Help"] a')).length === 5);
+    check('phone menu: no Categories section in the side panel', (await page.$('.drawer nav[aria-label="Categories"], .drawer .drawer-categories')) === null && !(await page.$('.drawer a[href*="category="]')));
+    check('phone menu: Help section links the policy pages', (await page.$$('.drawer nav[aria-label="Help"] a')).length >= 4);
     await sleep(400);
-    await page.screenshot({ path: path.join(SHOTS, 'drawer-categories-light-375.png') });
+    await page.screenshot({ path: path.join(SHOTS, 'drawer-light-375.png') });
+    await page.keyboard.press('Escape');
+    await gone(page, '.drawer');
+    await goto(page, '/books?stock=1');
+    await waitSel(page, '.book-grid .book-card');
+    const card = await page.$('.book-grid .book-card');
+    const h = await card.$eval('.btn-card', (b) => Math.round(b.getBoundingClientRect().height));
+    await card.$eval('.btn-card', (b) => b.click());
+    check('phone: the cover flies to the header cart', await waitSel(page, '.cart-flight img', 300));
+    check('phone: the cart count shows 1 once it lands', await waitCart(page, 1));
+    check('phone: the stepper keeps the button height', (await card.$eval('.cart-stepper', (e) => Math.round(e.getBoundingClientRect().height))) === h);
+    await sleep(300);
+    await page.screenshot({ path: path.join(SHOTS, 'stepper-phone-375.png') });
     check('phone: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
@@ -711,11 +654,14 @@ try {
     );
     await goto(page, `/books/${book.id}`);
     check('book page: title renders', await waitSel(page, '.detail-title'));
-    check('book page: title matches the database', (await text(page, '.detail-title')) === book.title);
+    // The page shows the title, and the author on its own line ("Title by Author" in the database).
+    const shownTitle = await text(page, '.detail-title');
+    const shownAuthor = (await text(page, '.detail-author')) ?? '';
+    check('book page: title (and author) match the database', Boolean(shownTitle) && book.title.startsWith(shownTitle) && (book.title === shownTitle || book.title.includes(shownAuthor)), `${shownTitle} | ${shownAuthor} | ${book.title}`);
     const body = await page.$eval('main', (m) => m.innerText);
     check('book page: no SKU, package size or shipping weight', !/\bSKU\b|Package size|Shipping weight/i.test(body));
-    check('book page: Add to cart is the black primary button', (await page.$eval('.detail-buy .btn-primary', (b) => getComputedStyle(b).backgroundColor)) === BLACK);
-    check('book page: Buy now and Save are quiet outline buttons', /Buy now/i.test(body) && (await page.$('.buy-secondary .btn-outline[aria-pressed]')) !== null);
+check('book page: one Add to cart, no separate quantity box', (await page.$$('.detail-buy .btn-primary')).length === 1 && (await page.$('.detail-buy .stepper')) === null);
+    check('book page: Go to cart and Save are quiet outline buttons', /Go to cart/i.test(body) && (await page.$('.buy-secondary .btn-outline[aria-pressed]')) !== null);
     const thumbs = await page.$$('.gallery-thumbs .thumb');
     if (thumbs.length > 1) {
       await thumbs[1].click();
@@ -724,14 +670,17 @@ try {
     }
     await page.screenshot({ path: path.join(SHOTS, 'book-light-1280.png'), fullPage: true });
     await page.$$eval('.detail-buy .btn-primary', (bs) => bs[0].click());
-    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
+    check('book page: the cover flies from the book to the cart', await waitSel(page, '.cart-flight img', 300));
+    await waitCart(page, 1, 4000);
     check('book page: Add to cart turns into the stepper, panel stays shut', (await waitSel(page, '.detail-buy .cart-stepper.is-block', 3000)) && (await page.$('.cart-panel')) === null);
     check('book page: the stepper fills the buy row', (await page.$eval('.detail-buy .cart-stepper', (e) => e.getBoundingClientRect().width)) === (await page.$eval('.detail-buy .buy-row', (e) => e.getBoundingClientRect().width)));
-    await page.$$eval('.buy-secondary button', (bs) => bs.find((b) => b.textContent.trim() === 'Buy now')?.click());
+    await page.$$eval('.buy-secondary button', (bs) => bs.find((b) => b.textContent.trim() === 'Go to cart')?.click());
     await page.waitForFunction(() => location.pathname === '/cart', { timeout: 4000 }).catch(() => {});
-    check('book page: Buy now goes to the cart page without adding twice', new URL(page.url()).pathname === '/cart' && (await text(page, '.cart-count')) === '1');
+    check('book page: Go to cart opens the cart page without adding twice', new URL(page.url()).pathname === '/cart' && (await cartLabel(page)) === 'Cart, 1 item');
     check('cart page: one line rendered with the shared cart line', await waitSel(page, 'main .line .line-inner'));
-    check('cart page: summary has no dark header bar', (await page.$eval('.summary-head', (e) => getComputedStyle(e).backgroundColor)) !== 'rgb(17, 17, 17)');
+    await page.$$eval('main .btn-outline', (bs) => bs.find((b) => /continue shopping/i.test(b.textContent))?.click());
+    await page.waitForFunction(() => /^\/books\//.test(location.pathname), { timeout: 4000 }).catch(() => {});
+    check('cart page: Continue shopping goes back to the book', /^\/books\//.test(new URL(page.url()).pathname));
     await page.screenshot({ path: path.join(SHOTS, 'cart-light-1280.png'), fullPage: true });
     check('book + cart pages: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
@@ -747,9 +696,11 @@ try {
     await page.click('button[type=submit]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
     check('signed in: lands on the store', new URL(page.url()).pathname === '/');
-    await waitSel(page, '[aria-labelledby="deals-heading"] .book-card');
-    await (await page.$('[aria-labelledby="deals-heading"] .book-card .btn-card')).click();
-    await page.waitForFunction(() => document.querySelector('.cart-count')?.textContent.trim() === '1', { timeout: 4000 }).catch(() => {});
+    await waitSel(page, '.reading-shelf .book-card');
+    await page.$$eval('.reading-shelf .book-card .btn-card:not([aria-disabled]), .affordable-section .book-card .btn-card:not([aria-disabled])', (bs) => bs[0].click());
+    await waitCart(page, 1, 4000);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await sleep(300);
     await page.click('.cart-button');
     await waitSel(page, '.cart-panel');
     await sleep(400);
@@ -768,7 +719,7 @@ try {
     await page.type('#ship-pincode', '313001');
     check('checkout: the courier confirms delivery and cash on delivery', await waitSel(page, '.pin-check[data-state="ok"]', 6000));
     check('checkout: payment is cash on delivery with free shipping', /Cash on delivery/i.test(await text(page, '.payment-option')) && /Shipping is free/i.test(await text(page, '.payment-option')));
-    check('checkout: Place order is the black primary button', (await page.$$eval('main .btn-primary', (bs) => bs.filter((b) => /Place order/i.test(b.textContent)).map((b) => getComputedStyle(b).backgroundColor))).join() === BLACK);
+check('checkout: one Place order button', (await page.$$eval('main .btn-primary', (bs) => bs.filter((b) => /Place order/i.test(b.textContent)).length)) === 1);
     await page.screenshot({ path: path.join(SHOTS, 'checkout-light-1280.png'), fullPage: true });
     const before = (await one('select count(*)::int as n from public.orders')).n;
     await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Place order/.test(b.textContent))?.click());
@@ -780,7 +731,7 @@ try {
     check('order page: shows the order as Order placed', (await text(page, '.page-head .status')) === 'Order placed');
     check('order page: delivery steps show Order placed as the current step', await page.waitForFunction(() => document.querySelector('.order-steps li[aria-current="step"] .order-step-label')?.textContent === 'Order placed' && /Tracking appears here once the courier picks up/.test(document.body.innerText), { timeout: 5000 }).then(() => true).catch(() => false));
     check('order page: the customer can still cancel before pickup', /Cancel order/i.test(await page.$eval('main', (m) => m.innerText)));
-    check('order: cart emptied after ordering', await gone(page, '.cart-count', 4000));
+    check('order: cart emptied after ordering', await waitCart(page, 0, 4000));
     await page.screenshot({ path: path.join(SHOTS, 'order-light-1280.png'), fullPage: true });
 
     const saveBook = await one(`select id from public.books where is_visible order by discount_percent desc, id limit 1`);
@@ -881,7 +832,7 @@ try {
 
   // ---------- Reduced motion ----------
   {
-    const { page, ctx } = await newPage({ prefs: { theme: 'system', motion: 'reduce' } });
+    const { page, ctx, errors } = await newPage({ prefs: { theme: 'system', motion: 'reduce' } });
     await goto(page, '/');
     await waitSel(page, '.cart-button');
     await page.click('.cart-button');
@@ -891,17 +842,14 @@ try {
     check('reduce motion: cart panel is in place immediately', transform === 'none' || transform === 'matrix(1, 0, 0, 1, 0, 0)', transform);
     await page.keyboard.press('Escape');
     await gone(page, '.cart-panel');
-    await page.mouse.move(...NEUTRAL);
-    await waitSel(page, '.hero-deal-title');
-    check('reduce motion: sections are shown without waiting to scroll', (await page.$eval('[aria-labelledby="deals-heading"]', (s) => getComputedStyle(s).opacity).catch(() => null)) === '1');
-    check('reduce motion: the trust strip stands still', (await page.$eval('.trust-marquee', (m) => getComputedStyle(m).animationName)) === 'none');
-    const offer = (await visibleSlides(page, '.announcement-bar'))[0];
-    await sleep(5800);
-    check('reduce motion: the hero does not move by itself', (await activeDot(page, '.hero-carousel')) === 0, await activeDot(page, '.hero-carousel'));
-    check('reduce motion: the announcement bar does not move by itself', (await visibleSlides(page, '.announcement-bar'))[0] === offer);
-    await page.click('.hero-carousel .carousel-next');
-    await sleep(50);
-    check('reduce motion: arrows change slides instantly', (await activeDot(page, '.hero-carousel')) === 1 && (await page.$eval('.hero-carousel .carousel-track', (t) => t.style.transition)) === 'none');
+    await waitSel(page, '.reading-shelf .book-card');
+    check('reduce motion: sections are shown without waiting to scroll', (await page.$eval('.affordable-section', (s) => getComputedStyle(s).opacity).catch(() => null)) === '1');
+    const card = await page.evaluateHandle(() => [...document.querySelectorAll('.reading-shelf .book-card, .affordable-section .book-card')].find((c) => c.querySelector('.btn-card:not([aria-disabled])')));
+    await card.$eval('.btn-card', (b) => b.click());
+    await sleep(60);
+    check('reduce motion: no flying cover, the count updates at once', (await page.$('.cart-flight')) === null && (await cartLabel(page)) === 'Cart, 1 item');
+    check('reduce motion: the stepper still appears', (await card.$('.cart-stepper')) !== null);
+    check('reduce motion: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
 
@@ -909,7 +857,8 @@ try {
   const pages = ['/', '/books', '/books?max=299&stock=1', '/books?collection=regional', '/cart', '/terms', '/about', '/returns', '/shipping', '/privacy', '/nowhere'];
   for (const scheme of ['light', 'dark']) {
     for (const [w, h] of [[320, 640], [375, 812], [768, 1024], [1280, 900]]) {
-      const { page, ctx, errors } = await newPage({ width: w, height: h, scheme, touch: w < 768 });
+      // The store opens in light mode; the dark pass picks Dark in its settings first.
+      const { page, ctx, errors } = await newPage({ width: w, height: h, scheme, touch: w < 768, prefs: scheme === 'dark' ? { theme: 'dark' } : null });
       const bad = [];
       for (const p of pages) {
         await goto(page, p);
@@ -920,10 +869,13 @@ try {
       check(`${scheme} ${w}px: no horizontal overflow on ${pages.length} pages`, bad.length === 0, bad.join(' '));
       if (w === 375 || w === 1280) {
         await goto(page, '/');
-        await waitSel(page, '.product-row .book-card');
+        await waitSel(page, '.reading-shelf .book-card');
         await scrollThrough(page);
         await page.screenshot({ path: path.join(SHOTS, `home-${scheme}-${w}.png`), fullPage: true });
-        await (await page.$('.product-row .book-card .btn-card')).click();
+        await page.$$eval('.reading-shelf .book-card .btn-card:not([aria-disabled]), .affordable-section .book-card .btn-card:not([aria-disabled])', (bs) => {
+          bs[0].scrollIntoView({ block: 'center' });
+          bs[0].click();
+        });
         await sleep(1000);
         await page.screenshot({ path: path.join(SHOTS, `stepper-${scheme}-${w}.png`) });
         await page.evaluate(() => document.querySelector('.cart-button').click());

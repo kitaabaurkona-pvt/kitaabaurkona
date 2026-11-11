@@ -10,9 +10,9 @@ function NotFound() {
       <div className="page-head">
         <h1 className="page-title">Page not found</h1>
       </div>
-      <StateBlock title="There is no page at this address." icon={SearchIcon}>
+      <StateBlock title="This page isn’t on the shelf." description="The link may have changed, or the address may be incomplete. Head back to the store to find your next read." icon={SearchIcon}>
         <Link to="/" className="btn btn-dark">
-          Go to the store
+          Back to the store
         </Link>
       </StateBlock>
     </div>

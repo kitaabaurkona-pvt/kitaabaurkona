@@ -8,6 +8,7 @@ import { COLLECTIONS, UNDER_PRICE, orderCategories } from '../utils/categories';
 import BookCard from '../components/store/BookCard';
 import { LoadError, StateBlock } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
+import { SlidersHorizontal, CaretDown, X } from '@phosphor-icons/react';
 import { SearchIcon } from '../components/icons';
 import { FadeIn } from '../components/motion/FadeIn';
 
@@ -66,7 +67,7 @@ function FilterMenu({ options, onToggle, onClear }) {
   }, [open]);
 
   return (
-    <div className="filter-menu" ref={ref}>
+    <div className="filter-menu" ref={ref} data-open={open || undefined}>
       <button
         type="button"
         className="select filter-toggle"
@@ -76,8 +77,7 @@ function FilterMenu({ options, onToggle, onClear }) {
       >
         Filters{count > 0 ? ` (${count})` : ''}
       </button>
-      {open && (
-        <div id="books-filters" className="filter-panel" role="group" aria-label="Filters">
+      <div id="books-filters" className="filter-panel" role="group" aria-label="Filters">
           {options.map((option) => (
             <label key={option.key} className="filter-option">
               <input type="checkbox" checked={option.checked} onChange={() => onToggle(option)} />
@@ -90,14 +90,14 @@ function FilterMenu({ options, onToggle, onClear }) {
             </button>
           )}
         </div>
-      )}
     </div>
   );
 }
 
 function Books() {
-  useDocumentTitle('Books');
+  useDocumentTitle('Browse books');
   const location = useLocation();
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [params, setParams] = useSearchParams();
   const q = (params.get('q') ?? '').slice(0, 100);
   // While searching, the best matches come first unless another order is picked.
@@ -149,7 +149,7 @@ function Books() {
   const first = useAsync(() => find({ search: q, sort, inStock, category, maxPrice, collection }), [filterKey], { key: `books:${filterKey}` });
   const categories = useAsync(() => listCategories(), [], { key: 'categories', staleMs: 30 * 60 * 1000 });
 
-  const [more, setMore] = useState(() => morePages.get(filterKey) ?? { key: '', books: [], page: 0 });
+  const [more, setMore] = useState({ key: '', books: [], page: 0 });
   const [moreState, setMoreState] = useState({ loading: false, error: false });
   const keyRef = useRef(filterKey);
   useEffect(() => {
@@ -176,18 +176,26 @@ function Books() {
   const books = first.data ? [...first.data.books, ...extra.books] : [];
   const total = first.data?.total ?? 0;
   const filtered = Boolean(q || inStock || category || maxPrice || collection);
+  const activeFilters = [
+    q && { key: 'q', label: `Search: ${q}` },
+    category && { key: 'category', label: category },
+    inStock && { key: 'stock', label: 'In stock' },
+    maxPrice && { key: 'max', label: `${formatPrice(maxPrice)} & under` },
+    collection && { key: 'collection', label: COLLECTIONS[collection].label },
+  ].filter(Boolean);
+  const filterCount = activeFilters.filter(item => item.key !== 'q').length;
   const describe = [
-    category,
-    maxPrice ? `up to ${formatPrice(maxPrice)}` : '',
+    q ? category : '',
+    maxPrice && (q || category) ? `up to ${formatPrice(maxPrice)}` : '',
     collection ? COLLECTIONS[collection].label.toLowerCase() : '',
   ].filter(Boolean);
   const note = searchNote(first.data, q, describe);
   const suggestions = first.data?.note === 'none';
 
   return (
-    <div className="container page">
+    <div className="container page catalogue-page" data-filters-open={filtersOpen || undefined}>
       <div className="page-head">
-        <h1 className="page-title">Books</h1>
+        <h1 className="page-title">Browse books</h1>
         {first.data && !suggestions && (
           <p className="page-meta" aria-live="polite">
             {plural(total, 'book')}
@@ -213,7 +221,8 @@ function Books() {
             onChange={(event) => setTerm(event.target.value)}
           />
         </form>
-        <div className="toolbar-row">
+        <div className="filter-toggle-row"><button type="button" className="btn btn-outline" aria-expanded={filtersOpen} aria-controls="catalogue-filters" onClick={() => setFiltersOpen(v => !v)}><span><SlidersHorizontal size={18}/>{filtersOpen ? 'Hide filters' : 'Filters & sort'}{filterCount > 0 && ` (${filterCount})`}</span><CaretDown size={16} aria-hidden="true"/></button></div>
+        <div className="toolbar-row" id="catalogue-filters">
           <label htmlFor="books-sort" className="visually-hidden">
             Sort books
           </label>
@@ -261,6 +270,10 @@ function Books() {
         </div>
       )}
 
+      {filtered && <div className="active-filter-summary" aria-label="Active filters">
+        <div className="active-filter-chips">{activeFilters.map(item => <button key={item.key} className="active-filter-chip" type="button" aria-label={`Remove ${item.label}`} onClick={() => update({ [item.key]: null })}><span>{item.label}</span><X size={14} aria-hidden="true" /></button>)}</div>
+        <button className="btn-link" type="button" onClick={() => setParams({}, {replace:true})}>Clear all</button>
+      </div>}
       <div className="results">
         {note && !first.loading && (
           <p className="notice search-note" role="status">
@@ -278,12 +291,15 @@ function Books() {
         {first.loading && <BookGridSkeleton />}
         {first.error && <LoadError onRetry={first.retry} what="books" />}
         {first.data && books.length === 0 && (
-          <StateBlock title={filtered ? 'No books match these filters.' : 'There are no books in the store yet.'} icon={filtered ? SearchIcon : undefined}>
+          <StateBlock title={q ? 'No books found for this search.' : filtered ? 'No books match these filters.' : 'The shelves are quiet right now.'}
+            description={q ? `Try a shorter title, an author’s name, or fewer filters. Your search: “${q}”.` : filtered ? 'Try another genre, increase your budget, or clear the filters to see more books.' : 'Check back shortly, or try loading the catalogue again.'}
+            icon={SearchIcon}>
             {filtered && (
               <button type="button" className="btn btn-dark" onClick={() => setParams({}, { replace: true })}>
-                Clear filters
+                {q ? 'Clear search and filters' : 'Clear filters'}
               </button>
             )}
+            {!filtered && <button type="button" className="btn btn-primary" onClick={first.retry}>Reload catalogue</button>}
           </StateBlock>
         )}
         {books.length > 0 && !first.loading && (

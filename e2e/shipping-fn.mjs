@@ -80,6 +80,9 @@ const xbServer = http.createServer(async (req, res) => {
     if (XB.mode.duplicate) return send(400, { status: false, message: 'Order number already exists' });
     // The refusal shapes seen from Xpressbees-style APIs.
     if (XB.mode.refuse?.has(json.courier_id)) return send(404, { status: false, message: '' });
+    if (XB.mode.refuseClearly?.has(json.courier_id)) return send(200, { status: false, message: 'Selected courier is not available for this pincode' });
+    if (XB.mode.slowBook) await sleep(600);
+    if (XB.mode.bookDown) return send(503, { status: false, message: 'Service unavailable' });
     if (XB.mode.htmlNotFound) return sendHtml(404, '<html><head><title>404 Not Found</title></head><body><h1>Not Found</h1></body></html>');
     if (XB.mode.badWarehouse) return send(422, { message: 'The given data was invalid.', errors: { 'pickup.warehouse_name': ['The selected pickup.warehouse_name is invalid.'] } });
     if (XB.mode.wallet) return send(200, { status: false, message: 'Wallet balance is low.' });
@@ -266,63 +269,121 @@ try {
   check('a slow Xpressbees times out and is retried later', (await shipmentOf(o3)).status === 'queued' && /time/i.test((await shipmentOf(o3)).last_error ?? ''));
   XB.mode.slow = false;
 
-  // ---------- Refusals: the real reason is kept, another courier is tried ----------
+  // ---------- Refusals: clear ones move on, unclear ones stop for a check ----------
   const lastError = async (orderId) => (await shipmentOf(orderId)).last_error ?? '';
   const booksBefore = () => XB.books.length;
+  const skipList = async () => (await db.query(`select skip_couriers from public.shipping_settings`)).rows[0].skip_couriers;
+  const clearSkip = () => db.query(`update public.shipping_settings set skip_couriers = '{}'`);
+  const eventOf = async (orderId, action) => (await db.query(`select detail from public.shipment_events where order_id = $1 and action = $2 order by created_at desc limit 1`, [orderId, action])).rows[0]?.detail ?? '';
 
+  // A bare 404 (what Xpressbees answered while booking anyway): stop, never send again.
   XB.mode.refuse = new Set(['1']);
   const oA = await placeCod(books[0], 1);
   let n0 = booksBefore();
   await cron('book_due');
   const sA = await shipmentOf(oA);
-  check('a courier refused with a bare 404: the next cheapest is booked at once', sA.status === 'booked' && sA.courier_id === '6' && XB.books.length - n0 === 2, `${sA.status} ${sA.courier_id} ${sA.last_error}`);
-  const refusedEvent = (await db.query(`select detail from public.shipment_events where order_id = $1 and action = 'courier_refused'`, [oA])).rows[0]?.detail ?? '';
-  check('the refused courier and the reason are written down', /Surface Xpressbees 0\.5 K\.G: HTTP 404, Xpressbees gave no reason/.test(refusedEvent), refusedEvent);
-
-  XB.mode.refuse = new Set(['1', '6', '2']);
-  const oB = await placeCod(books[1], 1);
-  n0 = booksBefore();
+  check('a bare 404 is not a refusal: the parcel is held for a check, not resent', sA.status === 'failed' && sA.needs_check === true && XB.books.length - n0 === 1, `${sA.status} ${sA.needs_check} ${XB.books.length - n0}`);
+  check('the held parcel says what to check, with the order number', /may have booked it anyway/.test(sA.last_error) && /search KAK-\d+/.test(sA.last_error) && /HTTP 404, no reason given/.test(sA.last_error), sA.last_error);
+  check('the courier that answered unclearly goes on the skip list', (await skipList()).includes('Surface Xpressbees 0.5 K.G'), JSON.stringify(await skipList()));
   await cron('book_due');
-  const eB = await lastError(oB);
-  check('every courier refused: the parcel fails after 3 couriers, naming them', (await shipmentOf(oB)).status === 'failed' && XB.books.length - n0 === 3 && /HTTP 404/.test(eB) && /Surface Xpressbees 0\.5 K\.G/.test(eB) && /Air Xpressbees/.test(eB), eB);
+  check('the background job never resends a held parcel', XB.books.length - n0 === 1 && (await shipmentOf(oA)).status === 'failed');
+  const unconfirmed = await call({ action: 'book_now', order_id: oA }, { token: admin });
+  check('Retry on a held parcel needs the admin to confirm the dashboard check', unconfirmed.status === 409 && /Check the Xpressbees dashboard/.test(unconfirmed.json.error) && XB.books.length - n0 === 1, JSON.stringify(unconfirmed.json));
+
+  // The next order skips that courier and books the next cheapest.
+  const oB = await placeCod(books[1], 1);
+  await cron('book_due');
+  const sB = await shipmentOf(oB);
+  check('the next order skips that courier and books the next cheapest', sB.status === 'booked' && sB.courier_id === '6', `${sB.status} ${sB.courier_id} ${sB.last_error}`);
   XB.mode.refuse = null;
 
-  XB.mode.htmlNotFound = true;
+  // The admin confirms and retries: booked, flag cleared. (The skipped courier is still skipped.)
+  const confirmed = await call({ action: 'book_now', order_id: oA, checked: true }, { token: admin });
+  const sA2 = await shipmentOf(oA);
+  check('after confirming, Retry books it and clears the check', confirmed.status === 200 && sA2.status === 'booked' && sA2.needs_check === false && sA2.courier_id === '6', JSON.stringify(confirmed.json));
+
+  // Linking the AWB Xpressbees did make, instead of booking again.
+  XB.mode.refuse = new Set(['6']);
   const oC = await placeCod(books[2], 1);
   await cron('book_due');
-  const eC = await lastError(oC);
-  check('an HTML 404 page: the status and page title are kept', /HTTP 404/.test(eC) && /404 Not Found/.test(eC) && !/<title>|<h1>/.test(eC), eC);
-  XB.mode.htmlNotFound = false;
+  check('a second unclear answer holds that parcel too', (await shipmentOf(oC)).needs_check === true);
+  XB.mode.refuse = null;
+  const linked = await call({ action: 'link_awb', order_id: oC, awb: '152489860437073' }, { token: admin });
+  const sC = await shipmentOf(oC);
+  check('admin links the AWB found in the Xpressbees dashboard', linked.status === 200 && sC.status === 'booked' && sC.awb_number === '152489860437073' && sC.needs_check === false, JSON.stringify(linked.json));
+  check('the link is written in the parcel history', /linked from the Xpressbees dashboard/.test(await eventOf(oC, 'awb_linked')));
+  check('an AWB already used by another parcel cannot be linked', (await call({ action: 'link_awb', order_id: oB, awb: '152489860437073' }, { token: admin })).status === 409);
+  check('linking needs a valid AWB', (await call({ action: 'link_awb', order_id: oC, awb: 'abc' }, { token: admin })).status === 400);
+  check('customers cannot link AWBs', (await call({ action: 'link_awb', order_id: oC, awb: '152489860437074' }, { token: reader })).status === 403);
+  await clearSkip();
 
-  XB.mode.badWarehouse = true;
+  // A clear refusal of one courier (Xpressbees says no and why): the next cheapest is booked.
+  XB.mode.refuseClearly = new Set(['1']);
   const oD = await placeCod(books[3], 1);
   n0 = booksBefore();
   await cron('book_due');
-  const eD = await lastError(oD);
-  check('a wrong warehouse name: the field-by-field reason is shown, and no other courier is tried', /HTTP 422/.test(eD) && /pickup\.warehouse_name: The selected pickup\.warehouse_name is invalid/.test(eD) && XB.books.length - n0 === 1, eD);
-  XB.mode.badWarehouse = false;
+  const sD = await shipmentOf(oD);
+  check('a clear refusal of one courier books the next cheapest at once', sD.status === 'booked' && sD.courier_id === '6' && XB.books.length - n0 === 2 && sD.needs_check === false, `${sD.status} ${sD.courier_id} ${sD.last_error}`);
+  check('the clearly refused courier and its reason are written down', /Surface Xpressbees 0\.5 K\.G: Selected courier is not available for this pincode/.test(await eventOf(oD, 'courier_refused')), await eventOf(oD, 'courier_refused'));
+  check('a clear refusal does not put the courier on the skip list', (await skipList()).length === 0);
+  XB.mode.refuseClearly = null;
 
-  XB.mode.wallet = true;
+  // An HTML error page is unclear too.
+  XB.mode.htmlNotFound = true;
   const oE = await placeCod(books[4], 1);
   n0 = booksBefore();
   await cron('book_due');
   const eE = await lastError(oE);
-  check("low wallet balance: stops at once with Xpressbees' words", eE === 'Booking refused: Wallet balance is low.' && XB.books.length - n0 === 1 && (await shipmentOf(oE)).status === 'failed', eE);
+  check('an HTML 404 page: held for a check, page title kept, sent once', (await shipmentOf(oE)).needs_check === true && /404 Not Found/.test(eE) && !/<title>|<h1>/.test(eE) && XB.books.length - n0 === 1, eE);
+  XB.mode.htmlNotFound = false;
+  await clearSkip();
+
+  // A booking that times out, or a server error on booking: may be booked, so held.
+  XB.mode.slowBook = true;
+  const oF = await placeCod(books[0], 1);
+  n0 = booksBefore();
+  await cron('book_due');
+  const sF = await shipmentOf(oF);
+  check('a booking that times out is held for a check, not retried', sF.status === 'failed' && sF.needs_check === true && sF.next_attempt_at === null && XB.books.length - n0 === 1, `${sF.status} ${sF.needs_check} ${sF.last_error}`);
+  check('a timeout does not put the courier on the skip list', (await skipList()).length === 0);
+  XB.mode.slowBook = false;
+  XB.mode.bookDown = true;
+  const oG = await placeCod(books[1], 1);
+  await cron('book_due');
+  check('a server error on booking is held for a check, not retried', (await shipmentOf(oG)).needs_check === true && (await shipmentOf(oG)).status === 'failed');
+  XB.mode.bookDown = false;
+
+  // Clear refusals that no courier would pass: stop at once.
+  XB.mode.badWarehouse = true;
+  const oH = await placeCod(books[2], 1);
+  n0 = booksBefore();
+  await cron('book_due');
+  const eH = await lastError(oH);
+  check('a wrong warehouse name: the field-by-field reason is shown, and no other courier is tried', /HTTP 422/.test(eH) && /pickup\.warehouse_name: The selected pickup\.warehouse_name is invalid/.test(eH) && XB.books.length - n0 === 1 && (await shipmentOf(oH)).needs_check === false, eH);
+  XB.mode.badWarehouse = false;
+
+  XB.mode.wallet = true;
+  const oI = await placeCod(books[3], 1);
+  n0 = booksBefore();
+  await cron('book_due');
+  const eI = await lastError(oI);
+  check("low wallet balance: stops at once with Xpressbees' words", eI === 'Booking refused: Wallet balance is low.' && XB.books.length - n0 === 1 && (await shipmentOf(oI)).status === 'failed', eI);
   XB.mode.wallet = false;
-  const retryE = await call({ action: 'book_now', order_id: oE }, { token: admin });
-  check('after the wallet is topped up, admin Retry books it', retryE.status === 200 && (await shipmentOf(oE)).status === 'booked', JSON.stringify(retryE.json));
+  const retryI = await call({ action: 'book_now', order_id: oI }, { token: admin });
+  check('after the wallet is topped up, admin Retry books it (no check needed)', retryI.status === 200 && (await shipmentOf(oI)).status === 'booked', JSON.stringify(retryI.json));
 
   XB.mode.echoPhone = true;
-  const oF = await placeCod(books[0], 1);
+  const oJ = await placeCod(books[4], 1);
   await cron('book_due');
-  const eF = await lastError(oF);
-  check('a refusal that echoes the phone or email keeps neither', /\[phone\]/.test(eF) && /\[email\]/.test(eF) && !/9876543210|ops@example\.com/.test(eF), eF);
+  const eJ = await lastError(oJ);
+  check('a refusal that echoes the phone or email keeps neither', /\[phone\]/.test(eJ) && /\[email\]/.test(eJ) && !/9876543210|ops@example\.com/.test(eJ), eJ);
   XB.mode.echoPhone = false;
   check(
     'every refusal is logged with its path, status and reason',
     logs.some((l) => /"event":"xpressbees_refused","path":"\/api\/shipments2","status":404,"reason":"404 Not Found"/.test(l)),
     logs.filter((l) => /xpressbees_refused/.test(l)).slice(0, 2).join(' | '),
   );
+  await clearSkip();
 
   // ---------- Tracking ----------
   const other = sessionFor('admin@example.com');

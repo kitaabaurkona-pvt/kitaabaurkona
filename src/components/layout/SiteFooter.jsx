@@ -1,89 +1,50 @@
+import { BookOpen, ChatCircle, Lifebuoy } from '@phosphor-icons/react';
 import { Link } from 'react-router-dom';
-import { useReduceMotion } from '../../hooks/useReduceMotion';
-import { CONTACT, BLURB, STORE_NAME } from '../../utils/storeInfo';
-import { POLICY_LINKS } from '../../content/policies';
-import { COLLECTIONS, UNDER_PRICE, CATEGORIES, categoryHref, dealsHref, regionalHref, underPriceHref } from '../../utils/categories';
-import { formatPrice } from '../../utils/format';
-import { ArrowUpIcon } from '../icons';
+import BrandLink from './BrandLink';
+import { CONTACT } from '../../utils/storeInfo';
+import { underPriceHref, categoryHref } from '../../utils/categories';
+import { previewMode } from '../../preview/mode';
 
 const YEAR = new Date().getFullYear();
 
-const SEARCHED = [
-  { to: dealsHref, label: 'Biggest discounts' },
-  { to: underPriceHref, label: `Up to ${formatPrice(UNDER_PRICE)}` },
-  ...CATEGORIES.map((name) => ({ to: categoryHref(name), label: name })),
-  { to: regionalHref, label: COLLECTIONS.regional.label },
-  { to: '/books', label: 'All books' },
-];
-
-// Black footer like the previous store: who we are, how to reach us, the policies,
-// popular links and a button back to the top.
-function SiteFooter() {
-  const reduce = useReduceMotion();
+export default function SiteFooter() {
   return (
     <footer className="site-footer">
-      <div className="container footer-main">
-        <div className="footer-about">
-          <img src="/logo-64.png" alt="" width="40" height="40" />
-          <p className="footer-name">{STORE_NAME.toUpperCase()}</p>
-          <p>{BLURB}</p>
+      <div className="container editorial-footer">
+        <div className="footer-brand">
+          <BrandLink />
+          <p>Your next read.<br />Your own little corner.</p>
         </div>
+        <nav aria-labelledby="footer-shop">
+          <h2 id="footer-shop"><BookOpen aria-hidden="true" />Find a book</h2>
+          <Link to="/books">Browse books</Link>
+          <Link to={underPriceHref}>₹299 &amp; under</Link>
+          <Link to={categoryHref('Box Sets & Combos')}>Box sets &amp; combos</Link>
+          <Link to="/wishlist">Your wishlist</Link>
+        </nav>
+        <nav aria-labelledby="footer-help">
+          <h2 id="footer-help"><Lifebuoy aria-hidden="true" />Here to help</h2>
+          <Link to="/orders">Your orders</Link>
+          <Link to="/shipping">Shipping &amp; delivery</Link>
+          <Link to="/returns">Returns</Link>
+          <a href={`mailto:${CONTACT.email}`}>Contact us</a>
+        </nav>
         <div className="footer-contact">
-          <h2>Contact Us</h2>
-          <ul>
-            <li>
-              Call: <a href={CONTACT.phoneHref}>{CONTACT.phone}</a>
-            </li>
-            <li>
-              WhatsApp:{' '}
-              <a href={CONTACT.whatsappHref} target="_blank" rel="noopener noreferrer">
-                {CONTACT.whatsapp}
-              </a>
-            </li>
-            <li>Customer Support Time: {CONTACT.hours}</li>
-            <li>
-              Email: <a href={`mailto:${CONTACT.email}`}>{CONTACT.email}</a>
-            </li>
-            <li>Address: {CONTACT.address}</li>
-          </ul>
+          <h2><ChatCircle aria-hidden="true" />Let's talk books.</h2>
+          <a href={CONTACT.whatsappHref} target="_blank" rel="noopener noreferrer">Chat on WhatsApp</a>
+          <p>{CONTACT.hours}</p>
+          <Link to="/about">About our bookshop</Link>
         </div>
       </div>
-
-      <div className="container">
-        <nav className="footer-links" aria-label="Policies">
-          {POLICY_LINKS.map((link) => (
-            <Link key={link.to} to={link.to}>
-              {link.label}
-            </Link>
-          ))}
-          <Link to="/settings">Settings</Link>
+      <div className="container editorial-footer-bottom">
+        <span>© {YEAR} Kitaab Aur Kona</span>
+        <nav aria-label="Legal">
+          <Link to="/privacy">Privacy</Link>
+          <Link to="/terms">Terms</Link>
+          <Link to="/settings">Preferences</Link>
         </nav>
-
-        <nav className="footer-searched" aria-label="Most searched on store">
-          <h2>Most searched on store</h2>
-          {SEARCHED.map((link) => (
-            <Link key={link.to} to={link.to}>
-              {link.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div className="footer-bottom">
-          <span>
-            © {YEAR} {STORE_NAME}
-          </span>
-          <button
-            type="button"
-            className="btn footer-top"
-            onClick={() => window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' })}
-          >
-            <ArrowUpIcon size={18} />
-            Go to top
-          </button>
-        </div>
       </div>
+      {previewMode && <p className="preview-note">Local frontend preview · Catalogue snapshot · Account and ordering services are not connected</p>}
     </footer>
   );
 }
-
-export default SiteFooter;

@@ -602,6 +602,11 @@ create table if not exists public.shipping_settings (
 insert into public.shipping_settings (id) values (true) on conflict (id) do nothing;
 -- The old wait before booking is gone: orders are booked as soon as they are placed.
 alter table public.shipping_settings drop column if exists hold_minutes;
+-- Couriers never used for automatic booking (exact names as Xpressbees lists them, or
+-- courier ids). The shipping function adds a courier here by itself when Xpressbees
+-- answers a booking with that courier unclearly; admins can remove it again.
+alter table public.shipping_settings add column if not exists skip_couriers text[] not null default '{}'::text[]
+  constraint shipping_settings_skip_couriers_check check (cardinality(skip_couriers) <= 30);
 
 drop trigger if exists shipping_settings_set_updated_at on public.shipping_settings;
 create trigger shipping_settings_set_updated_at
@@ -671,6 +676,11 @@ create unique index if not exists shipments_one_live_forward
 create unique index if not exists shipments_one_live_reverse
   on public.shipments (order_id) where kind = 'reverse' and status <> 'cancelled';
 create index if not exists shipments_due_idx on public.shipments (status, book_after);
+
+-- Set when a booking attempt ended without a clear answer (an error with no reason, a
+-- timeout): Xpressbees may have booked the parcel anyway, so it is never booked again
+-- automatically, and an admin must confirm they checked the Xpressbees dashboard first.
+alter table public.shipments add column if not exists needs_check boolean not null default false;
 
 drop trigger if exists shipments_set_updated_at on public.shipments;
 create trigger shipments_set_updated_at
@@ -1111,7 +1121,7 @@ begin
   end if;
   return query
   update public.shipments s
-  set status = 'booking', attempts = s.attempts + 1, last_error = null, next_attempt_at = null
+  set status = 'booking', attempts = s.attempts + 1, last_error = null, next_attempt_at = null, needs_check = false
   where s.id = p_shipment and s.kind = 'forward' and s.status in ('queued', 'failed')
   returning s.*;
 end;
@@ -1178,7 +1188,8 @@ begin
       package_breadth_cm = (p ->> 'package_breadth_cm')::numeric,
       package_height_cm = (p ->> 'package_height_cm')::numeric,
       last_error = null,
-      next_attempt_at = null
+      next_attempt_at = null,
+      needs_check = false
   where id = p_shipment and status in ('booking', 'cancel_requested')
   returning order_id into v_order;
   if v_order is null then
@@ -1191,7 +1202,10 @@ $$;
 
 -- A booking attempt failed. Retried later (5, 20, 45, 80 minutes) unless it cannot work
 -- or it has failed 5 times; then it waits for an admin.
-create or replace function public.record_booking_failure(p_shipment uuid, p_error text, p_retry boolean, p_actor uuid default null)
+-- p_needs_check: the attempt ended without a clear answer, so Xpressbees may have booked
+-- the parcel; it is never retried by itself (see shipments.needs_check).
+drop function if exists public.record_booking_failure(uuid, text, boolean, uuid);
+create or replace function public.record_booking_failure(p_shipment uuid, p_error text, p_retry boolean, p_actor uuid default null, p_needs_check boolean default false)
 returns void
 language plpgsql
 security definer
@@ -1208,7 +1222,9 @@ begin
     return;
   end if;
   if v_status = 'cancel_requested' then
-    update public.shipments set status = 'cancelled', last_error = left(p_error, 300) where id = p_shipment;
+    update public.shipments set status = 'cancelled', last_error = left(p_error, 300), needs_check = coalesce(p_needs_check, false) where id = p_shipment;
+  elsif coalesce(p_needs_check, false) then
+    update public.shipments set status = 'failed', last_error = left(p_error, 300), needs_check = true where id = p_shipment;
   elsif p_retry and v_attempts < 5 then
     update public.shipments
     set status = 'queued', last_error = left(p_error, 300),
@@ -1328,7 +1344,7 @@ revoke execute on function public.claim_due_shipments(integer) from public, anon
 revoke execute on function public.claim_shipment(uuid) from public, anon, authenticated;
 revoke execute on function public.shipment_booking_data(uuid) from public, anon, authenticated;
 revoke execute on function public.record_booking(uuid, jsonb) from public, anon, authenticated;
-revoke execute on function public.record_booking_failure(uuid, text, boolean, uuid) from public, anon, authenticated;
+revoke execute on function public.record_booking_failure(uuid, text, boolean, uuid, boolean) from public, anon, authenticated;
 revoke execute on function public.record_tracking(uuid, text, text, jsonb) from public, anon, authenticated;
 revoke execute on function public.shipments_to_track(integer, integer) from public, anon, authenticated;
 revoke execute on function public.hit_rate_limit(text, integer, integer) from public, anon, authenticated;
@@ -1339,11 +1355,29 @@ grant execute on function public.claim_due_shipments(integer) to service_role;
 grant execute on function public.claim_shipment(uuid) to service_role;
 grant execute on function public.shipment_booking_data(uuid) to service_role;
 grant execute on function public.record_booking(uuid, jsonb) to service_role;
-grant execute on function public.record_booking_failure(uuid, text, boolean, uuid) to service_role;
+grant execute on function public.record_booking_failure(uuid, text, boolean, uuid, boolean) to service_role;
 grant execute on function public.record_tracking(uuid, text, text, jsonb) to service_role;
 grant execute on function public.shipments_to_track(integer, integer) to service_role;
 grant execute on function public.hit_rate_limit(text, integer, integer) to service_role;
 grant execute on function public.order_has_left(uuid) to service_role;
+
+-- Puts a courier on the automatic-booking skip list (once), from the shipping function.
+create or replace function public.add_skip_courier(p_name text)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.shipping_settings
+  set skip_couriers = array_append(skip_couriers, left(btrim(p_name), 100))
+  where id
+    and btrim(coalesce(p_name, '')) <> ''
+    and not (lower(btrim(p_name)) = any (select lower(x) from unnest(skip_couriers) x))
+    and cardinality(skip_couriers) < 30;
+$$;
+
+revoke execute on function public.add_skip_courier(text) from public, anon, authenticated;
+grant execute on function public.add_skip_courier(text) to service_role;
 
 -- A parcel was cancelled with Xpressbees (or never got booked).
 create or replace function public.record_cancelled(p_shipment uuid, p_actor uuid default null, p_detail text default null)

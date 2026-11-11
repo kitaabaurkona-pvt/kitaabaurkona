@@ -80,8 +80,13 @@ const ACTIONS = {
     return { order_id: uuid(b.order_id, 'order'), courier_id: courierId(b.courier_id) };
   },
   book_now: (b) => {
-    only(b, ['action', 'order_id']);
-    return { order_id: uuid(b.order_id, 'order') };
+    only(b, ['action', 'order_id', 'checked']);
+    if (b.checked !== undefined && typeof b.checked !== 'boolean') throw new InputError('Invalid confirmation');
+    return { order_id: uuid(b.order_id, 'order'), checked: b.checked === true };
+  },
+  link_awb: (b) => {
+    only(b, ['action', 'order_id', 'awb']);
+    return { order_id: uuid(b.order_id, 'order'), awb: awb(typeof b.awb === 'string' ? b.awb.trim() : b.awb) };
   },
   cancel_shipment: (b) => {
     only(b, ['action', 'order_id']);
@@ -136,7 +141,7 @@ const ACTIONS = {
 };
 
 export const CUSTOMER_ACTIONS = ['check_pincode', 'track'];
-export const ADMIN_ACTIONS = ['rates', 'set_courier', 'book_now', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
+export const ADMIN_ACTIONS = ['rates', 'set_courier', 'book_now', 'link_awb', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
 export const CRON_ACTIONS = ['run_job'];
 
 export function parseRequest(body, now = new Date()) {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ADMIN_SHIPMENT_LABELS, bookNow, bookReturnPickup, cancelShipment, getRates, setCourier } from '../../services/shippingService';
+import { ADMIN_SHIPMENT_LABELS, bookNow, bookReturnPickup, cancelShipment, getRates, linkAwb, setCourier, XPRESSBEES_PANEL } from '../../services/shippingService';
 import { formatPrice } from '../../utils/format';
 
 // One order's parcel(s) for the admin: state, courier, AWB, cost, label, and the actions
@@ -13,6 +13,8 @@ function ParcelPanel({ order, onChanged }) {
   const [rates, setRates] = useState(null);
   const [choice, setChoice] = useState('');
   const [confirmReturn, setConfirmReturn] = useState(false);
+  const [awb, setAwb] = useState('');
+  const [confirmRebook, setConfirmRebook] = useState(false);
 
   async function run(name, fn) {
     if (working) return;
@@ -51,6 +53,9 @@ function ParcelPanel({ order, onChanged }) {
   );
 
   const canBook = forward && ['queued', 'failed'].includes(forward.status);
+  // Xpressbees answered a booking unclearly: it may be booked there already.
+  const held = Boolean(forward?.needs_check) && forward.status === 'failed';
+  const label = (s) => (s.needs_check && s.status === 'failed' ? ADMIN_SHIPMENT_LABELS.needs_check : (ADMIN_SHIPMENT_LABELS[s.status] ?? s.status));
   const canReturn = order.status === 'delivered' && !reverse;
   if (!forward && !reverse && !canReturn) return null;
 
@@ -59,7 +64,7 @@ function ParcelPanel({ order, onChanged }) {
       {[forward, reverse].filter(Boolean).map((s) => (
         <div key={s.id} className="parcel-admin-row">
           <p className="parcel-admin-title">
-            {s.kind === 'reverse' ? 'Return pickup' : 'Parcel'}: <span className="status" data-status={s.status}>{ADMIN_SHIPMENT_LABELS[s.status] ?? s.status}</span>
+            {s.kind === 'reverse' ? 'Return pickup' : 'Parcel'}: <span className="status" data-status={s.needs_check && s.status === 'failed' ? 'exception' : s.status}>{label(s)}</span>
           </p>
           <p className="page-meta">
             {[
@@ -72,6 +77,38 @@ function ParcelPanel({ order, onChanged }) {
               .join(' · ')}
           </p>
           {s.status === 'failed' && s.last_error && <p className="notice" data-tone="error">{s.last_error}</p>}
+          {s === forward && held && (
+            <div className="parcel-check stack-sm">
+              <p className="page-meta">
+                Open the{' '}
+                <a href={XPRESSBEES_PANEL} target="_blank" rel="noopener noreferrer">
+                  Xpressbees panel
+                </a>{' '}
+                and search Orders for <strong>KAK-{order.order_number}</strong>. If it is booked there, paste its AWB here. If it is not, book it again.
+              </p>
+              <div className="inline-actions">
+                <label className="visually-hidden" htmlFor={`awb-${order.id}`}>
+                  AWB number from Xpressbees
+                </label>
+                <input
+                  id={`awb-${order.id}`}
+                  className="input input-sm"
+                  inputMode="numeric"
+                  maxLength={30}
+                  placeholder="AWB number"
+                  value={awb}
+                  onChange={(e) => setAwb(e.target.value.replace(/[^0-9A-Za-z]/g, ''))}
+                />
+                {button('link', 'Link this AWB', () =>
+                  run('link', async () => {
+                    if (!/^[0-9A-Za-z]{6,30}$/.test(awb)) throw new Error('Enter the AWB number shown in Xpressbees.');
+                    await linkAwb(order.id, awb);
+                    setAwb('');
+                  }),
+                )}
+              </div>
+            </div>
+          )}
           {s.label_url && (
             <a className="btn btn-outline btn-sm" href={s.label_url} target="_blank" rel="noopener noreferrer">
               Open shipping label
@@ -102,7 +139,19 @@ function ParcelPanel({ order, onChanged }) {
       )}
 
       <div className="inline-actions">
-        {canBook && button('book', forward.status === 'failed' ? 'Retry booking' : 'Book now', () => run('book', () => bookNow(order.id)), 'btn btn-dark btn-sm')}
+        {canBook && !held && button('book', forward.status === 'failed' ? 'Retry booking' : 'Book now', () => run('book', () => bookNow(order.id)), 'btn btn-dark btn-sm')}
+        {canBook && held && !confirmRebook && button('book', 'Not booked there: book again', () => setConfirmRebook(true))}
+        {canBook && held && confirmRebook && (
+          <>
+            {button('book', `Yes, KAK-${order.order_number} is not in Xpressbees`, () => run('book', async () => {
+              await bookNow(order.id, true);
+              setConfirmRebook(false);
+            }), 'btn btn-dark btn-sm')}
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => setConfirmRebook(false)}>
+              Keep as is
+            </button>
+          </>
+        )}
         {canBook && !rates && button('rates', 'Change courier', loadRates)}
         {forward?.status === 'cancel_requested' && button('cancel', 'Cancel with courier now', () => run('cancel', () => cancelShipment(order.id)), 'btn btn-danger btn-sm')}
         {canReturn && !confirmReturn && button('return', 'Book return pickup', () => setConfirmReturn(true))}
