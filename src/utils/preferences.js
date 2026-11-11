@@ -27,7 +27,7 @@ export function applyPreferences({ theme, motion }) {
   const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   root.dataset.theme = dark ? 'dark' : 'light';
   const themeColor = document.querySelector('meta[name=theme-color]');
-  if (themeColor) themeColor.content = dark ? '#080808' : '#fff1bd';
+  if (themeColor) themeColor.content = dark ? '#080808' : '#fffdf8';
   if (motion === 'reduce') root.dataset.motion = 'reduce';
   else delete root.dataset.motion;
 }
