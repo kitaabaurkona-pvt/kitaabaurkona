@@ -56,6 +56,7 @@ const handle = createHandler({
       password: env('EXPRESSBEES_PASSWORD') || env('XPRESSBEES_PASSWORD'),
       tokenStore,
       timeoutMs: LIMITS.requestTimeoutMs,
+      log: console,
     }),
 });
 
