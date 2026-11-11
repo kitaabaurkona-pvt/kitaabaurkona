@@ -6,11 +6,11 @@ export function readPreferences() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
     return {
-      theme: THEMES.includes(raw.theme) ? raw.theme : 'dark',
+      theme: THEMES.includes(raw.theme) ? raw.theme : 'light',
       motion: MOTIONS.includes(raw.motion) ? raw.motion : 'system',
     };
   } catch {
-    return { theme: 'dark', motion: 'system' };
+    return { theme: 'light', motion: 'system' };
   }
 }
 
@@ -26,6 +26,8 @@ export function applyPreferences({ theme, motion }) {
   const root = document.documentElement;
   const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   root.dataset.theme = dark ? 'dark' : 'light';
+  const themeColor = document.querySelector('meta[name=theme-color]');
+  if (themeColor) themeColor.content = dark ? '#080808' : '#fff1bd';
   if (motion === 'reduce') root.dataset.motion = 'reduce';
   else delete root.dataset.motion;
 }
