@@ -92,14 +92,27 @@
 .drawer:focus { outline:none; }
 .menu-close { border-radius:10px; }
 .menu-close:focus-visible { outline:2px solid var(--c-focus); outline-offset:-4px; }
-/* A black header anchors the dark storefront. */
-.site-header { --header-surface:#080808; --header-search:#181818; --header-line:#46433a; background:var(--header-surface); border-bottom:1px solid var(--header-line); }
-:root[data-theme='light'] .site-header { --header-surface:#fff1bd; --header-search:#fffaf0; --header-line:#bda96e; }
-.site-header { background-image:linear-gradient(110deg,#ffcf2414,transparent 52%); }
+/* The header and footer share the storefront's outer surfaces. */
+:is(.site-header,.site-footer,.checkout-footer) {
+ --chrome-surface:#080808;
+ --chrome-line:#46433a;
+ background:linear-gradient(110deg,#ffcf2414,transparent 52%),var(--chrome-surface);
+ border-color:var(--chrome-line);
+}
+:root[data-theme='light'] :is(.site-header,.site-footer,.checkout-footer) {
+ --chrome-surface:#fff1bd;
+ --chrome-line:#bda96e;
+}
+.site-header { --header-search:#181818; border-bottom:1px solid var(--chrome-line); }
+:root[data-theme='light'] .site-header { --header-search:#fffaf0; }
+.site-footer .brand-word,.editorial-footer h2,.checkout-footer p { color:var(--c-gold-deep); }
+:is(.site-footer,.checkout-footer) a:hover { color:var(--c-gold-deep); }
+:is(.site-footer,.checkout-footer) :focus-visible { outline-color:var(--c-focus); }
+.editorial-footer-bottom,.site-footer .preview-note { border-color:var(--chrome-line); }
 .site-header .brand-word { color:var(--c-gold-deep); }
 .site-header .header-nav { background:transparent; }
 .site-header .header-nav-row { border-bottom:0; }
-.site-header .header-search { background:var(--header-search); border-color:var(--header-line); }
+.site-header .header-search { background:var(--header-search); border-color:var(--chrome-line); }
 .site-header .header-search button { background:var(--c-accent); color:var(--c-on-accent); }
 .site-header .header-search button:hover { background:var(--c-accent-hover); }
 .site-header .header-search:focus-within { border-color:var(--c-focus); }
