@@ -109,7 +109,20 @@
 :is(.site-footer,.checkout-footer) a:hover { color:var(--c-gold-deep); }
 :is(.site-footer,.checkout-footer) :focus-visible { outline-color:var(--c-focus); }
 .editorial-footer-bottom,.site-footer .preview-note { border-color:var(--chrome-line); }
-.site-header .brand-word { color:var(--c-gold-deep); }
+.site-header .brand-logo img { width:52px; height:52px; flex:none; }
+.site-header .brand-word { color:var(--c-gold-deep); font-size:25px; font-weight:800; }
+:root[data-theme='light'] .site-header .brand-word { color:var(--c-ink); }
+@media (min-width:768px) and (max-width:1023px) {
+ .site-header .brand-word { font-size:22px; }
+ .site-header .brand-logo img { width:48px; height:48px; }
+}
+@media (max-width:767px) {
+ .site-header .brand-logo img { width:40px; height:40px; }
+ .site-header .brand-word { font-size:clamp(18px,5.4vw,22px); max-width:none; }
+}
+@media (max-width:374px) {
+ .site-header .brand-logo img { width:36px; height:36px; }
+}
 .site-header .header-nav { background:transparent; }
 .site-header .header-nav-row { border-bottom:0; }
 .site-header .header-search { background:var(--header-search); border-color:var(--chrome-line); }
