@@ -484,6 +484,30 @@ try {
     await sleep(400);
     check('cards: a card lifts when hovered', /matrix\(1, 0, 0, 1, 0, -[1-9]/.test(await card.evaluate((c) => getComputedStyle(c).transform)), await card.evaluate((c) => getComputedStyle(c).transform));
     check('home: sections reveal as they scroll in', await page.$eval('.mood-section', (s) => s.hasAttribute('data-reveal')));
+
+    // Genre row: drifts one way in a seamless loop, holds while pointed at, opens a genre.
+    const genrePos = () => page.evaluate(() => Math.round(new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.genre-track')).transform).m41));
+    await page.$eval('.mood-section', (sec) => sec.scrollIntoView({ block: 'center' }));
+    await page.mouse.move(5, 5);
+    await sleep(600);
+    const g1 = await genrePos();
+    await sleep(800);
+    const g2 = await genrePos();
+    await sleep(800);
+    const g3 = await genrePos();
+    check('genre row: drifts steadily in one direction', g2 < g1 && g3 < g2, `${g1} ${g2} ${g3}`);
+    check('genre row: copies follow the tiles, hidden from the keyboard and screen readers', (await page.$$('#genre-rail .genre-set[inert][aria-hidden="true"]')).length >= 1 && (await page.$$eval('#genre-rail .genre-set[inert] a', (as) => as.every((a) => !a.checkVisibility?.() || a.closest('[inert]')))) && (await page.$$eval('#genre-rail a', (as) => as.filter((a) => a.tabIndex >= 0 && !a.closest('[inert]')).length)) === 5);
+    check('genre row: the edges fade instead of cutting tiles', /gradient/.test(await page.$eval('.genre-slider', (e) => getComputedStyle(e).maskImage || getComputedStyle(e).webkitMaskImage)));
+    await page.hover('#genre-rail');
+    await sleep(300);
+    const h1 = await genrePos();
+    await sleep(800);
+    check('genre row: holds still while pointed at', (await genrePos()) === h1);
+    await page.click('#genre-rail .genre-set:not([inert]) .mood-tile');
+    await page.waitForFunction(() => location.pathname === '/books', { timeout: 4000 }).catch(() => {});
+    check('genre row: clicking a tile opens its genre', new URL(page.url()).searchParams.has('category'));
+    await goto(page, '/');
+    await waitSel(page, '.reading-shelf .book-card');
     await page.evaluate(() => window.scrollTo(0, 0));
     await sleep(500);
     await page.hover('.hero-book');
@@ -623,6 +647,18 @@ try {
     check('phone: header shows menu, logo, search and cart', Boolean((await page.$('.menu-button')) && (await page.$('.brand-logo')) && (await page.$('#header-search')) && (await page.$('.cart-button'))));
     check('phone: the search box shows a hint', SEARCH_HINTS.includes(await page.$eval('#header-search', (i) => i.placeholder)));
     check('phone: hero covers float gently', (await page.$eval('.hero-book img', (i) => getComputedStyle(i).animationName)) === 'hero-cover-float');
+    await page.$eval('.mood-section', (sec) => sec.scrollIntoView({ block: 'center' }));
+    await sleep(500);
+    const railBox = await page.$eval('#genre-rail', (r) => { const b = r.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; });
+    const phonePos = () => page.evaluate(() => Math.round(new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.genre-track')).transform).m41));
+    const beforeSwipe = await phonePos();
+    await page.touchscreen.touchStart(railBox.x + 100, railBox.y);
+    for (let i = 1; i <= 8; i++) await page.touchscreen.touchMove(railBox.x + 100 - i * 20, railBox.y + 1);
+    await page.touchscreen.touchEnd();
+    const afterSwipe = await phonePos();
+    await sleep(800);
+    check('phone: swiping the genre row moves it, and it waits a moment', afterSwipe < beforeSwipe - 100 && (await phonePos()) === afterSwipe, `${beforeSwipe} -> ${afterSwipe}`);
+    check('phone: a swipe does not open a genre', new URL(page.url()).pathname === '/');
     await page.click('.menu-button');
     await waitSel(page, '.drawer');
     await waitSel(page, '.drawer nav[aria-label="Help"] a', 4000);
@@ -642,6 +678,19 @@ try {
     check('phone: the stepper keeps the button height', (await card.$eval('.cart-stepper', (e) => Math.round(e.getBoundingClientRect().height))) === h);
     await sleep(300);
     await page.screenshot({ path: path.join(SHOTS, 'stepper-phone-375.png') });
+    const phoneBook = await one(`select id from public.books where is_visible and stock_quantity > 1 and coalesce(array_length(image_urls, 1), 0) > 1 order by discount_percent desc, id limit 1`);
+    await goto(page, `/books/${phoneBook.id}`);
+    await waitSel(page, '.mobile-purchase-bar .order-now');
+    const bar = await page.$$eval('.mobile-purchase-bar > *', (es) => es.map((e) => ({ text: e.textContent.trim(), w: Math.round(e.getBoundingClientRect().width) })));
+    check('phone book: the bar has Add to cart and Order now, side by side', bar.length === 2 && /Add to cart/.test(bar[0].text) && /Order now/.test(bar[1].text) && Math.abs(bar[0].w - bar[1].w) <= 2, JSON.stringify(bar));
+    check('phone book: no photo arrows (swipe instead)', await page.$eval('.gallery-next', (b) => getComputedStyle(b).display === 'none'));
+    const photoBox = await page.$eval('.gallery-track', (t) => { const b = t.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; });
+    await page.touchscreen.touchStart(photoBox.x + 120, photoBox.y);
+    for (let i = 1; i <= 10; i++) await page.touchscreen.touchMove(photoBox.x + 120 - i * 25, photoBox.y + 1);
+    await page.touchscreen.touchEnd();
+    await page.waitForFunction(() => document.querySelector('.gallery-thumbs li:nth-child(2) .thumb')?.getAttribute('aria-pressed') === 'true', { timeout: 3000 }).catch(() => {});
+    check('phone book: swiping the photo shows the next one', (await page.$eval('.gallery-thumbs li:nth-child(2) .thumb', (b) => b.getAttribute('aria-pressed'))) === 'true' && (await page.$$eval('.gallery-dots span', (ds) => ds.findIndex((d) => d.hasAttribute('data-active')))) === 1);
+    await page.screenshot({ path: path.join(SHOTS, 'book-phone-375.png') });
     check('phone: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }
@@ -660,23 +709,51 @@ try {
     check('book page: title (and author) match the database', Boolean(shownTitle) && book.title.startsWith(shownTitle) && (book.title === shownTitle || book.title.includes(shownAuthor)), `${shownTitle} | ${shownAuthor} | ${book.title}`);
     const body = await page.$eval('main', (m) => m.innerText);
     check('book page: no SKU, package size or shipping weight', !/\bSKU\b|Package size|Shipping weight/i.test(body));
-check('book page: one Add to cart, no separate quantity box', (await page.$$('.detail-buy .btn-primary')).length === 1 && (await page.$('.detail-buy .stepper')) === null);
-    check('book page: Go to cart and Save are quiet outline buttons', /Go to cart/i.test(body) && (await page.$('.buy-secondary .btn-outline[aria-pressed]')) !== null);
-    const thumbs = await page.$$('.gallery-thumbs .thumb');
-    if (thumbs.length > 1) {
-      await thumbs[1].click();
-      await sleep(300);
-      check('book page: choosing a thumbnail selects it', (await page.$eval('.gallery-thumbs li:nth-child(2) .thumb', (b) => b.getAttribute('aria-pressed'))) === 'true');
-    }
+check('book page: Order now sits above Add to cart', await page.evaluate(() => {
+      const order = document.querySelector('.buy-stack .order-now');
+      const add = document.querySelector('.buy-stack .btn-outline');
+      return Boolean(order && add) && /Order now/.test(order.textContent) && /Add to cart/.test(add.textContent) && order.getBoundingClientRect().bottom <= add.getBoundingClientRect().top;
+    }));
+    check('book page: no separate quantity box, and Save stays', (await page.$('.detail-buy .stepper')) === null && (await page.$('.buy-secondary .btn-outline[aria-pressed]')) !== null);
+    const photoState = () => page.evaluate(() => ({
+      thumb: [...document.querySelectorAll('.gallery-thumbs .thumb')].findIndex((t) => t.getAttribute('aria-pressed') === 'true'),
+      dot: [...document.querySelectorAll('.gallery-dots span')].findIndex((d) => d.hasAttribute('data-active')),
+      scroll: Math.round(document.querySelector('.gallery-track').scrollLeft),
+      width: document.querySelector('.gallery-track').clientWidth,
+    }));
+    await page.hover('.gallery-main');
+    await sleep(300);
+    check('photos: arrows appear when pointing at the photo', (await page.$eval('.gallery-next', (b) => getComputedStyle(b).opacity)) === '1');
+    await page.click('.gallery-next');
+    await sleep(700);
+    const afterNext = await photoState();
+    check('photos: the next arrow slides to the second photo', afterNext.thumb === 1 && afterNext.dot === 1 && Math.abs(afterNext.scroll - afterNext.width) <= 2, JSON.stringify(afterNext));
+    await page.click('.gallery-thumbs li:nth-child(1) .thumb');
+    await sleep(700);
+    const afterThumb = await photoState();
+    check('photos: a thumbnail slides back to its photo', afterThumb.thumb === 0 && afterThumb.scroll <= 2, JSON.stringify(afterThumb));
+    await page.focus('.gallery-track');
+    await page.keyboard.press('ArrowRight');
+    await sleep(700);
+    check('photos: the arrow keys move between photos', (await photoState()).thumb === 1);
     await page.screenshot({ path: path.join(SHOTS, 'book-light-1280.png'), fullPage: true });
-    await page.$$eval('.detail-buy .btn-primary', (bs) => bs[0].click());
-    check('book page: the cover flies from the book to the cart', await waitSel(page, '.cart-flight img', 300));
+    await page.$eval('.buy-stack .btn-outline', (b) => b.click());
+    check('book page: the cover flies from the photo on screen to the cart', await waitSel(page, '.cart-flight img', 300));
     await waitCart(page, 1, 4000);
-    check('book page: Add to cart turns into the stepper, panel stays shut', (await waitSel(page, '.detail-buy .cart-stepper.is-block', 3000)) && (await page.$('.cart-panel')) === null);
-    check('book page: the stepper fills the buy row', (await page.$eval('.detail-buy .cart-stepper', (e) => e.getBoundingClientRect().width)) === (await page.$eval('.detail-buy .buy-row', (e) => e.getBoundingClientRect().width)));
-    await page.$$eval('.buy-secondary button', (bs) => bs.find((b) => b.textContent.trim() === 'Go to cart')?.click());
+    check('book page: Add to cart turns into the stepper, panel stays shut', (await waitSel(page, '.buy-stack .cart-stepper.is-block', 3000)) && (await page.$('.cart-panel')) === null);
+    check('book page: the stepper fills the buy column', (await page.$eval('.buy-stack .cart-stepper', (e) => Math.round(e.getBoundingClientRect().width))) === (await page.$eval('.buy-stack', (e) => Math.round(e.getBoundingClientRect().width))));
+    await page.click('.buy-stack .order-now');
+    await page.waitForFunction(() => location.pathname !== '/books/' + location.pathname.split('/').pop() || /sign-in|checkout/.test(location.pathname), { timeout: 4000 }).catch(() => {});
+    await page.waitForFunction(() => /sign-in|checkout/.test(location.pathname), { timeout: 4000 }).catch(() => {});
+    check('book page: Order now heads to checkout (sign in first when signed out)', new URL(page.url()).pathname === '/sign-in');
+    // Back on the book: the cart still holds one copy; open it from the panel's View cart.
+    await goto(page, `/books/${book.id}`);
+    check('book page: Order now did not add a second copy', await waitCart(page, 1, 4000));
+    await page.click('.cart-button');
+    await waitSel(page, '.cart-panel');
+    await sleep(400);
+    await page.$$eval('.cart-panel-links a', (as) => as.find((a) => a.getAttribute('href') === '/cart')?.click());
     await page.waitForFunction(() => location.pathname === '/cart', { timeout: 4000 }).catch(() => {});
-    check('book page: Go to cart opens the cart page without adding twice', new URL(page.url()).pathname === '/cart' && (await cartLabel(page)) === 'Cart, 1 item');
     check('cart page: one line rendered with the shared cart line', await waitSel(page, 'main .line .line-inner'));
     await page.$$eval('main .btn-outline', (bs) => bs.find((b) => /continue shopping/i.test(b.textContent))?.click());
     await page.waitForFunction(() => /^\/books\//.test(location.pathname), { timeout: 4000 }).catch(() => {});
@@ -770,6 +847,14 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await waitSel(page, '.stat-row');
     await sleep(400);
     await page.screenshot({ path: path.join(SHOTS, 'account-dark-1280.png'), fullPage: true });
+    const orderBook = await one(`select id from public.books where is_visible and stock_quantity > 2 order by id desc limit 1`);
+    await goto(page, `/books/${orderBook.id}`);
+    await waitSel(page, '.buy-stack .order-now');
+    await page.click('.buy-stack .order-now');
+    await page.waitForFunction(() => location.pathname === '/checkout', { timeout: 5000 }).catch(() => {});
+    const orderTitle = (await one(`select title from public.books where id = $1`, [orderBook.id])).title.split(' by ')[0].slice(0, 20);
+    const onCheckout = await page.waitForFunction((t) => location.pathname === '/checkout' && document.querySelector('main')?.innerText.includes(t), { timeout: 6000 }, orderTitle).then(() => true).catch(() => false);
+    check('Order now: a signed-in shopper lands on checkout with the book in the order', onCheckout, orderTitle);
     check('signed-in flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }

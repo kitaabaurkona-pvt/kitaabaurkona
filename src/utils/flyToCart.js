@@ -28,7 +28,12 @@ export const cartFlights = {
 export function coverFrom(element) {
   const root = element?.closest('.book-card, .hero-deal, .detail, .line, .product-page');
   if (!root) return null;
-  return root.querySelector('.card-photo-extra[data-shown]') ?? root.querySelector('.cover img') ?? root.querySelector('.cover');
+  return (
+    root.querySelector('.card-photo-extra[data-shown]') ??
+    root.querySelector('.gallery-slide[data-active] .cover img') ??
+    root.querySelector('.cover img') ??
+    root.querySelector('.cover')
+  );
 }
 
 function bounce(target) {

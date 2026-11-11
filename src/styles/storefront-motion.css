@@ -249,3 +249,45 @@
 .floating-cart-count{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--c-accent);color:#101010;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
 /* Phones keep the header on screen, so they never need it. */
 @media (max-width:767px){.floating-cart{display:none;}}
+
+/* ---------- Genre row: a seamless loop (components/home/GenreSlider.jsx) ----------
+   The real tiles are followed by copies and the track moves by one set per cycle.
+   The edges fade instead of cutting tiles in half. Every tile is the same size here,
+   whatever the grid rules for the genre section say elsewhere. */
+.genre-slider{position:relative;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 32px,#000 calc(100% - 32px),transparent 100%);mask-image:linear-gradient(90deg,transparent 0,#000 32px,#000 calc(100% - 32px),transparent 100%);}
+.genre-rail-loop{display:block;overflow:visible;margin:0;padding:6px 0 12px;touch-action:pan-y;-webkit-user-select:none;user-select:none;}
+.genre-track{display:flex;width:max-content;gap:16px;will-change:transform;}
+.genre-set{display:flex;flex:none;gap:16px;}
+.genre-rail-loop .mood-tile,.genre-rail-loop .mood-tile:last-child{flex:0 0 var(--genre-tile,240px);width:var(--genre-tile,240px);min-width:0;grid-column:auto;-webkit-user-drag:none;}
+.genre-rail-loop .mood-tile *{pointer-events:none;}
+@media(max-width:767px){
+  .genre-slider{-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 16px,#000 calc(100% - 16px),transparent 100%);mask-image:linear-gradient(90deg,transparent 0,#000 16px,#000 calc(100% - 16px),transparent 100%);}
+  .genre-track,.genre-set{gap:10px;}
+  .genre-rail-loop .mood-tile,.genre-rail-loop .mood-tile:last-child{flex-direction:column;align-items:flex-start;}
+}
+
+/* ---------- Book photos: swipe, scroll or click through (components/store/BookGallery.jsx) ---------- */
+.gallery-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:none;border-radius:inherit;outline:none;}
+.gallery-track::-webkit-scrollbar{display:none;}
+.gallery-track:focus-visible{box-shadow:0 0 0 2px var(--c-focus);}
+.gallery-slide{display:flex;align-items:center;justify-content:center;flex:0 0 100%;min-width:0;scroll-snap-align:center;scroll-snap-stop:always;}
+.gallery-slide .cover{width:100%;}
+.gallery-arrow{position:absolute;top:50%;z-index:2;display:grid;place-items:center;width:42px;height:42px;padding:0;border:1px solid var(--c-line);border-radius:999px;background:var(--c-surface);color:var(--c-ink);box-shadow:0 6px 18px rgb(0 0 0 / .12);cursor:pointer;opacity:0;transform:translateY(-50%);transition:opacity .2s ease,background-color .15s ease;}
+.gallery-prev{left:12px;}
+.gallery-next{right:12px;}
+.gallery-main:hover .gallery-arrow:not(:disabled),.gallery-arrow:focus-visible{opacity:1;}
+.gallery-arrow:hover{background:var(--c-accent);color:#101010;border-color:var(--c-accent);}
+.gallery-arrow:disabled{opacity:0;pointer-events:none;}
+.gallery-dots{position:absolute;left:50%;bottom:10px;z-index:2;display:flex;gap:6px;transform:translateX(-50%);pointer-events:none;}
+.gallery-dots span{width:7px;height:7px;border-radius:999px;background:var(--c-line-strong);transition:width .2s ease,background-color .2s ease;}
+.gallery-dots span[data-active]{width:20px;background:var(--c-ink);}
+@media (hover:none){.gallery-arrow{display:none;}}
+:root[data-motion='reduce'] .gallery-dots span,:root[data-motion='reduce'] .gallery-arrow{transition:none;}
+
+/* ---------- Book page buying: Order now above Add to cart ---------- */
+.buy-stack{display:grid;gap:10px;}
+.buy-stack .cart-stepper{min-height:48px;}
+@media(max-width:767px){
+  .mobile-purchase-bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;}
+  .mobile-purchase-bar>.btn,.mobile-purchase-bar>.cart-stepper{width:100%;max-width:none;min-width:0;min-height:48px;}
+}
