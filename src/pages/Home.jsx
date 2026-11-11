@@ -30,13 +30,31 @@ export default function Home() {
       <div className="bento-main">
         <div className="bento-main-copy"><p className="eyebrow"><BookOpen size={17}/> Your little reading corner</p><h1 id="hero-title">What’s your <span>next read?</span></h1><p className="hero-description">Thrillers, manga, or a little self-help?</p><Link to="/books?stock=1" className="btn btn-primary hero-cta">Browse books <ArrowUpRight size={20}/></Link></div>
         <div className="hero-books" aria-label="A few stories to discover">
-          {heroIds.map(id => hero.data?.find(book=>book.id===id)).filter(Boolean).map((book,i)=><Link key={book.id} to={`/books/${book.id}`} className={`hero-book hero-book-${i+1}`} aria-label={`Explore ${bookDisplay(book).title}`}><img src={heroImages[i]} srcSet={`${heroImages[i].replace('.webp','-small.webp')} 260w, ${heroImages[i]} 420w`} sizes="(max-width:767px) 110px, (max-width:1023px) 150px, 185px" alt={bookDisplay(book).title} fetchPriority={i===0?'high':'auto'} decoding="async"/></Link>)}
+          {heroIds.map((id, index) => {
+            const book = hero.data?.find(item => item.id === id);
+            if (!book) return null;
+
+            const { title } = bookDisplay(book);
+            const cover = heroImages[index];
+            return (
+              <Link key={id} to={`/books/${id}`} className={`hero-book hero-book-${index + 1}`} aria-label={`Explore ${title}`}>
+                <img
+                  src={cover}
+                  srcSet={`${cover.replace('.webp', '-small.webp')} 260w, ${cover} 420w`}
+                  sizes="(max-width:767px) 110px, (max-width:1023px) 150px, 185px"
+                  alt={title}
+                  fetchPriority={index === 0 ? 'high' : 'auto'}
+                  decoding="async"
+                />
+              </Link>
+            );
+          })}
           {hero.loading && <p className="hero-loading" role="status">Finding your next read…</p>}
           {hero.error && <p className="hero-loading">Your next story is on the shelf below.</p>}
         </div>
       </div>
-      <Link className="bento-small bento-sage" to={underPriceHref}><span className="feature-kicker">Read within your budget</span><h2>Books for<br/>₹299 or less</h2><span className="feature-link">See the books <ArrowUpRight size={21}/></span><BookOpen className="feature-icon" size={72} weight="light" aria-hidden="true"/></Link>
-      <Link className="bento-small bento-peach" to={categoryHref('Literary Fiction')}><span className="feature-kicker">Explore literary fiction</span><h2>Not sure?<br/>Try fiction.</h2><span className="feature-link">Explore fiction <ArrowUpRight size={21}/></span><Sparkle className="feature-icon" size={74} weight="light" aria-hidden="true"/></Link>
+      <Link className="bento-small bento-budget" to={underPriceHref}><span className="feature-kicker">Read within your budget</span><h2>Books for<br/>₹299 or less</h2><span className="feature-link">See the books <ArrowUpRight size={21}/></span><BookOpen className="feature-icon" size={72} weight="light" aria-hidden="true"/></Link>
+      <Link className="bento-small bento-fiction" to={categoryHref('Literary Fiction')}><span className="feature-kicker">Explore literary fiction</span><h2>Not sure?<br/>Try fiction.</h2><span className="feature-link">Explore fiction <ArrowUpRight size={21}/></span><Sparkle className="feature-icon" size={74} weight="light" aria-hidden="true"/></Link>
     </section>
     <Reveal as="section" className="mood-section" aria-labelledby="mood-title"><div className="editorial-section-head"><div><h2 id="mood-title">Browse by genre</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div><GenreSlider>{genres.map(({name,category,mood,Icon,tone})=><Link key={name} className="mood-tile" data-tone={tone} to={categoryHref(category)}><Icon size={28} weight="regular"/><span><strong>{name}</strong><small>{mood}</small></span><ArrowUpRight className="mood-arrow" size={18}/></Link>)}</GenreSlider></Reveal>
     <Reveal as="section" className="reading-feature" aria-labelledby="shelf-title"><div className="editorial-section-head"><div><h2 id="shelf-title">Books to start with</h2></div><Link to="/books">View all <ArrowRight size={18}/></Link></div>

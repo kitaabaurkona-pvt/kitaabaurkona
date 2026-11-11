@@ -11,8 +11,6 @@
  .mood-tile:hover,.bento-small:hover { transform:translateY(-3px); }
  .hero-cta svg,.feature-link svg { transition:transform .2s ease; }
  .hero-cta:hover svg,.bento-small:hover .feature-link svg { transform:translate(2px,-2px); }
- .hero-book,.hero-book:hover,.hero-book:focus-visible { transition:transform .3s cubic-bezier(.22,1,.36,1); }
- .hero-book:hover,.hero-book:focus-visible { transform:translateY(-6px) rotate(var(--book-angle)); }
 }
 /* System and in-store preference both disable interaction movement. */
 @media (prefers-reduced-motion:reduce) {
@@ -27,9 +25,21 @@
 /* One rounded focus boundary, instead of nested native input and form outlines. */
 .header-search:focus-within { outline:none; border-color:var(--c-focus); box-shadow:0 0 0 1px var(--c-focus); }
 .header-search input,.header-search input:focus,.header-search input:focus-visible { appearance:none; -webkit-appearance:none; border:0; border-radius:0; outline:none; box-shadow:none; background:transparent; }
-/* Leave enough room for the hero's physical cover angles; don't lift into its crop. */
+/* Keep the link's hit area stable while the cover moves. */
+.hero-book img { pointer-events:none; }
+.hero-book:is(:focus-visible,:active) { z-index:5; }
+.hero-book:is(:focus-visible,:active) img { box-shadow:0 0 0 2px var(--c-gold),0 8px 18px #0009; }
 @media (hover:hover) and (pointer:fine) {
- .hero-book:hover,.hero-book:focus-visible { transform:rotate(var(--book-angle)); }
+ .hero-book:hover { z-index:5; }
+ .hero-book:hover img { box-shadow:0 0 0 2px var(--c-gold),0 8px 18px #0009; }
+}
+@media (prefers-reduced-motion:no-preference) {
+ :root:not([data-motion='reduce']) .hero-book img { transition:transform .22s ease; }
+ :root:not([data-motion='reduce']) .hero-book:focus-visible img { transform:translateY(-8px) rotate(calc(-1 * var(--book-angle))); }
+ :root:not([data-motion='reduce']) .hero-book:active img { transform:translateY(-3px) scale(.97); }
+ @media (hover:hover) and (pointer:fine) {
+  :root:not([data-motion='reduce']) .hero-book:hover:not(:active) img { transform:translateY(-8px) rotate(calc(-1 * var(--book-angle))); }
+ }
 }
 /* Keep genre scrolling inside the content gutters, with space for lift/focus. */
 .mood-grid { padding-top:6px; padding-bottom:10px; }
@@ -71,18 +81,22 @@
 .drawer:focus { outline:none; }
 .menu-close { border-radius:10px; }
 .menu-close:focus-visible { outline:2px solid var(--c-focus); outline-offset:-4px; }
-/* A separate warm neutral surface anchors the header in both themes. */
-.site-header { --header-surface:#242522; --header-search:#191b19; --header-line:#44463f; background:var(--header-surface); border-bottom:1px solid var(--header-line); }
-:root[data-theme='light'] .site-header { --header-surface:#e9e5dc; --header-search:#f7f5ed; --header-line:#cbc7bd; }
+/* A black header anchors the dark storefront. */
+.site-header { --header-surface:#080808; --header-search:#181818; --header-line:#46433a; background:var(--header-surface); border-bottom:1px solid var(--header-line); }
+:root[data-theme='light'] .site-header { --header-surface:#fff1bd; --header-search:#fffaf0; --header-line:#bda96e; }
+.site-header { background-image:linear-gradient(110deg,#ffcf2414,transparent 52%); }
+.site-header::after { content:''; display:block; height:2px; background:linear-gradient(90deg,var(--c-gold) 0%,#dba83a 28%,transparent 85%); }
+.site-header .brand-word { color:var(--c-gold-deep); }
 .site-header .header-nav { background:transparent; }
 .site-header .header-nav-row { border-bottom:0; }
 .site-header .header-search { background:var(--header-search); border-color:var(--header-line); }
+.site-header .header-search button { background:var(--c-accent); color:var(--c-on-accent); }
+.site-header .header-search button:hover { background:var(--c-accent-hover); }
 .site-header .header-search:focus-within { border-color:var(--c-focus); }
 /* Glass: a small number of frosted surfaces; controls use a cheap static sheen. */
 .bento-main { background-color:color-mix(in srgb,var(--c-surface) 88%,transparent); background-image:linear-gradient(135deg,#ffffff0e,transparent 55%); border-color:color-mix(in srgb,var(--c-ink) 14%,transparent); box-shadow:inset 0 1px 0 #ffffff13,0 12px 28px #0000000c; }
 .bento-small { background-image:linear-gradient(135deg,#ffffff33,transparent 55%,#ffffff0a); border:1px solid #ffffff26; box-shadow:inset 0 1px 0 #ffffff55,0 10px 24px #0000000b; }
-.bento-sage { background-color:color-mix(in srgb,var(--c-sage) 91%,transparent); }
-.bento-peach { background-color:color-mix(in srgb,var(--c-peach) 93%,transparent); }
+.bento-fiction { background-image:linear-gradient(145deg,#ffcf2422,transparent 68%); border-color:#ffcf2466; }
 @supports ((backdrop-filter:blur(8px)) or (-webkit-backdrop-filter:blur(8px))) {
  .bento-main,.bento-small { -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); }
 }
@@ -93,8 +107,6 @@
 @media(prefers-reduced-transparency:reduce) {
  .bento-main,.bento-small { -webkit-backdrop-filter:none; backdrop-filter:none; background-image:none; }
  .bento-main { background-color:var(--c-surface); }
- .bento-sage { background-color:var(--c-sage); }
- .bento-peach { background-color:var(--c-peach); }
  .btn { background-image:none; }
 }
 /* One filter panel on phones, a bounded dropdown on larger screens. */
