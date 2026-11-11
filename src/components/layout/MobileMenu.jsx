@@ -67,7 +67,7 @@ function MobileMenu() {
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
         <button type="button" className="icon-button menu-button" aria-label="Open menu" onPointerDown={() => { pointerOpen.current = true; }} onKeyDown={() => { pointerOpen.current = false; }}>
-          <List size={22} weight="fill" aria-hidden="true" />
+          <List size={22} weight="regular" aria-hidden="true" />
         </button>
       </Dialog.Trigger>
       <AnimatePresence>
