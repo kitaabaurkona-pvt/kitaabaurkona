@@ -92,17 +92,13 @@
 .drawer:focus { outline:none; }
 .menu-close { border-radius:10px; }
 .menu-close:focus-visible { outline:2px solid var(--c-focus); outline-offset:-4px; }
-/* Footer surfaces follow the selected theme. */
 :is(.site-footer,.checkout-footer) {
- --chrome-surface:#080808;
- --chrome-line:#46433a;
- background:linear-gradient(110deg,#ffcf2414,transparent 52%),var(--chrome-surface);
- border-color:var(--chrome-line);
+ --footer-line:#424242;
+ background:#000;
+ border-color:var(--footer-line);
+ color:#fff;
 }
-:root[data-theme='light'] :is(.site-footer,.checkout-footer) {
- --chrome-surface:#fff1bd;
- --chrome-line:#bda96e;
-}
+:is(.site-footer,.checkout-footer) a { color:#fff; }
 .site-header {
  --header-search:#181818;
  --header-line:#424242;
@@ -126,18 +122,24 @@
 .site-header .header-search > svg { display:none; }
 .site-footer { margin-top:36px; }
 .editorial-footer { gap:24px; padding-block:28px 20px; }
-.editorial-footer h2 { margin-bottom:6px; }
+.editorial-footer h2 { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:#fff; }
+.editorial-footer h2 svg { width:18px; height:18px; flex:none; color:var(--c-gold); }
 .editorial-footer p { margin-block:6px; }
 .editorial-footer-bottom { padding-block:12px; }
+.site-footer :is(p,.editorial-footer-bottom) { color:#bcbab4; }
+@media (min-width:768px) and (max-width:1023px) {
+ .editorial-footer { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .editorial-footer .footer-contact { grid-column:auto; }
+}
 @media (max-width:767px) {
  .editorial-footer { gap:14px 20px; padding-block:22px 16px; }
  .editorial-footer-bottom { gap:4px; }
  .editorial-footer-bottom nav { flex-wrap:wrap; gap:4px 16px; }
 }
-.site-footer .brand-word,.editorial-footer h2,.checkout-footer p { color:var(--c-gold-deep); }
-:is(.site-footer,.checkout-footer) a:hover { color:var(--c-gold-deep); }
-:is(.site-footer,.checkout-footer) :focus-visible { outline-color:var(--c-focus); }
-.editorial-footer-bottom,.site-footer .preview-note { border-color:var(--chrome-line); }
+.site-footer .brand-word,.checkout-footer p { color:var(--c-gold); }
+:is(.site-footer,.checkout-footer) a:hover { color:var(--c-gold); }
+:is(.site-footer,.checkout-footer) :focus-visible { outline-color:var(--c-gold); }
+.editorial-footer-bottom,.site-footer .preview-note { border-color:var(--footer-line); }
 .brand-logo.brand-lockup { width:230px; max-width:100%; min-height:44px; }
 .brand-logo.brand-lockup img { width:100%; height:auto; }
 .brand-lockup .brand-lockup-dark,
