@@ -547,12 +547,11 @@
 .auth-page .btn-primary,.auth-page .btn-secondary {text-transform:none;letter-spacing:0;font-size:15px;font-weight:600;min-height:48px;border-radius:6px;}
 .auth-page .field-input,.auth-page .field-control,.auth-page .phone-group {border-radius:6px;}
 
-/* Match the storefront's typography, warm neutral header and rounded controls. */
+/* Match the storefront's typography, black header and rounded controls. */
 .auth-page { --auth-focus:var(--c-focus); font-family:var(--font); background:var(--c-paper); }
-.auth-page .auth-header { background:#242522; border-bottom-color:#44463f; height:76px; }
-:root[data-theme='light'] .auth-page .auth-header { background:#e9e5dc; border-bottom-color:#cbc7bd; }
-.auth-page .auth-brand { font-family:var(--font-serif); font-weight:650; }
-.auth-page .auth-back { border-radius:12px; }
+.auth-page .auth-header { background:#000; border-bottom-color:#424242; height:76px; }
+.auth-page .auth-back { color:#fff; border-radius:12px; flex:none; }
+.auth-page .auth-back:focus-visible { outline-color:var(--c-gold); }
 .auth-page .auth-main { align-items:flex-start; padding-top:40px; padding-bottom:48px; }
 .auth-page .auth-card { max-width:448px; padding:30px; border:1px solid var(--c-line); border-radius:26px; background:var(--c-surface); box-shadow:inset 0 1px 0 #ffffff0b; }
 .auth-page .auth-title { font-family:var(--font-serif); font-size:32px; font-weight:650; margin-bottom:10px; }
@@ -563,5 +562,6 @@
 .auth-page .btn-primary { background:var(--c-accent); color:var(--c-on-accent); background-image:linear-gradient(165deg,#ffffff26,transparent 65%); box-shadow:inset 0 1px 0 #ffffff4d; }
 .auth-page .btn-secondary { background:transparent; color:var(--auth-ink); border-color:var(--c-line-strong); }
 .auth-page .auth-switch { margin-top:24px; color:var(--auth-muted); font-size:14px; }
+.auth-page .auth-switch a,.auth-page .field-link { color:var(--c-gold-deep); }
 @media(min-width:640px) { .auth-page .auth-main { align-items:center; } }
 @media(max-width:639px) { .auth-page .auth-main { padding:28px 16px 40px; } .auth-page .auth-card { padding:24px 22px; border-radius:24px; } .auth-page .auth-header { height:64px; } }

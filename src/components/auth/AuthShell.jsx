@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import BrandLink from '../layout/BrandLink';
 import '../../styles/auth.css';
 
 function AuthShell({ title, subtitle, backTo, backLabel, children }) {
@@ -16,10 +17,7 @@ function AuthShell({ title, subtitle, backTo, backLabel, children }) {
             <path d="m12 19-7-7 7-7" />
           </svg>
         </Link>
-        <Link to="/" className="auth-brand">
-          <img src="/images/brand/emblem-header.webp" alt="" width="28" height="28" />
-          Kitaab Aur Kona
-        </Link>
+        <BrandLink />
       </header>
       <main className="auth-main">
         <div className="auth-card">

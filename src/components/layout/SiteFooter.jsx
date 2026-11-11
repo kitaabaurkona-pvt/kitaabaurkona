@@ -1,5 +1,6 @@
 import { BookOpen, ChatCircle, Lifebuoy } from '@phosphor-icons/react';
 import { Link } from 'react-router-dom';
+import BrandLink from './BrandLink';
 import { CONTACT } from '../../utils/storeInfo';
 import { underPriceHref, categoryHref } from '../../utils/categories';
 import { previewMode } from '../../preview/mode';
@@ -11,10 +12,7 @@ export default function SiteFooter() {
     <footer className="site-footer">
       <div className="container editorial-footer">
         <div className="footer-brand">
-          <Link className="brand-logo" to="/">
-            <img src="/images/brand/emblem-header.webp" width="42" height="42" alt="" />
-            <span className="brand-word">Kitaab Aur Kona</span>
-          </Link>
+          <BrandLink />
           <p>Your next read.<br />Your own little corner.</p>
         </div>
         <nav aria-labelledby="footer-shop">
