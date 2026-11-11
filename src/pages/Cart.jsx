@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence } from 'motion/react';
 import { useCartLines } from '../hooks/useCartLines';
 import CartSummary from '../components/store/CartSummary';
@@ -10,11 +10,18 @@ import { plural } from '../utils/format';
 import { LoadError, StateBlock } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 import { BagIcon } from '../components/icons';
+import { previousPage } from '../hooks/useScrollMemory';
 
 function Cart() {
   useDocumentTitle('Cart');
   const { ids } = useCart();
   const { lines, totals, blocked, pending, data, loading, error, retry } = useCartLines();
+  const navigate = useNavigate();
+  const { key } = useLocation();
+  // Came here from a page of the store: "Continue shopping" goes back to it, at the
+  // same spot. Opened directly (or from checkout): it goes to the books.
+  const from = previousPage(key);
+  const canGoBack = Boolean(from) && from !== '/checkout';
 
   // Re-read prices and stock whenever the cart page is opened.
   useEffect(() => {
@@ -62,9 +69,15 @@ function Cart() {
                   Proceed to checkout
                 </Link>
               )}
-              <Link to="/books" className="btn btn-outline btn-block">
-                Continue shopping
-              </Link>
+              {canGoBack ? (
+                <button type="button" className="btn btn-outline btn-block" onClick={() => navigate(-1)}>
+                  Continue shopping
+                </button>
+              ) : (
+                <Link to="/books" className="btn btn-outline btn-block">
+                  Continue shopping
+                </Link>
+              )}
             </CartSummary>
           </aside>
         </div>

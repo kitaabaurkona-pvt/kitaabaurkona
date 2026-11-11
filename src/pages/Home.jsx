@@ -22,9 +22,10 @@ const heroImages = ['/images/hero-dawn-of-onyx.webp','/images/hero-everything-ab
 const heroIds = ['e3f2ead5-b9e1-462a-8b47-7e868375f002','fd249dd4-5f1c-43fa-8052-dab6cf224bbc','6b811028-74fe-45aa-972d-46f3af1a3b46'];
 export default function Home() {
   useDocumentTitle('Find your next favourite.');
-  const featured = useAsync(() => getBooksByIds(featuredIds), []);
-  const hero = useAsync(() => getBooksByIds(heroIds), []);
-  const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4 }), []);
+  // Kept for the visit (useAsync keys), so coming back to the home page shows it at once.
+  const featured = useAsync(() => getBooksByIds(featuredIds), [], { key: 'home:featured' });
+  const hero = useAsync(() => getBooksByIds(heroIds), [], { key: 'home:hero' });
+  const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4 }), [], { key: 'home:affordable' });
   return <div className="reading-home container">
     <section className="bento-hero" aria-labelledby="hero-title">
       <div className="bento-main">

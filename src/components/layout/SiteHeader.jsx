@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { MagnifyingGlass, User, ShoppingCart, BookmarkSimple } from '@phosphor-icons/react';
 import { useAuth } from '../../hooks/useAuth';
-import { useCart } from '../../hooks/useCart';
 import { useCartLines } from '../../hooks/useCartLines';
 import { CATEGORIES, FICTION, NON_FICTION, categoryHref, underPriceHref, regionalHref } from '../../utils/categories';
 import { searchBooks } from '../../services/bookService';
@@ -13,9 +12,40 @@ import { bookDisplay } from '../../utils/bookDisplay';
 import BrandLink from './BrandLink';
 import NavMenu from './NavMenu';
 import MobileMenu from './MobileMenu';
+import { useCartBadge } from '../../hooks/useCartBadge';
+import { SEARCH_HINTS, SEARCH_HINT_MS } from '../../utils/searchHints';
+
+// The empty search box suggests a real book or author, changing every 30 seconds with
+// a short fade (no fade with Reduce animations).
+function useSearchHint(reduceMotion) {
+  const [index, setIndex] = useState(0);
+  const [fading, setFading] = useState(false);
+  useEffect(() => {
+    let swap = 0;
+    const timer = setInterval(() => {
+      if (reduceMotion) {
+        setIndex((i) => (i + 1) % SEARCH_HINTS.length);
+        return;
+      }
+      setFading(true);
+      swap = setTimeout(() => {
+        setIndex((i) => (i + 1) % SEARCH_HINTS.length);
+        setFading(false);
+      }, 260);
+    }, SEARCH_HINT_MS);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(swap);
+    };
+  }, [reduceMotion]);
+  return { hint: SEARCH_HINTS[index], fading };
+}
 export default function SiteHeader() {
  const systemReduced=useReducedMotion(); const {motion:motionPreference}=usePreferences(); const reduceMotion=systemReduced || motionPreference==='reduce';
- const {isAuthenticated}=useAuth(); const {count}=useCart(); const {cartOpen,openCart}=useCartLines();
+ const {isAuthenticated}=useAuth(); const {cartOpen,openCart}=useCartLines();
+ // While a cover is flying to the cart the count waits, and updates as it lands.
+ const badge=useCartBadge();
+ const {hint,fading}=useSearchHint(reduceMotion);
  const location=useLocation();
  const [term,setTerm]=useState(()=>new URLSearchParams(location.search).get('q') || '');
  const [focused,setFocused]=useState(false);
@@ -47,8 +77,8 @@ export default function SiteHeader() {
  return <header className="site-header">
   <div className="container header-top">
    <div className="header-left"><MobileMenu/><BrandLink /></div>
-   <form className="header-search" role="search" onSubmit={search} onFocus={()=>setFocused(true)} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setFocused(false);}} onKeyDown={e=>{if(e.key==='Escape')setFocused(false);}}><label className="visually-hidden" htmlFor="header-search">Search books by title</label><MagnifyingGlass size={23}/><input id="header-search" type="search" placeholder="" value={term} maxLength={100} onChange={e=>setTerm(e.target.value)}/><button type="submit" aria-label="Search books"><MagnifyingGlass size={19} weight="regular" aria-hidden="true"/></button>{showSuggestions&&<section className="search-suggestions" aria-label="Search suggestions"><p className="suggestion-heading">Matching books</p>{suggestions.loading || term.trim()!==suggestionTerm ? <p role="status">Finding books…</p> : suggestions.error ? <p>Suggestions are unavailable. You can still search.</p> : suggestions.data?.books.length ? <ul>{suggestions.data.books.map(book=><li key={book.id}><Link to={`/books/${book.id}`} onClick={()=>setFocused(false)}><img src={book.image_urls?.[0]} alt=""/><span><strong>{bookDisplay(book).title}</strong><small>{bookDisplay(book).author || book.category}</small></span></Link></li>)}</ul> : <p>No matching titles. Try another title or browse all books.</p>}<Link className="search-all-link" to={`/books?q=${encodeURIComponent(term.trim())}`} onClick={()=>setFocused(false)}>See all results for “{term.trim()}”</Link></section>}</form>
-   <div className="header-right"><Link className="icon-button header-wishlist" to="/wishlist" aria-label="Wishlist"><BookmarkSimple size={18} weight="regular" aria-hidden="true"/></Link><Link className="header-utility" aria-label={isAuthenticated ? 'Account' : 'Sign in'} to={isAuthenticated?'/account':'/sign-in'}><User size={23} weight="regular" aria-hidden="true"/><span>{isAuthenticated?'Account':'Sign in'}</span></Link><button className="header-utility cart-button" onClick={openCart} aria-label={`Cart, ${count} ${count===1?'item':'items'}`} aria-haspopup="dialog" aria-expanded={cartOpen}><motion.div key={count} className="cart-icon-motion" initial={false} animate={{ scale: reduceMotion || !count ? 1 : [1, 1.18, 1], rotate: reduceMotion || !count ? 0 : [0, -7, 0] }} transition={{ duration: 0.32 }}><ShoppingCart size={26} weight="regular" aria-hidden="true"/></motion.div><span>Cart{count>0?` (${count})`:''}</span>{count>0&&<small className="mobile-cart-count" aria-hidden="true">{count>99?'99+':count}</small>}</button></div>
+   <form className="header-search" role="search" onSubmit={search} onFocus={()=>setFocused(true)} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setFocused(false);}} onKeyDown={e=>{if(e.key==='Escape')setFocused(false);}}><label className="visually-hidden" htmlFor="header-search">Search books by title</label><MagnifyingGlass size={23}/><input id="header-search" type="search" className={fading?'search-hint-fading':undefined} placeholder={hint} value={term} maxLength={100} onChange={e=>setTerm(e.target.value)}/><button type="submit" aria-label="Search books"><MagnifyingGlass size={19} weight="regular" aria-hidden="true"/></button>{showSuggestions&&<section className="search-suggestions" aria-label="Search suggestions"><p className="suggestion-heading">Matching books</p>{suggestions.loading || term.trim()!==suggestionTerm ? <p role="status">Finding books…</p> : suggestions.error ? <p>Suggestions are unavailable. You can still search.</p> : suggestions.data?.books.length ? <ul>{suggestions.data.books.map(book=><li key={book.id}><Link to={`/books/${book.id}`} onClick={()=>setFocused(false)}><img src={book.image_urls?.[0]} alt=""/><span><strong>{bookDisplay(book).title}</strong><small>{bookDisplay(book).author || book.category}</small></span></Link></li>)}</ul> : <p>No matching titles. Try another title or browse all books.</p>}<Link className="search-all-link" to={`/books?q=${encodeURIComponent(term.trim())}`} onClick={()=>setFocused(false)}>See all results for “{term.trim()}”</Link></section>}</form>
+   <div className="header-right"><Link className="icon-button header-wishlist" to="/wishlist" aria-label="Wishlist"><BookmarkSimple size={18} weight="regular" aria-hidden="true"/></Link><Link className="header-utility" aria-label={isAuthenticated ? 'Account' : 'Sign in'} to={isAuthenticated?'/account':'/sign-in'}><User size={23} weight="regular" aria-hidden="true"/><span>{isAuthenticated?'Account':'Sign in'}</span></Link><button className="header-utility cart-button" onClick={openCart} aria-label={`Cart, ${badge} ${badge===1?'item':'items'}`} aria-haspopup="dialog" aria-expanded={cartOpen}><motion.div key={badge} className="cart-icon-motion" initial={false} animate={{ scale: reduceMotion || !badge ? 1 : [1, 1.18, 1], rotate: reduceMotion || !badge ? 0 : [0, -7, 0] }} transition={{ duration: 0.32 }}><ShoppingCart size={26} weight="regular" aria-hidden="true"/></motion.div><span>Cart{badge>0?` (${badge})`:''}</span>{badge>0&&<small className="mobile-cart-count" aria-hidden="true">{badge>99?'99+':badge}</small>}</button></div>
   </div>
   <nav className="header-nav" aria-label="Main"><div className="container header-nav-row"><NavLink to="/books" className="nav-link">Browse books</NavLink><NavMenu label="Categories" links={CATEGORIES.map(c=>({to:categoryHref(c),label:c}))} groups={groups}/><Link to={underPriceHref} className="nav-link">Budget reads</Link><Link to="/about" className="nav-link nav-about">Our story</Link></div></nav>
  </header>;

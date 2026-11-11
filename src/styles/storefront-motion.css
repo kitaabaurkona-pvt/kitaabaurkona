@@ -206,3 +206,46 @@
 .cart-panel:focus { outline:none; }
 .cart-panel-head .cart-close { margin-left:auto; border-radius:10px; flex:none; }
 .cart-close:focus-visible { outline:2px solid var(--c-focus); outline-offset:-4px; }
+
+/* ---------- Add to cart: the − count + stepper and the flying cover ----------
+   The stepper takes the place of the button it replaces, at the same size and pill
+   shape, in ink (so "in your cart" reads differently from the yellow "Add to cart").
+   − and + light up in the accent yellow. */
+.cart-stepper{display:grid;grid-template-columns:46px minmax(0,1fr) 46px;align-items:stretch;min-height:48px;border-radius:999px;background:var(--c-ink);color:var(--c-paper);overflow:hidden;animation:cart-stepper-in .22s cubic-bezier(.25,.8,.25,1);}
+.cart-stepper.is-block{width:100%;}
+.cart-stepper.is-card{min-height:46px;margin-top:auto;}
+.cart-stepper.is-quiet{min-height:44px;}
+.cart-stepper button{display:grid;place-items:center;min-width:0;min-height:0;padding:0;border:0;background:transparent;color:inherit;font-size:20px;line-height:1;cursor:pointer;transition:background-color .15s ease,color .15s ease;}
+.cart-stepper button:hover:not([aria-disabled='true']),.cart-stepper button:focus-visible{background:var(--c-accent);color:#101010;}
+.cart-stepper button:focus-visible{outline:2px solid var(--c-focus);outline-offset:-2px;}
+.cart-stepper button[aria-disabled='true']{opacity:.35;cursor:not-allowed;}
+.cart-stepper-count{position:relative;display:grid;place-items:center;overflow:hidden;font-size:15px;font-weight:650;font-variant-numeric:tabular-nums;}
+.cart-stepper-number{grid-area:1/1;}
+@keyframes cart-stepper-in{from{transform:scale(.94);opacity:.5;}}
+.mobile-purchase-bar .cart-stepper{min-width:150px;min-height:48px;}
+@media (max-width:767px){
+  .cart-stepper{grid-template-columns:40px minmax(0,1fr) 40px;}
+  .cart-stepper.is-card{grid-template-columns:36px minmax(0,1fr) 36px;}
+}
+:root[data-motion='reduce'] .cart-stepper{animation:none;}
+
+/* The cover copy that flies to the cart (built by utils/flyToCart.js). */
+.cart-flight{position:fixed;z-index:1000;pointer-events:none;will-change:transform;}
+.cart-flight-lift,.cart-flight-card{width:100%;height:100%;will-change:transform;}
+.cart-flight-card{overflow:hidden;border-radius:12px;background:var(--c-surface-alt);transform-origin:center;}
+.cart-flight-card img{display:block;width:100%;height:100%;object-fit:cover;}
+
+/* ---------- Header search: the rotating hint ----------
+   The empty box suggests a book or author (utils/searchHints.js); it fades out and
+   back in when the suggestion changes. Slightly transparent, like a whisper. */
+.header-search input::placeholder{color:currentColor;opacity:.55;transition:opacity .26s ease;}
+.header-search input.search-hint-fading::placeholder{opacity:0;}
+:root[data-motion='reduce'] .header-search input::placeholder{transition:none;}
+
+/* ---------- Floating cart (wide screens, once the header has scrolled away) ---------- */
+.floating-cart{position:fixed;top:16px;right:max(24px,env(safe-area-inset-right));z-index:45;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:56px;height:52px;padding:0 18px;border:1px solid rgb(255 255 255 / .12);border-radius:999px;background:#101010;color:#fff;box-shadow:0 10px 28px rgb(0 0 0 / .22);cursor:pointer;}
+.floating-cart:hover{background:#1c1c1c;}
+.floating-cart:focus-visible{outline:2px solid var(--c-accent);outline-offset:3px;}
+.floating-cart-count{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--c-accent);color:#101010;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
+/* Phones keep the header on screen, so they never need it. */
+@media (max-width:767px){.floating-cart{display:none;}}

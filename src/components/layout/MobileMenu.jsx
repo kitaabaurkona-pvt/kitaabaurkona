@@ -1,6 +1,6 @@
 import { List } from '@phosphor-icons/react';
 import { useRef, useState } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -8,11 +8,7 @@ import { useCart } from '../../hooks/useCart';
 import { useWishlist } from '../../hooks/useWishlist';
 import { usePreferences } from '../../hooks/usePreferences';
 import { useToast } from '../../hooks/useToast';
-import { useAsync } from '../../hooks/useAsync';
-import { listCategories } from '../../services/bookService';
-import { COLLECTIONS, UNDER_PRICE, categoryHref, orderCategories, regionalHref, underPriceHref } from '../../utils/categories';
 import { POLICY_LINKS } from '../../content/policies';
-import { formatPrice } from '../../utils/format';
 import {
   BagIcon,
   BookIcon,
@@ -25,7 +21,6 @@ import {
   StoreIcon,
   UploadIcon,
   UserIcon,
-  ChevronDownIcon,
 } from '../icons';
 
 // Phone navigation: a menu button in the header opens this side panel. Radix Dialog
@@ -41,7 +36,6 @@ function MobileMenu() {
   const { show } = useToast();
   const navigate = useNavigate();
   const close = () => setOpen(false);
-  const categories = useAsync(() => listCategories(), []);
 
   const item = (to, label, Icon, { end = false, count = 0 } = {}) => (
     <NavLink to={to} end={end} className="drawer-link" onClick={close}>
@@ -128,25 +122,6 @@ function MobileMenu() {
                   {item('/books', 'Browse books', BookIcon)}
                   {item('/cart', 'Cart', BagIcon, { count: cartCount })}
                 </nav>
-
-                {categories.data?.length > 0 && (
-                  <details className="drawer-section drawer-categories">
-                    <summary>Browse categories <ChevronDownIcon size={18}/></summary>
-                    <nav aria-label="Categories" className="drawer-category-options">
-                    {orderCategories(categories.data).map((name) => (
-                      <Link key={name} to={categoryHref(name)} className="drawer-link drawer-link-plain" onClick={close}>
-                        {name}
-                      </Link>
-                    ))}
-                    <Link to={underPriceHref} className="drawer-link drawer-link-plain" onClick={close}>
-                      Up to {formatPrice(UNDER_PRICE)}
-                    </Link>
-                    <Link to={regionalHref} className="drawer-link drawer-link-plain" onClick={close}>
-                      {COLLECTIONS.regional.label}
-                    </Link>
-                    </nav>
-                  </details>
-                )}
 
                 <nav aria-label="Your account" className="drawer-section">
                   <h2>Your account</h2>

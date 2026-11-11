@@ -141,7 +141,12 @@ function CartPanel() {
                       </Link>
                     )}
                     <div className="cart-panel-links">
-                      <Link to="/books">Continue browsing</Link>
+                      {/* Just closes the panel: the page underneath stays exactly where it was. */}
+                      <Dialog.Close asChild>
+                        <button type="button" className="btn-link">
+                          Continue shopping
+                        </button>
+                      </Dialog.Close>
                       <Link to="/cart">View cart</Link>
                     </div>
                   </div>
