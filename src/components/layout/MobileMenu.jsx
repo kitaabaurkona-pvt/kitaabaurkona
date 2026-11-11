@@ -1,3 +1,4 @@
+import { List } from '@phosphor-icons/react';
 import { useRef, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -18,7 +19,6 @@ import {
   BookmarkIcon,
   CloseIcon,
   LogoutIcon,
-  MenuIcon,
   ReceiptIcon,
   SettingsIcon,
   ShieldIcon,
@@ -67,7 +67,7 @@ function MobileMenu() {
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger asChild>
         <button type="button" className="icon-button menu-button" aria-label="Open menu" onPointerDown={() => { pointerOpen.current = true; }} onKeyDown={() => { pointerOpen.current = false; }}>
-          <MenuIcon />
+          <List size={22} weight="fill" aria-hidden="true" />
         </button>
       </Dialog.Trigger>
       <AnimatePresence>
