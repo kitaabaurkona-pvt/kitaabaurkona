@@ -5,7 +5,8 @@
 //   signed-in customer  check_pincode, track (own orders only)
 //   admin               the above for any order, plus rates, set_courier, set_carrier,
 //                       book_now, link_awb, label, cancel_shipment, manifest,
-//                       pickup_request, ndr_list, ndr_action, return_pickup
+//                       register_warehouse, pickup_request, ndr_list, ndr_action,
+//                       return_pickup
 //   scheduler (cron)    run_job, with the cron secret header (no user)
 //
 // Two carriers, two separate workflows. Every parcel says which carrier it goes with
@@ -30,6 +31,8 @@ import {
   DELHIVERY_MODES,
   indiaDateTime,
   mapDelhiveryStatus,
+  warehouseName,
+  warehouseRegistration,
 } from './delhivery-shipping.js';
 import { clean } from './text.js';
 import {
@@ -635,13 +638,38 @@ export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSe
       return { url, count: awbs.length };
     },
 
+    // Registers our pickup address with Delhivery under the warehouse name saved in
+    // Admin > Shipping, so bookings and pickup requests with that name are accepted.
+    // Delhivery only takes orders for pickup locations registered on the account.
+    async register_warehouse(_input, { user }) {
+      const st = await settings();
+      const reg = warehouseRegistration(st);
+      if (!reg.name) throw new AppError(409, 'Type the Delhivery warehouse name in Admin > Shipping and save it first');
+      if (!reg.email) throw new AppError(409, 'Add a contact email in Admin > Shipping first (Delhivery asks for one)');
+      let result;
+      try {
+        result = await dl().registerWarehouse(reg);
+      } catch (e) {
+        if (e instanceof CarrierError) throw new AppError(502, e.message);
+        throw e;
+      }
+      await rpc('log_shipment_event', {
+        p_shipment: null,
+        p_order: null,
+        p_actor: user.id,
+        p_action: 'warehouse_registered',
+        p_detail: result.created ? `Delhivery pickup location "${reg.name}" registered` : `Delhivery already has the pickup location "${reg.name}"`,
+      });
+      return { name: reg.name, created: result.created };
+    },
+
     // Asks Delhivery to collect parcels from our registered warehouse.
     async pickup_request({ date, time, count }, { user }) {
       const st = await settings();
       if (!st.delhivery_warehouse_name) throw new AppError(409, 'Set the Delhivery warehouse name in Admin > Shipping first');
       let answer;
       try {
-        answer = await dl().pickup({ date, time, location: st.delhivery_warehouse_name, count });
+        answer = await dl().pickup({ date, time, location: warehouseName(st), count });
       } catch (e) {
         if (e instanceof CarrierError) throw new AppError(502, e.message);
         throw e;

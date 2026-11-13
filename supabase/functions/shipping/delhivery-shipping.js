@@ -42,6 +42,26 @@ export function delhiveryOptions(rates) {
     .sort((a, b) => (a.total_charges ?? Infinity) - (b.total_charges ?? Infinity) || (a.id === 'surface' ? -1 : 1));
 }
 
+// The pickup location name must reach Delhivery exactly as it is registered there
+// (it is matched character for character, case included), so it is only trimmed and
+// cleaned of control characters, never reworded like free text is.
+export const warehouseName = (settings) => clean(settings?.delhivery_warehouse_name, 100);
+
+// What Delhivery needs to register our pickup address as a pickup location. Returns come
+// back to the same address. Its "registered name" may not contain underscores.
+export function warehouseRegistration(settings) {
+  return {
+    name: warehouseName(settings),
+    registeredName: dlvText(String(settings.pickup_name ?? '').replace(/_/g, ' '), 80),
+    phone: settings.pickup_phone,
+    email: clean(settings.pickup_email, 120),
+    address: dlvText(settings.pickup_address, 200),
+    city: dlvText(settings.pickup_city, 60),
+    state: dlvText(settings.pickup_state, 60),
+    pin: settings.pickup_pincode,
+  };
+}
+
 function returnAddress(settings) {
   return {
     return_name: dlvText(settings.pickup_name, 80),
@@ -90,7 +110,7 @@ export function delhiveryPayload({ order, items, settings }, pkg, option, now = 
         ...returnAddress(settings),
       },
     ],
-    pickup_location: { name: dlvText(settings.delhivery_warehouse_name, 100) },
+    pickup_location: { name: warehouseName(settings) },
   };
 }
 
@@ -123,7 +143,7 @@ export function delhiveryReturnPayload({ order, items, settings }, pkg, now = ne
         ...returnAddress(settings),
       },
     ],
-    pickup_location: { name: dlvText(settings.delhivery_warehouse_name, 100) },
+    pickup_location: { name: warehouseName(settings) },
   };
 }
 

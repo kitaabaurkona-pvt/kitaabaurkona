@@ -12,6 +12,7 @@ import {
   getShippingSettings,
   listNdr,
   listProblemShipments,
+  registerDelhiveryWarehouse,
   requestDelhiveryPickup,
   updateShippingSettings,
 } from '../../services/shippingService';
@@ -32,6 +33,7 @@ const FIELDS = [
   ['pickup_city', 'City', 60],
   ['pickup_pincode', 'PIN code', 6],
   ['pickup_phone', 'Mobile number', 10],
+  ['pickup_email', 'Contact email', 120],
 ];
 
 function SettingsForm({ initial }) {
@@ -50,13 +52,20 @@ function SettingsForm({ initial }) {
     setNewSkip('');
   }
 
+  function problem() {
+    if (!/^[1-9][0-9]{5}$/.test(form.pickup_pincode)) return 'Enter a 6-digit PIN code.';
+    if (!/^[6-9][0-9]{9}$/.test(form.pickup_phone)) return 'Enter a 10-digit mobile number.';
+    if ('pickup_email' in form && !/^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$/.test(form.pickup_email ?? '')) return 'Enter a contact email address.';
+    return null;
+  }
+
   async function save(event) {
     event.preventDefault();
     if (busy.current) return;
-    if (!/^[1-9][0-9]{5}$/.test(form.pickup_pincode)) return setError('Enter a 6-digit PIN code.');
-    if (!/^[6-9][0-9]{9}$/.test(form.pickup_phone)) return setError('Enter a 10-digit mobile number.');
+    const invalid = problem();
+    if (invalid) return setError(invalid);
     busy.current = true;
-    setSaving(true);
+    setSaving('save');
     setError(null);
     try {
       const saved = await updateShippingSettings(form);
@@ -64,6 +73,35 @@ function SettingsForm({ initial }) {
       show({ message: 'Shipping settings saved' });
     } catch (err) {
       setError(adminErrorMessage(err));
+    } finally {
+      busy.current = false;
+      setSaving(false);
+    }
+  }
+
+  // Delhivery books parcels only for a pickup location registered on the account. This
+  // saves the form, then registers the pickup address with Delhivery under the name above.
+  async function registerWithDelhivery() {
+    if (busy.current) return;
+    const invalid = problem() ?? (!form.delhivery_warehouse_name?.trim() ? 'Type the Delhivery warehouse name first.' : null);
+    if (invalid) return setError(invalid);
+    busy.current = true;
+    setSaving('register');
+    setError(null);
+    try {
+      const saved = await updateShippingSettings(form);
+      if (saved) setForm(saved);
+    } catch (err) {
+      setError(adminErrorMessage(err));
+      busy.current = false;
+      setSaving(false);
+      return;
+    }
+    try {
+      const r = await registerDelhiveryWarehouse();
+      show({ message: r.created ? `Pickup address registered with Delhivery as "${r.name}"` : `Delhivery already has the pickup location "${r.name}"` });
+    } catch (err) {
+      setError(err.message);
     } finally {
       busy.current = false;
       setSaving(false);
@@ -154,11 +192,17 @@ function SettingsForm({ initial }) {
           {error}
         </p>
       )}
-      <div>
-        <button type="submit" className="btn btn-dark" aria-busy={saving}>
-          {saving && <span className="spinner" aria-hidden="true" />}
+      <div className="inline-actions">
+        <button type="submit" className="btn btn-dark" aria-busy={saving === 'save'} aria-disabled={Boolean(saving) || undefined}>
+          {saving === 'save' && <span className="spinner" aria-hidden="true" />}
           Save settings
         </button>
+        {form.delhivery_warehouse_name?.trim() && (
+          <button type="button" className="btn btn-outline" aria-busy={saving === 'register'} aria-disabled={Boolean(saving) || undefined} onClick={registerWithDelhivery}>
+            {saving === 'register' && <span className="spinner" aria-hidden="true" />}
+            Register pickup address with Delhivery
+          </button>
+        )}
       </div>
     </form>
   );

@@ -130,7 +130,7 @@ XB.ndr = [];
 
 // ---------- Fake Delhivery (answers shaped like the live API's) ----------
 const DL_TOKEN = 'dlv-test-token-0123456789abcdef01234567';
-const DL = { calls: [], books: [], cancels: [], pickups: [], ndr: [], mode: {}, track: { StatusType: 'UD', Status: 'In Transit', StatusCode: 'X-PPOM' } };
+const DL = { calls: [], books: [], cancels: [], pickups: [], ndr: [], registrations: [], warehouses: new Set(['Kitaabaurkona DL']), mode: {}, track: { StatusType: 'UD', Status: 'In Transit', StatusCode: 'X-PPOM' } };
 let wbSeq = 5021310000001;
 const dlServer = http.createServer(async (req, res) => {
   const body = await readBody(req);
@@ -166,7 +166,8 @@ const dlServer = http.createServer(async (req, res) => {
     const sh = data.shipments[0];
     const base = { cash_pickups_count: 0, package_count: 0, upload_wbn: 'UPL5504163861590512101', replacement_count: 0, pickups_count: 0, cash_pickups: 0, cod_count: 0, prepaid_count: 0, cod_amount: 0 };
     if (DL.mode.duplicate) return send(200, { ...base, success: false, rmk: '', packages: [{ status: 'Fail', waybill: '', refnum: sh.order, client: 'KITAAB', remarks: ['Duplicate order id'], payment: sh.payment_mode }] });
-    if (DL.mode.badWarehouse) return send(200, { ...base, success: false, error: true, rmk: 'ClientWarehouse matching query does not exist.', packages: [] });
+    // As the live API answered on 2026-11-13 for a name that is not registered.
+    if (!DL.warehouses.has(data.pickup_location?.name)) return send(200, { ...base, success: false, error: true, rmk: 'ClientWarehouse matching query does not exist.', packages: [] });
     if (DL.mode.internal) return send(200, { ...base, success: false, error: true, rmk: 'An internal Error has occurred, Please get in touch with client.support@delhivery.com', packages: [] });
     if (DL.mode.bookDown) return send(502, '<html><title>502 Bad Gateway</title></html>');
     if (DL.mode.slowBook) await sleep(600);
@@ -193,8 +194,16 @@ const dlServer = http.createServer(async (req, res) => {
   if (p === '/fm/request/new/') {
     const j = JSON.parse(body);
     DL.pickups.push(j);
-    if (j.pickup_location !== 'Kitaabaurkona DL') return send(401, { pickup_location: 'Invalid Pickup Location ClientWarehouse matching query does not exist.' });
+    if (!DL.warehouses.has(j.pickup_location)) return send(401, { pickup_location: 'Invalid Pickup Location ClientWarehouse matching query does not exist.' });
     return send(201, { pickup_id: 4323300, client_name: 'KITAAB', pickup_location_name: j.pickup_location, incoming_center_name: 'Udaipur_DC', pickup_time: j.pickup_time, pickup_date: j.pickup_date, expected_package_count: j.expected_package_count });
+  }
+  if (p === '/api/backend/clientwarehouse/create/') {
+    const j = JSON.parse(body);
+    DL.registrations.push(j);
+    if (j.pin === '799999') return send(400, { data: { name: j.name }, success: false, error: "Pincode doesn't exist in system" });
+    if (DL.warehouses.has(j.name)) return send(400, { data: { name: j.name }, success: false, error: `Client warehouse with name ${j.name} already exists` });
+    DL.warehouses.add(j.name);
+    return send(200, { data: { name: j.name, pincode: Number(j.pin), phone: j.phone, client: 'KITAAB', address: j.address, active: true, message: 'A new client warehouse has been created in HQ(Delhivery).' }, success: true, error: '' });
   }
   if (p === '/api/p/update') {
     DL.ndr.push(JSON.parse(body));
@@ -656,14 +665,41 @@ try {
   check('a Delhivery booking that times out: held for a check', (await shipmentOf(oD9)).needs_check === true);
   DL.mode.slowBook = false;
 
-  DL.mode.badWarehouse = true;
+  // The pickup location is not registered with Delhivery (what happened to KAK-4 on live).
+  await db.query(`update public.shipping_settings set delhivery_warehouse_name = 'kitaabaurkona'`);
   const oD10 = await placeCod(dlBooks[9], 1);
+  const n10 = DL.books.length;
   await cron('book_due');
   const sD10 = await shipmentOf(oD10);
-  check("a clear refusal (wrong warehouse) waits for an admin with Delhivery's words", sD10.status === 'failed' && sD10.needs_check === false && /ClientWarehouse matching query/.test(sD10.last_error), sD10.last_error);
-  DL.mode.badWarehouse = false;
+  check('an unregistered pickup location: the parcel waits for an admin, nothing is resent', sD10.status === 'failed' && sD10.needs_check === false && sD10.next_attempt_at === null && DL.books.length - n10 === 1, `${sD10.status} ${sD10.needs_check}`);
+  check(
+    'the refusal says what is wrong and how to fix it, with the name',
+    /no pickup location named "kitaabaurkona"/.test(sD10.last_error) && /case-sensitive/.test(sD10.last_error) && /Register pickup address with Delhivery/.test(sD10.last_error) && !/matching query/.test(sD10.last_error) && sD10.last_error.length < 300,
+    sD10.last_error,
+  );
+  check('the warehouse name reaches Delhivery exactly as typed', DL.books.at(-1).data.pickup_location.name === 'kitaabaurkona');
+  check('customers cannot register pickup locations', (await call({ action: 'register_warehouse' }, { token: reader })).status === 403);
+  check('registration takes no input from the browser', (await call({ action: 'register_warehouse', name: 'Other' }, { token: admin })).status === 400);
+  const reg = await call({ action: 'register_warehouse' }, { token: admin });
+  const sentReg = DL.registrations.at(-1);
+  check('admin registers the pickup address with Delhivery', reg.status === 200 && reg.json.data.created === true && reg.json.data.name === 'kitaabaurkona', JSON.stringify(reg.json));
+  check(
+    'the registration is built from the saved settings (address, PIN, phone, email, returns to the same place)',
+    sentReg?.name === 'kitaabaurkona' && sentReg.registered_name === 'Kitaabaurkona' && sentReg.pin === '313002' && sentReg.phone === '8690965448' && sentReg.email === 'kitaabaurkona@gmail.com' &&
+      sentReg.city === 'Udaipur' && sentReg.return_pin === '313002' && sentReg.return_address === sentReg.address && sentReg.return_state === 'Rajasthan' && sentReg.country === 'India',
+    JSON.stringify(sentReg),
+  );
+  check('the registration is logged', /"kitaabaurkona" registered/.test((await db.query(`select detail from public.shipment_events where action = 'warehouse_registered' order by id desc limit 1`)).rows[0]?.detail ?? ''));
+  const regAgain = await call({ action: 'register_warehouse' }, { token: admin });
+  check('registering again is fine: Delhivery already has it', regAgain.status === 200 && regAgain.json.data.created === false, JSON.stringify(regAgain.json));
   const retryD10 = await call({ action: 'book_now', order_id: oD10 }, { token: admin });
-  check('after fixing it, Retry books it (no check needed)', retryD10.status === 200 && (await shipmentOf(oD10)).status === 'booked');
+  check('once registered, Retry books the parcel (no check needed)', retryD10.status === 200 && (await shipmentOf(oD10)).status === 'booked', JSON.stringify(retryD10.json));
+  await db.query(`update public.shipping_settings set pickup_pincode = '799999', delhivery_warehouse_name = 'Elsewhere'`);
+  const regBad = await call({ action: 'register_warehouse' }, { token: admin });
+  check("a refused registration shows Delhivery's reason", regBad.status === 502 && /Pincode doesn't exist in system/.test(regBad.json.error), JSON.stringify(regBad.json));
+  await db.query(`update public.shipping_settings set delhivery_warehouse_name = ''`);
+  check('registration needs a warehouse name', (await call({ action: 'register_warehouse' }, { token: admin })).status === 409);
+  await db.query(`update public.shipping_settings set pickup_pincode = '313002', delhivery_warehouse_name = 'Kitaabaurkona DL'`);
 
   // Tracking, failed deliveries, labels.
   await db.query(`update public.shipments set last_tracked_at = null where order_id = $1`, [oD1]);
@@ -706,7 +742,7 @@ try {
   check('customers cannot request pickups', (await call({ action: 'pickup_request', date: todayIn, time: '14:00', count: 1 }, { token: reader })).status === 403);
   await db.query(`update public.shipping_settings set delhivery_warehouse_name = 'Old name'`);
   const badPick = await call({ action: 'pickup_request', date: todayIn, time: '14:00', count: 1 }, { token: admin });
-  check("a refused pickup shows Delhivery's reason, not a token error", badPick.status === 502 && /Invalid Pickup Location/.test(badPick.json.error) && !/TOKEN/.test(badPick.json.error), JSON.stringify(badPick.json));
+  check('a pickup for an unregistered location says how to fix it, not a token error', badPick.status === 502 && /no pickup location named "Old name"/.test(badPick.json.error) && !/TOKEN/.test(badPick.json.error), JSON.stringify(badPick.json));
   await db.query(`update public.shipping_settings set delhivery_warehouse_name = 'Kitaabaurkona DL'`);
 
   // Cancelling, delivery and returns.

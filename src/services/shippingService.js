@@ -79,6 +79,9 @@ export const carrierOf = (shipment) => (shipment?.carrier === 'delhivery' ? 'del
 export const setCarrier = (orderId, carrier, checked = false) => invoke('set_carrier', { order_id: orderId, carrier, ...(checked ? { checked: true } : {}) });
 // { url } of the parcel's label PDF (Delhivery makes it on request).
 export const getLabel = (orderId, kind = 'forward') => invoke('label', { order_id: orderId, kind });
+// Registers the saved pickup address with Delhivery under the saved Delhivery warehouse
+// name: { name, created } (created false = Delhivery already had it).
+export const registerDelhiveryWarehouse = () => invoke('register_warehouse');
 // Asks Delhivery to collect parcels: date YYYY-MM-DD, time HH:MM, count of parcels.
 export const requestDelhiveryPickup = ({ date, time, count }) => invoke('pickup_request', { date, time, count });
 export const cancelShipment = (orderId) => invoke('cancel_shipment', { order_id: orderId });
@@ -92,7 +95,7 @@ export async function getShippingSettings() {
   return data?.[0] ?? null;
 }
 
-const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
+const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone', 'pickup_email'];
 
 export async function updateShippingSettings(patch) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([key]) => SETTING_FIELDS.includes(key)));

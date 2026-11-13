@@ -615,6 +615,11 @@ alter table public.shipping_settings add column if not exists default_carrier te
   constraint shipping_settings_default_carrier_check check (default_carrier in ('xpressbees', 'delhivery'));
 alter table public.shipping_settings add column if not exists delhivery_warehouse_name text not null default ''
   constraint shipping_settings_delhivery_warehouse_name_check check (char_length(delhivery_warehouse_name) <= 100);
+-- Contact email for the pickup address. Delhivery asks for one when the pickup address
+-- is registered with it as a pickup location (Admin > Shipping).
+alter table public.shipping_settings add column if not exists pickup_email text not null default 'kitaabaurkona@gmail.com'
+  constraint shipping_settings_pickup_email_check
+  check (char_length(pickup_email) <= 120 and pickup_email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[A-Za-z]{2,}$');
 
 drop trigger if exists shipping_settings_set_updated_at on public.shipping_settings;
 create trigger shipping_settings_set_updated_at

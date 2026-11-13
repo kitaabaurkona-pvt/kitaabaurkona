@@ -61,6 +61,12 @@ export function explain(json, text) {
 const UNCLEAR = /internal error|partially saved|crash|try again|timed? ?out|exception/i;
 const NOT_FOUND = /does not exist|no data|not found/i;
 
+// Delhivery's way of saying the pickup location (warehouse) name we sent is not
+// registered on the account: "ClientWarehouse matching query does not exist".
+const NO_WAREHOUSE = /clientwarehouse|client warehouse|invalid pickup location/i;
+export const noWarehouseMessage = (name) =>
+  `Delhivery has no pickup location named "${String(name ?? '').slice(0, 60)}" on this account (the name is case-sensitive). In Admin > Shipping, type the name exactly as the Delhivery panel shows it, or press "Register pickup address with Delhivery". Then try again.`;
+
 export function createDelhivery({ baseUrl, token, fetchImpl = fetch, timeoutMs = 15000, log = null }) {
   if (!token) throw new DelhiveryError('Delhivery is not set up (the DELHIVERY_API_TOKEN secret is missing)');
 
@@ -173,6 +179,11 @@ export function createDelhivery({ baseUrl, token, fetchImpl = fetch, timeoutMs =
       }
       const reason = explain(r.json, r.text);
       note(path, r.status, reason);
+      // An unregistered pickup location: nothing was booked, and the admin is told how
+      // to put it right instead of being shown Delhivery's wording.
+      if (NO_WAREHOUSE.test(reason) && !UNCLEAR.test(reason)) {
+        throw new DelhiveryError(noWarehouseMessage(payload?.pickup_location?.name), { status: r.status, reason, afterSend: true });
+      }
       const isObject = r.json !== null && typeof r.json === 'object' && !Array.isArray(r.json);
       const duplicate = /duplicate/i.test(reason);
       const clear = Boolean(reason) && isObject && !duplicate && !UNCLEAR.test(reason) && [200, 201, 400, 401, 403, 409, 422].includes(r.status);
@@ -226,7 +237,38 @@ export function createDelhivery({ baseUrl, token, fetchImpl = fetch, timeoutMs =
       if (r.json?.pickup_id !== undefined && r.json?.pickup_id !== null) {
         return { pickup_id: String(r.json.pickup_id).slice(0, 30), center: cleanMessage(r.json.incoming_center_name) };
       }
+      if (NO_WAREHOUSE.test(explain(r.json, r.text))) {
+        note(path, r.status, explain(r.json, r.text));
+        throw new DelhiveryError(noWarehouseMessage(location), { status: r.status });
+      }
       throw fail(r, path, 'Pickup request refused');
+    },
+
+    // Registers a pickup location (warehouse) on the account, with the same address for
+    // returns. { created: false } when Delhivery already has one with this name.
+    async registerWarehouse({ name, registeredName, phone, email, address, city, state, pin }) {
+      const path = '/api/backend/clientwarehouse/create/';
+      const r = await call(path, {
+        method: 'POST',
+        json: {
+          name,
+          registered_name: registeredName,
+          phone,
+          email,
+          address,
+          city,
+          pin,
+          country: 'India',
+          return_address: address,
+          return_pin: pin,
+          return_city: city,
+          return_state: state,
+          return_country: 'India',
+        },
+      });
+      if (r.json?.success === true) return { created: true };
+      if (/already exist/i.test(explain(r.json, r.text))) return { created: false };
+      throw fail(r, path, 'Delhivery did not register the pickup location');
     },
 
     // Failed-delivery actions (asynchronous): RE-ATTEMPT, DEFER_DLV, EDIT_DETAILS.

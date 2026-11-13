@@ -96,6 +96,10 @@ async function fakeDelhivery(url, init = {}) {
     return json(201, { pickup_id: 4323300, pickup_date: b.pickup_date, pickup_time: b.pickup_time, expected_package_count: b.expected_package_count });
   }
   if (p === '/api/v1/packages/json/') return json(200, { Success: false, Error: 'Data does not exists for provided Waybill(s)' });
+  if (p === '/api/backend/clientwarehouse/create/') {
+    const b = JSON.parse(init.body);
+    return json(200, { data: { name: b.name, active: true, message: 'A new client warehouse has been created in HQ(Delhivery).' }, success: true, error: '' });
+  }
   return json(404, {});
 }
 const shippingDb = createClient('https://fake.supabase.co', SERVICE_TOKEN, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: inProcessFetch } });
@@ -965,6 +969,15 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Save settings/.test(b.textContent))?.click());
     await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Shipping settings saved'), { timeout: 5000 }).catch(() => {});
     check('admin shipping: the Delhivery warehouse name saves', (await one(`select delhivery_warehouse_name from public.shipping_settings`)).delhivery_warehouse_name === 'Kitaabaurkona DL');
+    check('admin shipping: the contact email is filled in from the settings', (await page.$eval('#ship-pickup_email', (i) => i.value).catch(() => '')) === 'kitaabaurkona@gmail.com');
+    await page.$$eval('.toast button', (bs) => bs.forEach((b) => b.click()));
+    await page.$$eval('main button', (bs) => bs.find((b) => /Register pickup address with Delhivery/.test(b.textContent))?.click());
+    check(
+      'admin shipping: the pickup address is registered with Delhivery from the page',
+      await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Pickup address registered with Delhivery as "Kitaabaurkona DL"/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false) &&
+        DL_CALLS.includes('/api/backend/clientwarehouse/create/'),
+    );
+    check('admin shipping: buttons are not left busy after registering', await page.$$eval('main button[aria-busy="true"]', (bs) => bs.length === 0));
 
     await goto(page, '/admin/orders?status=confirmed');
     check('admin orders: a new order waits with Xpressbees selected', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Ship with Delhivery instead/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));

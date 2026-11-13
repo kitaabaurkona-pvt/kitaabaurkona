@@ -262,6 +262,10 @@ try {
   const ret = (await as(SERVICE, `select public.create_return_shipment($1, null, 'delhivery') as id`, [o2])).rows[0].id;
   check('a Delhivery return pickup is a Delhivery parcel', (await one(`select carrier from public.shipments where id = $1`, [ret])).carrier === 'delhivery');
   await as(ADMIN, `update public.shipping_settings set default_carrier = 'xpressbees'`);
+  check('the pickup contact email starts as the store address', (await one(`select pickup_email from public.shipping_settings`)).pickup_email === 'kitaabaurkona@gmail.com');
+  check('settings refuse something that is not an email', (await fails(ADMIN, `update public.shipping_settings set pickup_email = 'not an email'`)) !== null);
+  check('admin can change the contact email', (await as(ADMIN, `update public.shipping_settings set pickup_email = 'orders@example.com' returning pickup_email`)).rows[0]?.pickup_email === 'orders@example.com');
+  check('customer cannot change the contact email', (await as(READER, `update public.shipping_settings set pickup_email = 'x@example.com' returning id`)).rows.length === 0);
 
   // ---------- One live parcel per order ----------
   const dup = await fails(SERVICE, `insert into public.shipments (order_id, kind) values ($1, 'forward')`, [o2]);
