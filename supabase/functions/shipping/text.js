@@ -16,3 +16,12 @@ export function clean(value, max) {
     .trim()
     .slice(0, max);
 }
+
+// Courier messages can echo request data: phone numbers and email addresses are
+// blanked, and the text is kept short and on one line.
+export function redact(value) {
+  return String(value ?? '')
+    .replace(/(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{9}(?!\d)/g, '[phone]')
+    .replace(/[^\s@<>"]+@[^\s@<>"]+\.[a-z]{2,}/gi, '[email]');
+}
+export const cleanMessage = (value) => clean(redact(value), 200);

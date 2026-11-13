@@ -1,8 +1,8 @@
 import { supabase } from '../clients/supabase';
 import { isUuid, unwrap } from './request';
 
-// Every Xpressbees call goes through the `shipping` Edge Function. It holds the courier
-// login and checks who is asking; the website never talks to Xpressbees itself.
+// Every Xpressbees and Delhivery call goes through the `shipping` Edge Function. It holds
+// the courier logins and checks who is asking; the website never talks to a courier itself.
 async function invoke(action, payload = {}) {
   const { data, error } = await supabase.functions.invoke('shipping', { body: { action, ...payload } });
   if (error) {
@@ -58,7 +58,7 @@ export const ADMIN_SHIPMENT_LABELS = {
   queued: 'Queued',
   booking: 'Booking…',
   failed: 'Booking failed',
-  needs_check: 'Check Xpressbees',
+  needs_check: 'Check with the courier',
   cancel_requested: 'Cancel with courier pending',
 };
 
@@ -66,12 +66,21 @@ export const ADMIN_SHIPMENT_LABELS = {
 
 export const getRates = (orderId) => invoke('rates', { order_id: orderId });
 export const setCourier = (orderId, courierId) => invoke('set_courier', { order_id: orderId, courier_id: courierId });
-// checked: the admin confirmed the Xpressbees dashboard has no booking for this order
-// (needed after an unclear answer, when Xpressbees may have booked it anyway).
+// checked: the admin confirmed the carrier's panel has no booking for this order
+// (needed after an unclear answer, when the carrier may have booked it anyway).
 export const bookNow = (orderId, checked = false) => invoke('book_now', { order_id: orderId, ...(checked ? { checked: true } : {}) });
 export const linkAwb = (orderId, awb) => invoke('link_awb', { order_id: orderId, awb });
-// The Xpressbees panel, where an order can be looked up by its KAK number.
-export const XPRESSBEES_PANEL = 'https://shipment.xpressbees.com/';
+// The two carriers. Each parcel goes with one of them (the admin decides per order).
+export const CARRIER_NAMES = { xpressbees: 'Xpressbees', delhivery: 'Delhivery' };
+// Each carrier's panel, where an order can be looked up by its KAK number.
+export const CARRIER_PANELS = { xpressbees: 'https://shipment.xpressbees.com/', delhivery: 'https://one.delhivery.com/' };
+export const carrierOf = (shipment) => (shipment?.carrier === 'delhivery' ? 'delhivery' : 'xpressbees');
+// Moves a parcel that is not booked yet to the other carrier. checked: as for bookNow.
+export const setCarrier = (orderId, carrier, checked = false) => invoke('set_carrier', { order_id: orderId, carrier, ...(checked ? { checked: true } : {}) });
+// { url } of the parcel's label PDF (Delhivery makes it on request).
+export const getLabel = (orderId, kind = 'forward') => invoke('label', { order_id: orderId, kind });
+// Asks Delhivery to collect parcels: date YYYY-MM-DD, time HH:MM, count of parcels.
+export const requestDelhiveryPickup = ({ date, time, count }) => invoke('pickup_request', { date, time, count });
 export const cancelShipment = (orderId) => invoke('cancel_shipment', { order_id: orderId });
 export const makeManifest = (orderIds) => invoke('manifest', { order_ids: orderIds });
 export const listNdr = () => invoke('ndr_list');
@@ -83,7 +92,7 @@ export async function getShippingSettings() {
   return data?.[0] ?? null;
 }
 
-const SETTING_FIELDS = ['auto_book', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
+const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone'];
 
 export async function updateShippingSettings(patch) {
   const clean = Object.fromEntries(Object.entries(patch).filter(([key]) => SETTING_FIELDS.includes(key)));
@@ -95,10 +104,18 @@ export async function listProblemShipments() {
   const { data } = unwrap(
     await supabase
       .from('shipments')
-      .select('id, order_id, kind, status, needs_check, last_error, attempts, awb_number, updated_at')
+      .select('id, order_id, kind, carrier, status, needs_check, last_error, attempts, awb_number, updated_at')
       .in('status', ['failed', 'cancel_requested', 'exception', 'rto'])
       .order('updated_at', { ascending: false })
       .limit(50),
   );
   return data ?? [];
+}
+
+// Delhivery parcels booked and waiting to be collected (to fill in a pickup request).
+export async function countDelhiveryAwaitingPickup() {
+  const { count } = unwrap(
+    await supabase.from('shipments').select('id', { count: 'exact', head: true }).eq('carrier', 'delhivery').eq('kind', 'forward').eq('status', 'booked'),
+  );
+  return count ?? 0;
 }

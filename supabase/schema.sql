@@ -27,7 +27,7 @@
 --                           the books table; cancel_order() for customers and
 --                           admin_set_order_status() for admins. Payment is cash
 --                           on delivery (confirmed at once) or online.
---   7. Shipping (Xpressbees): shipping_settings, shipments, shipment_events and
+--   7. Shipping (Xpressbees or Delhivery, per parcel): shipping_settings, shipments, shipment_events and
 --                           service-role-only helper tables, used by the
 --                           `shipping` Edge Function. See section 8b.
 --   Plus Row Level Security on every table, and public.is_admin(), the single
@@ -607,6 +607,14 @@ alter table public.shipping_settings drop column if exists hold_minutes;
 -- answers a booking with that courier unclearly; admins can remove it again.
 alter table public.shipping_settings add column if not exists skip_couriers text[] not null default '{}'::text[]
   constraint shipping_settings_skip_couriers_check check (cardinality(skip_couriers) <= 30);
+-- Two carriers, chosen per parcel. New orders start with default_carrier (and are booked
+-- with it at once while auto_book is on); an admin can move any parcel to the other
+-- carrier until it is booked. warehouse_name is the Xpressbees warehouse;
+-- delhivery_warehouse_name is the pickup location exactly as registered with Delhivery.
+alter table public.shipping_settings add column if not exists default_carrier text not null default 'xpressbees'
+  constraint shipping_settings_default_carrier_check check (default_carrier in ('xpressbees', 'delhivery'));
+alter table public.shipping_settings add column if not exists delhivery_warehouse_name text not null default ''
+  constraint shipping_settings_delhivery_warehouse_name_check check (char_length(delhivery_warehouse_name) <= 100);
 
 drop trigger if exists shipping_settings_set_updated_at on public.shipping_settings;
 create trigger shipping_settings_set_updated_at
@@ -651,7 +659,7 @@ create table if not exists public.shipments (
   xb_order_id text check (char_length(xb_order_id) <= 40),
   xb_shipment_id text check (char_length(xb_shipment_id) <= 40),
   xb_status text check (char_length(xb_status) <= 80),
-  courier_id text check (courier_id ~ '^[0-9]{1,10}$'),
+  courier_id text check (courier_id ~ '^([0-9]{1,10}|surface|express)$'),
   courier_name text check (char_length(courier_name) <= 100),
   courier_chosen_by_admin boolean not null default false,
   freight_charges numeric(10, 2) check (freight_charges >= 0),
@@ -681,6 +689,16 @@ create index if not exists shipments_due_idx on public.shipments (status, book_a
 -- timeout): Xpressbees may have booked the parcel anyway, so it is never booked again
 -- automatically, and an admin must confirm they checked the Xpressbees dashboard first.
 alter table public.shipments add column if not exists needs_check boolean not null default false;
+
+-- The carrier that books, tracks and cancels this parcel. Parcels made before Delhivery
+-- was added are all Xpressbees. courier_id is an Xpressbees courier number, or 'surface'
+-- / 'express' for Delhivery. xb_status holds the carrier's own status wording.
+alter table public.shipments add column if not exists carrier text not null default 'xpressbees'
+  constraint shipments_carrier_check check (carrier in ('xpressbees', 'delhivery'));
+alter table public.shipments drop constraint if exists shipments_courier_id_check;
+alter table public.shipments add constraint shipments_courier_id_check
+  check (courier_id ~ '^([0-9]{1,10}|surface|express)$');
+create index if not exists shipments_carrier_status_idx on public.shipments (carrier, status);
 
 drop trigger if exists shipments_set_updated_at on public.shipments;
 create trigger shipments_set_updated_at
@@ -1030,6 +1048,7 @@ as $$
 declare
   v_shipment uuid;
   v_status text;
+  v_carrier text;
 begin
   if new.status in ('confirmed', 'paid')
      and (tg_op = 'INSERT' or old.status is distinct from new.status)
@@ -1037,10 +1056,12 @@ begin
        select 1 from public.shipments
        where order_id = new.id and kind = 'forward' and status <> 'cancelled'
      ) then
-    insert into public.shipments (order_id, kind, status, book_after)
-    values (new.id, 'forward', 'queued', now())
-    returning id into v_shipment;
-    perform public.log_shipment_event(v_shipment, new.id, null, 'queued', 'Booking now');
+    insert into public.shipments (order_id, kind, status, book_after, carrier)
+    values (new.id, 'forward', 'queued', now(),
+      coalesce((select default_carrier from public.shipping_settings where id), 'xpressbees'))
+    returning id, carrier into v_shipment, v_carrier;
+    perform public.log_shipment_event(v_shipment, new.id, null, 'queued',
+      case when v_carrier = 'delhivery' then 'Delhivery' else 'Xpressbees' end);
     -- Wake the booking worker now instead of at its next 5-minute round. The request is
     -- sent only once this order is saved (pg_net sends after commit). Where the jobs are
     -- not set up (shipping_cron.sql), or the call cannot be queued, the round books it.
@@ -1088,16 +1109,22 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_settings public.shipping_settings;
 begin
-  if not exists (select 1 from public.shipping_settings where id and auto_book and warehouse_name <> '') then
+  select * into v_settings from public.shipping_settings where id;
+  if not coalesce(v_settings.auto_book, false) then
     return;
   end if;
+  -- Each carrier books only once its own warehouse name is set.
   return query
   update public.shipments s
   set status = 'booking', attempts = s.attempts + 1, last_error = null
   where s.id in (
     select id from public.shipments
     where kind = 'forward'
+      and ((carrier = 'xpressbees' and v_settings.warehouse_name <> '')
+        or (carrier = 'delhivery' and v_settings.delhivery_warehouse_name <> ''))
       and ((status = 'queued' and book_after <= now() and (next_attempt_at is null or next_attempt_at <= now()))
         or (status = 'booking' and updated_at < now() - interval '15 minutes'))
     order by book_after
@@ -1115,8 +1142,14 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_carrier text;
 begin
-  if exists (select 1 from public.shipping_settings where id and warehouse_name = '') then
+  select carrier into v_carrier from public.shipments where id = p_shipment;
+  if v_carrier = 'delhivery' and exists (select 1 from public.shipping_settings where id and delhivery_warehouse_name = '') then
+    raise exception 'Set the Delhivery warehouse name in Admin > Shipping first' using errcode = 'P0001', hint = 'no_warehouse';
+  end if;
+  if v_carrier = 'xpressbees' and exists (select 1 from public.shipping_settings where id and warehouse_name = '') then
     raise exception 'Set the Xpressbees warehouse name in Admin > Shipping first' using errcode = 'P0001', hint = 'no_warehouse';
   end if;
   return query
@@ -1419,8 +1452,46 @@ begin
 end;
 $$;
 
--- Starts a return pickup for a delivered order (one live return per order).
-create or replace function public.create_return_shipment(p_order uuid, p_actor uuid)
+-- An admin moved a parcel that is not booked yet to the other carrier. The courier choice
+-- belonged to the old carrier, so it is cleared, and so is the "check the panel" hold
+-- (the shipping function asks the admin to confirm that check before calling this).
+create or replace function public.set_shipment_carrier(p_shipment uuid, p_carrier text, p_actor uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+  v_old text;
+begin
+  if p_carrier not in ('xpressbees', 'delhivery') then
+    raise exception 'Unknown carrier' using errcode = '22023';
+  end if;
+  select carrier into v_old from public.shipments
+  where id = p_shipment and kind = 'forward' and status in ('queued', 'failed')
+  for update;
+  if v_old is null then
+    raise exception 'The carrier can only be changed before booking' using errcode = 'P0001';
+  end if;
+  update public.shipments
+  set carrier = p_carrier, courier_id = null, courier_name = null, courier_chosen_by_admin = false,
+      needs_check = false, last_error = null, next_attempt_at = null, attempts = 0
+  where id = p_shipment
+  returning order_id into v_order;
+  perform public.log_shipment_event(p_shipment, v_order, p_actor, 'carrier_set',
+    case when v_old = 'delhivery' then 'Delhivery' else 'Xpressbees' end || ' -> ' ||
+    case when p_carrier = 'delhivery' then 'Delhivery' else 'Xpressbees' end);
+end;
+$$;
+
+revoke execute on function public.set_shipment_carrier(uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.set_shipment_carrier(uuid, text, uuid) to service_role;
+
+-- Starts a return pickup for a delivered order (one live return per order), with the
+-- carrier that delivered it.
+drop function if exists public.create_return_shipment(uuid, uuid);
+create or replace function public.create_return_shipment(p_order uuid, p_actor uuid, p_carrier text default 'xpressbees')
 returns uuid
 language plpgsql
 security definer
@@ -1432,8 +1503,11 @@ begin
   if not exists (select 1 from public.orders where id = p_order and status = 'delivered') then
     raise exception 'Only a delivered order can be picked up for return' using errcode = 'P0001';
   end if;
-  insert into public.shipments (order_id, kind, status, attempts)
-  values (p_order, 'reverse', 'booking', 1)
+  if p_carrier not in ('xpressbees', 'delhivery') then
+    raise exception 'Unknown carrier' using errcode = '22023';
+  end if;
+  insert into public.shipments (order_id, kind, status, attempts, carrier)
+  values (p_order, 'reverse', 'booking', 1, p_carrier)
   returning id into v_id;
   perform public.log_shipment_event(v_id, p_order, p_actor, 'return_requested', null);
   return v_id;
@@ -1488,14 +1562,14 @@ $$;
 
 revoke execute on function public.record_cancelled(uuid, uuid, text) from public, anon, authenticated;
 revoke execute on function public.set_shipment_courier(uuid, text, text, uuid) from public, anon, authenticated;
-revoke execute on function public.create_return_shipment(uuid, uuid) from public, anon, authenticated;
+revoke execute on function public.create_return_shipment(uuid, uuid, text) from public, anon, authenticated;
 revoke execute on function public.get_pincode_check(text, text, integer) from public, anon, authenticated;
 revoke execute on function public.save_pincode_check(text, text, boolean) from public, anon, authenticated;
 revoke execute on function public.xb_token_get() from public, anon, authenticated;
 revoke execute on function public.xb_token_set(text, timestamptz) from public, anon, authenticated;
 grant execute on function public.record_cancelled(uuid, uuid, text) to service_role;
 grant execute on function public.set_shipment_courier(uuid, text, text, uuid) to service_role;
-grant execute on function public.create_return_shipment(uuid, uuid) to service_role;
+grant execute on function public.create_return_shipment(uuid, uuid, text) to service_role;
 grant execute on function public.get_pincode_check(text, text, integer) to service_role;
 grant execute on function public.save_pincode_check(text, text, boolean) to service_role;
 grant execute on function public.xb_token_get() to service_role;

@@ -90,7 +90,9 @@ function AdminOrders() {
   const pages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
   const [picked, setPicked] = useState(() => new Set());
   const [manifest, setManifest] = useState({ working: false, error: null });
-  const bookedForward = (order) => (order.shipments ?? []).some((sh) => sh.kind === 'forward' && ['booked', 'in_transit'].includes(sh.status));
+  // Only Xpressbees parcels go on its pickup manifest; Delhivery parcels are collected
+  // through a pickup request (Admin > Shipping).
+  const bookedForward = (order) => (order.shipments ?? []).some((sh) => sh.kind === 'forward' && sh.carrier !== 'delhivery' && ['booked', 'in_transit'].includes(sh.status));
 
   function togglePick(id) {
     setPicked((current) => {
@@ -134,7 +136,7 @@ function AdminOrders() {
         <div className="inline-actions">
           <button type="button" className="btn btn-dark btn-sm" aria-busy={manifest.working} onClick={openManifest}>
             {manifest.working && <span className="spinner" aria-hidden="true" />}
-            Pickup manifest for {plural(picked.size, 'order')}
+            Xpressbees manifest for {plural(picked.size, 'order')}
           </button>
           <button type="button" className="btn btn-outline btn-sm" onClick={() => setPicked(new Set())}>
             Clear selection

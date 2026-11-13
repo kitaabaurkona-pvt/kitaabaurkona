@@ -11,9 +11,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { createClient } from '@supabase/supabase-js';
-import { createBackend, fetchPublicBooks, handleAuth, handleRest, SERVICE_TOKEN } from './fake-supabase.mjs';
+import { asRole, createBackend, fetchPublicBooks, handleAuth, handleRest, SERVICE_TOKEN, USERS } from './fake-supabase.mjs';
 import { createHandler } from '../supabase/functions/shipping/handler.js';
 import { createXpressbees } from '../supabase/functions/shipping/xpressbees.js';
+import { createDelhivery } from '../supabase/functions/shipping/delhivery.js';
 import { SEARCH_HINTS } from '../src/utils/searchHints.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -76,6 +77,27 @@ async function fakeXpressbees(url, init = {}) {
   if (p === '/api/ndr') return json(200, { status: true, data: [] });
   return json(404, { status: false, message: 'Not found' });
 }
+// A stand-in Delhivery answering like its live API (shapes seen on track.delhivery.com).
+const DL_CALLS = [];
+async function fakeDelhivery(url, init = {}) {
+  const u = new URL(url);
+  const p = u.pathname;
+  DL_CALLS.push(p);
+  const json = (status, value) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
+  if (p === '/c/api/pin-codes/json/') return json(200, { delivery_codes: [{ postal_code: { pin: Number(u.searchParams.get('filter_codes')), cod: 'Y', pre_paid: 'Y', pickup: 'Y', remarks: '' } }] });
+  if (p === '/api/kinko/v1/invoice/charges/.json') return json(200, [{ total_amount: u.searchParams.get('md') === 'S' ? 116.14 : 140.5, charge_COD: 40 }]);
+  if (p === '/api/cmu/create.json') {
+    const sh = JSON.parse(new URLSearchParams(init.body).get('data')).shipments[0];
+    return json(200, { success: true, packages: [{ status: 'Success', waybill: String(5021310000000 + DL_CALLS.length), refnum: sh.order, remarks: [] }] });
+  }
+  if (p === '/api/p/packing_slip') return json(200, { packages: [{ pdf_download_link: 'https://s3-ap-southeast-1.amazonaws.com/pdfs/e2e-label.pdf' }], packages_found: 1 });
+  if (p === '/fm/request/new/') {
+    const b = JSON.parse(init.body);
+    return json(201, { pickup_id: 4323300, pickup_date: b.pickup_date, pickup_time: b.pickup_time, expected_package_count: b.expected_package_count });
+  }
+  if (p === '/api/v1/packages/json/') return json(200, { Success: false, Error: 'Data does not exists for provided Waybill(s)' });
+  return json(404, {});
+}
 const shippingDb = createClient('https://fake.supabase.co', SERVICE_TOKEN, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: inProcessFetch } });
 const shippingFunction = createHandler({
   db: shippingDb,
@@ -98,6 +120,7 @@ const shippingFunction = createHandler({
         },
       },
     }),
+  makeDelhivery: () => createDelhivery({ baseUrl: 'https://track.delhivery.com', token: 'e2e-delhivery-token', fetchImpl: fakeDelhivery }),
 });
 
 async function newPage({ width = 1280, height = 900, scheme = 'light', touch = false, prefs = null } = {}) {
@@ -870,7 +893,9 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
     await goto(page, '/admin/shipping');
     check('admin shipping: settings load', await waitSel(page, '#ship-warehouse_name'));
-    check('admin shipping: warns that nothing is booked without a warehouse name', /Nothing is booked until the warehouse name/i.test(await page.$eval('main', (m) => m.innerText)));
+    check('admin shipping: warns that nothing is booked without a warehouse name', /Nothing is booked with Xpressbees until its warehouse name/i.test(await page.$eval('main', (m) => m.innerText)));
+    check('admin shipping: a carrier for new orders can be chosen (Xpressbees by default)', (await page.$eval('#ship-default_carrier', (s) => s.value).catch(() => '')) === 'xpressbees');
+    check('admin shipping: no Delhivery pickup form before its warehouse is set', (await page.$('#dl-pickup-date')) === null);
     await page.type('#ship-warehouse_name', 'Kitaabaurkona Udaipur');
     await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Save settings/.test(b.textContent))?.click());
     const savedWarehouse = await page
@@ -890,7 +915,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('admin orders: the label link points to the courier file host', /^https:\/\/xb-files\.s3\.amazonaws\.com\//.test(await page.$eval('.parcel-admin a[href*="labels"]', (a) => a.href).catch(() => '')));
     check('admin orders: booked parcels can be picked for a manifest', await waitSel(page, '.pick input[type=checkbox]', 3000));
     await page.click('.pick input[type=checkbox]');
-    check('admin orders: manifest button appears', /Pickup manifest for 1 order/i.test(await page.$eval('main', (m) => m.innerText)));
+    check('admin orders: manifest button appears', /Xpressbees manifest for 1 order/i.test(await page.$eval('main', (m) => m.innerText)));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-parcel-light-1280.png'), fullPage: true });
     check('admin shipping flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
@@ -913,6 +938,69 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await reader.page.screenshot({ path: path.join(SHOTS, 'order-tracking-light-1280.png'), fullPage: true });
     check('customer tracking: no console errors', reader.errors.length === 0, reader.errors.join(' | '));
     await reader.ctx.close();
+  }
+
+  // ---------- Admin: a second order shipped with Delhivery instead ----------
+  {
+    const book = await one(`select id from public.books where is_visible and stock_quantity >= 2 order by id limit 1`);
+    await db.query(`update public.shipping_settings set auto_book = false`);
+    const placed = await asRole(db, { role: 'authenticated', sub: USERS['reader@example.com'].id }, (tx) =>
+      tx.query(`select public.create_order($1::jsonb, $2::jsonb, 'cod') as id`, [
+        JSON.stringify([{ book_id: book.id, quantity: 1 }]),
+        JSON.stringify({ name: 'Asha Rao', phone: '9876543210', address: '12 MG Road', city: 'Udaipur', state: 'Rajasthan', pincode: '313001' }),
+      ]),
+    );
+    const dlOrder = placed.rows[0].id;
+
+    const { page, ctx, errors } = await newPage();
+    await goto(page, '/sign-in');
+    await waitSel(page, '#email');
+    await page.type('#email', 'admin@example.com');
+    await page.type('#password', 'admin-pass-1');
+    await page.click('button[type=submit]');
+    await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
+    await goto(page, '/admin/shipping');
+    await waitSel(page, '#ship-delhivery_warehouse_name');
+    await page.type('#ship-delhivery_warehouse_name', 'Kitaabaurkona DL');
+    await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Save settings/.test(b.textContent))?.click());
+    await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Shipping settings saved'), { timeout: 5000 }).catch(() => {});
+    check('admin shipping: the Delhivery warehouse name saves', (await one(`select delhivery_warehouse_name from public.shipping_settings`)).delhivery_warehouse_name === 'Kitaabaurkona DL');
+
+    await goto(page, '/admin/orders?status=confirmed');
+    check('admin orders: a new order waits with Xpressbees selected', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Ship with Delhivery instead/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Ship with Delhivery instead/.test(b.textContent))?.click());
+    check('admin orders: the admin moves it to Delhivery', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Book now with Delhivery/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
+    check('admin orders: the parcel is a Delhivery parcel now', (await one(`select carrier from public.shipments where order_id = $1 and kind = 'forward'`, [dlOrder])).carrier === 'delhivery');
+    await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Change courier/.test(b.textContent))?.click());
+    check('admin orders: Delhivery Surface and Express with prices', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin select option')].map((o) => o.textContent).join('|').includes('Delhivery Surface'), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Book now with Delhivery/.test(b.textContent))?.click());
+    check('admin orders: Book now books it with Delhivery', await page.waitForFunction(() => /Delhivery Surface · AWB 50213/.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin orders: a Delhivery parcel is not offered for the Xpressbees manifest', (await page.$$('.pick input[type=checkbox]')).length <= 1);
+    const opened = new Promise((resolve) => ctx.once('targetcreated', (t) => resolve(t)));
+    await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Open shipping label/.test(b.textContent))?.click());
+    const target = await Promise.race([opened, sleep(5000).then(() => null)]);
+    const labelPage = target ? await target.page() : null;
+    if (labelPage) await labelPage.waitForFunction(() => location.href !== 'about:blank', { timeout: 5000 }).catch(() => {});
+    check('admin orders: Open shipping label opens the Delhivery label', Boolean(labelPage) && /s3-ap-southeast-1\.amazonaws\.com\/pdfs\/e2e-label\.pdf/.test(labelPage.url()), labelPage?.url());
+    if (labelPage) await labelPage.close();
+    await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-light-1280.png'), fullPage: true });
+
+    await goto(page, '/admin/shipping');
+    check('admin shipping: the Delhivery pickup form counts the booked parcel', await page.waitForFunction(() => /1 Delhivery parcel is booked/.test(document.body.innerText) && document.querySelector('#dl-pickup-count')?.value === '1', { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Request Delhivery pickup/.test(b.textContent))?.click());
+    check('admin shipping: a Delhivery pickup is requested', await page.waitForFunction(() => /Delhivery pickup 4323300 requested/.test(document.querySelector('.toast')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-delhivery-light-1280.png'), fullPage: true });
+    await page.setViewport({ width: 375, height: 800 });
+    await sleep(150);
+    check('admin shipping at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-delhivery-375.png'), fullPage: true });
+    await goto(page, '/admin/orders?status=confirmed');
+    await page.waitForFunction(() => /AWB/.test(document.body.innerText), { timeout: 6000 }).catch(() => {});
+    check('admin orders at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-375.png'), fullPage: true });
+    check('Delhivery admin flow: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+    await db.query(`update public.shipping_settings set auto_book = true`);
   }
 
   // ---------- Reduced motion ----------

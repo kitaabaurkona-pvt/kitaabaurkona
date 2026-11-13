@@ -228,6 +228,41 @@ try {
   for (let i = 0; i < 4; i++) hits.push((await as(SERVICE, `select public.hit_rate_limit('pin:test', 3, 3600) as ok`)).rows[0].ok);
   check('rate limit allows 3 then refuses the 4th', JSON.stringify(hits) === '[true,true,true,false]', JSON.stringify(hits));
 
+  // ---------- Two carriers ----------
+  check('existing parcels are Xpressbees parcels', (await shipmentOf(o2)).carrier === 'xpressbees');
+  check('customer cannot change the carrier settings', (await as(READER, `update public.shipping_settings set default_carrier = 'delhivery' returning id`)).rows.length === 0);
+  check('the default carrier must be a known one', (await fails(ADMIN, `update public.shipping_settings set default_carrier = 'bluedart'`)) !== null);
+  await as(ADMIN, `update public.shipping_settings set default_carrier = 'delhivery'`);
+  const oD = await placeCod(b2.id, 1);
+  const sD = await shipmentOf(oD);
+  check('with Delhivery as default, a new parcel is a Delhivery parcel', sD.carrier === 'delhivery');
+  await db.query(`update public.shipments set book_after = now() - interval '1 minute' where id = $1`, [sD.id]);
+  check('no Delhivery warehouse name: its parcels are not claimed (Xpressbees one is set)', (await as(SERVICE, `select * from public.claim_due_shipments(10)`)).rows.length === 0);
+  check('Book now on a Delhivery parcel asks for the Delhivery warehouse', /Delhivery warehouse/.test((await fails(SERVICE, `select * from public.claim_shipment($1)`, [sD.id])) ?? ''));
+  check('customers cannot switch carriers', (await fails(READER, `select public.set_shipment_carrier($1, 'xpressbees', null)`, [sD.id])) !== null);
+  check('admins cannot switch carriers from the website either', (await fails(ADMIN, `select public.set_shipment_carrier($1, 'xpressbees', null)`, [sD.id])) !== null);
+  await as(SERVICE, `select public.set_shipment_courier($1, 'surface', 'Delhivery Surface', null)`, [sD.id]);
+  check('a Delhivery parcel takes surface / express as its courier', (await shipmentOf(oD)).courier_id === 'surface');
+  check('anything else is refused as a courier', (await fails(SERVICE, `update public.shipments set courier_id = 'bogus' where id = $1`, [sD.id])) !== null);
+  await db.query(`update public.shipments set needs_check = true, status = 'failed', last_error = 'unclear' where id = $1`, [sD.id]);
+  await as(SERVICE, `select public.set_shipment_carrier($1, 'xpressbees', null)`, [sD.id]);
+  const moved = await shipmentOf(oD);
+  check('switching carrier clears the old courier choice and hold', moved.carrier === 'xpressbees' && moved.courier_id === null && moved.courier_chosen_by_admin === false && moved.needs_check === false && moved.last_error === null);
+  check('the carrier switch is logged', Boolean(await one(`select 1 from public.shipment_events where order_id = $1 and action = 'carrier_set' and detail = 'Delhivery -> Xpressbees'`, [oD])));
+  check('an unknown carrier is refused', (await fails(SERVICE, `select public.set_shipment_carrier($1, 'bluedart', null)`, [sD.id])) !== null);
+  await as(ADMIN, `update public.shipping_settings set delhivery_warehouse_name = 'Kitaabaurkona DL'`);
+  await as(SERVICE, `select public.set_shipment_carrier($1, 'delhivery', null)`, [sD.id]);
+  await db.query(`update public.shipments set status = 'queued' where id = $1`, [sD.id]);
+  const claimedD = (await as(SERVICE, `select * from public.claim_due_shipments(10)`)).rows;
+  check('with its warehouse name set, a Delhivery parcel is claimed', claimedD.length === 1 && claimedD[0].carrier === 'delhivery');
+  await as(SERVICE, `select public.record_booking($1, $2::jsonb)`, [sD.id, JSON.stringify({ ...booking, awb_number: '5021310000099', courier_id: 'surface', courier_name: 'Delhivery Surface', label_url: null, manifest_url: null })]);
+  check('a booked parcel cannot switch carrier', (await fails(SERVICE, `select public.set_shipment_carrier($1, 'xpressbees', null)`, [sD.id])) !== null);
+  check('booking data carries the Delhivery warehouse name', (await as(SERVICE, `select public.shipment_booking_data($1) as d`, [sD.id])).rows[0].d.settings.delhivery_warehouse_name === 'Kitaabaurkona DL');
+  check('a return pickup takes the carrier it is given', (await fails(SERVICE, `select public.create_return_shipment($1, null, 'bluedart')`, [o2])) !== null);
+  const ret = (await as(SERVICE, `select public.create_return_shipment($1, null, 'delhivery') as id`, [o2])).rows[0].id;
+  check('a Delhivery return pickup is a Delhivery parcel', (await one(`select carrier from public.shipments where id = $1`, [ret])).carrier === 'delhivery');
+  await as(ADMIN, `update public.shipping_settings set default_carrier = 'xpressbees'`);
+
   // ---------- One live parcel per order ----------
   const dup = await fails(SERVICE, `insert into public.shipments (order_id, kind) values ($1, 'forward')`, [o2]);
   check('an order cannot have two live parcels', dup !== null);

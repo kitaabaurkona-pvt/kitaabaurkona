@@ -1,8 +1,12 @@
 // Fixed settings for the shipping function. Nothing here is secret: the Xpressbees login
-// comes from Supabase Edge Function secrets and the cron secret from Vault, at run time.
+// and the Delhivery API token come from Supabase Edge Function secrets and the cron
+// secret from Vault, at run time.
 
-// The only host this function ever sends requests to.
+// The only two hosts this function ever sends requests to.
 export const XPRESSBEES_BASE_URL = 'https://shipment.xpressbees.com';
+// Delhivery's live API (its test host is staging-express.delhivery.com, with a
+// different token).
+export const DELHIVERY_BASE_URL = 'https://track.delhivery.com';
 
 // Label and manifest PDFs are only accepted (stored or shown) from Xpressbees' file host.
 export const FILE_URL = /^https:\/\/xb-files\.s3\.amazonaws\.com\/[A-Za-z0-9._/-]+$/;

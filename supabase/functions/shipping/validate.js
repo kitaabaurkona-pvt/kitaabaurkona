@@ -1,3 +1,4 @@
+import { CARRIERS } from './carrier.js';
 import { hasUnsafe } from './text.js';
 
 // Strict checks for everything a caller sends. Unknown keys are refused, so nothing
@@ -14,7 +15,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PIN = /^[1-9][0-9]{5}$/;
 const AWB = /^[0-9A-Za-z]{6,30}$/;
 const PHONE = /^[6-9][0-9]{9}$/;
-const COURIER = /^[0-9]{1,10}$/;
+// Xpressbees courier ids are numbers; a Delhivery parcel goes by surface or express.
+const COURIER = /^([0-9]{1,10}|surface|express)$/;
+const TIME = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -44,6 +47,10 @@ export const phone = (v) => {
 };
 export const courierId = (v) => {
   if (typeof v !== 'string' || !COURIER.test(v)) throw new InputError('Invalid courier');
+  return v;
+};
+export const carrier = (v) => {
+  if (typeof v !== 'string' || !CARRIERS.includes(v)) throw new InputError('Unknown carrier');
   return v;
 };
 export function text(v, name, { min = 1, max = 200 } = {}) {
@@ -78,6 +85,22 @@ const ACTIONS = {
   set_courier: (b) => {
     only(b, ['action', 'order_id', 'courier_id']);
     return { order_id: uuid(b.order_id, 'order'), courier_id: courierId(b.courier_id) };
+  },
+  set_carrier: (b) => {
+    only(b, ['action', 'order_id', 'carrier', 'checked']);
+    if (b.checked !== undefined && typeof b.checked !== 'boolean') throw new InputError('Invalid confirmation');
+    return { order_id: uuid(b.order_id, 'order'), carrier: carrier(b.carrier), checked: b.checked === true };
+  },
+  label: (b) => {
+    only(b, ['action', 'order_id', 'kind']);
+    if (b.kind !== undefined && !['forward', 'reverse'].includes(b.kind)) throw new InputError('Invalid parcel');
+    return { order_id: uuid(b.order_id, 'order'), kind: b.kind ?? 'forward' };
+  },
+  pickup_request: (b, now) => {
+    only(b, ['action', 'date', 'time', 'count']);
+    if (typeof b.time !== 'string' || !TIME.test(b.time)) throw new InputError('Invalid pickup time');
+    if (!Number.isInteger(b.count) || b.count < 1 || b.count > 500) throw new InputError('Enter 1 to 500 parcels');
+    return { date: reattemptDate(b.date, now), time: b.time, count: b.count };
   },
   book_now: (b) => {
     only(b, ['action', 'order_id', 'checked']);
@@ -141,7 +164,7 @@ const ACTIONS = {
 };
 
 export const CUSTOMER_ACTIONS = ['check_pincode', 'track'];
-export const ADMIN_ACTIONS = ['rates', 'set_courier', 'book_now', 'link_awb', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
+export const ADMIN_ACTIONS = ['rates', 'set_courier', 'set_carrier', 'label', 'pickup_request', 'book_now', 'link_awb', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
 export const CRON_ACTIONS = ['run_job'];
 
 export function parseRequest(body, now = new Date()) {

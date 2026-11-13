@@ -10,6 +10,8 @@ import { createClient } from '@supabase/supabase-js';
 import { asRole, createBackend, fetchPublicBooks, handleAuth, handleRest, sessionFor, SERVICE_TOKEN, USERS } from './fake-supabase.mjs';
 import { createHandler } from '../supabase/functions/shipping/handler.js';
 import { createXpressbees } from '../supabase/functions/shipping/xpressbees.js';
+import { createDelhivery, labelUrl } from '../supabase/functions/shipping/delhivery.js';
+import { dlvText, mapDelhiveryStatus } from '../supabase/functions/shipping/delhivery-shipping.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const results = [];
@@ -126,6 +128,83 @@ await new Promise((r) => xbServer.listen(0, r));
 const XB_URL = `http://localhost:${xbServer.address().port}`;
 XB.ndr = [];
 
+// ---------- Fake Delhivery (answers shaped like the live API's) ----------
+const DL_TOKEN = 'dlv-test-token-0123456789abcdef01234567';
+const DL = { calls: [], books: [], cancels: [], pickups: [], ndr: [], mode: {}, track: { StatusType: 'UD', Status: 'In Transit', StatusCode: 'X-PPOM' } };
+let wbSeq = 5021310000001;
+const dlServer = http.createServer(async (req, res) => {
+  const body = await readBody(req);
+  const url = new URL(req.url, 'http://x');
+  const p = url.pathname;
+  DL.calls.push(p);
+  const send = (status, value) => {
+    res.writeHead(status, { 'content-type': typeof value === 'string' ? 'text/html' : 'application/json' });
+    res.end(typeof value === 'string' ? value : JSON.stringify(value));
+  };
+  if (req.headers.authorization !== `Token ${DL_TOKEN}`) {
+    res.writeHead(401, { 'content-type': 'text/plain' });
+    return res.end('Login or API Key Required');
+  }
+  if (DL.mode.down) return send(503, '<html><title>503 Service Unavailable</title></html>');
+  if (p === '/c/api/pin-codes/json/') {
+    const pin = url.searchParams.get('filter_codes');
+    if (pin === '799999') return send(200, { delivery_codes: [] });
+    const remarks = pin === '799997' ? 'Embargo' : '';
+    return send(200, { delivery_codes: [{ postal_code: { pin: Number(pin), cod: pin === '799996' ? 'N' : 'Y', pre_paid: 'Y', cash: 'Y', pickup: 'Y', remarks, district: 'Udaipur' } }] });
+  }
+  if (p === '/api/kinko/v1/invoice/charges/.json') {
+    DL.lastRate = Object.fromEntries(url.searchParams);
+    if (DL.mode.noRates) return send(400, {});
+    const cod = url.searchParams.get('pt') === 'COD' ? 40 : 0;
+    return send(200, [{ status: 'Delivered', charge_COD: cod, total_amount: url.searchParams.get('md') === 'S' ? 116.14 : 140.5 }]);
+  }
+  if (p === '/api/cmu/create.json') {
+    DL.contentType = req.headers['content-type'];
+    const form = new URLSearchParams(body);
+    const data = JSON.parse(form.get('data'));
+    DL.books.push({ format: form.get('format'), data });
+    const sh = data.shipments[0];
+    const base = { cash_pickups_count: 0, package_count: 0, upload_wbn: 'UPL5504163861590512101', replacement_count: 0, pickups_count: 0, cash_pickups: 0, cod_count: 0, prepaid_count: 0, cod_amount: 0 };
+    if (DL.mode.duplicate) return send(200, { ...base, success: false, rmk: '', packages: [{ status: 'Fail', waybill: '', refnum: sh.order, client: 'KITAAB', remarks: ['Duplicate order id'], payment: sh.payment_mode }] });
+    if (DL.mode.badWarehouse) return send(200, { ...base, success: false, error: true, rmk: 'ClientWarehouse matching query does not exist.', packages: [] });
+    if (DL.mode.internal) return send(200, { ...base, success: false, error: true, rmk: 'An internal Error has occurred, Please get in touch with client.support@delhivery.com', packages: [] });
+    if (DL.mode.bookDown) return send(502, '<html><title>502 Bad Gateway</title></html>');
+    if (DL.mode.slowBook) await sleep(600);
+    return send(200, { ...base, success: true, package_count: 1, packages: [{ status: 'Success', waybill: String(wbSeq++), refnum: sh.order, client: 'KITAAB', remarks: [], cod_amount: sh.cod_amount, payment: sh.payment_mode }] });
+  }
+  if (p === '/api/v1/packages/json/') {
+    if (DL.mode.trackEmpty) return send(200, { Success: false, Error: 'Data does not exists for provided Waybill(s)' });
+    const scan = (Scan, at, Instructions, StatusCode, ScannedLocation) => ({ ScanDetail: { Scan, ScanDateTime: at, ScannedLocation, Instructions, StatusCode, ScanType: 'UD' } });
+    return send(200, {
+      ShipmentData: [{ Shipment: { AWB: url.searchParams.get('waybill'), Status: { ...DL.track, StatusDateTime: '2026-11-12T12:00:00' }, Scans: [
+        scan('Manifested', '2026-11-12T10:00:00', 'Manifest uploaded', 'X-UCI', 'Udaipur <script>'),
+        scan(DL.track.Status, '2026-11-12T12:00:00', 'Latest scan', DL.track.StatusCode, 'Udaipur_DC (Rajasthan)'),
+      ] } }],
+    });
+  }
+  if (p === '/api/p/edit') {
+    const j = JSON.parse(body);
+    DL.cancels.push(j);
+    return send(200, { status: true, waybill: j.waybill, remark: 'Shipment has been cancelled', order_id: 'KAK' });
+  }
+  if (p === '/api/p/packing_slip') {
+    return send(200, { packages: [{ wbn: url.searchParams.get('wbns'), pdf_download_link: DL.mode.evilLabel ? 'https://evil.example.com/l.pdf' : 'https://s3-ap-southeast-1.amazonaws.com/pdfs/label-1.pdf' }], packages_found: 1 });
+  }
+  if (p === '/fm/request/new/') {
+    const j = JSON.parse(body);
+    DL.pickups.push(j);
+    if (j.pickup_location !== 'Kitaabaurkona DL') return send(401, { pickup_location: 'Invalid Pickup Location ClientWarehouse matching query does not exist.' });
+    return send(201, { pickup_id: 4323300, client_name: 'KITAAB', pickup_location_name: j.pickup_location, incoming_center_name: 'Udaipur_DC', pickup_time: j.pickup_time, pickup_date: j.pickup_date, expected_package_count: j.expected_package_count });
+  }
+  if (p === '/api/p/update') {
+    DL.ndr.push(JSON.parse(body));
+    return send(201, { message: 'Request submitted successfully!', request_id: 'UPL13988363159644869096' });
+  }
+  return send(404, {});
+});
+await new Promise((r) => dlServer.listen(0, r));
+const DL_URL = `http://localhost:${dlServer.address().port}`;
+
 // ---------- The function under test ----------
 const logs = [];
 const log = { info: (m) => logs.push(m), warn: (m) => logs.push(m), error: (m) => logs.push(m) };
@@ -147,6 +226,7 @@ const handle = createHandler({
   allowedOrigins: [ORIGIN, 'http://localhost:5199'],
   log,
   makeXpressbees: () => createXpressbees({ baseUrl: XB_URL, email: 'ops@example.com', password: 'correct-horse', tokenStore, timeoutMs: 400, log }),
+  makeDelhivery: () => createDelhivery({ baseUrl: DL_URL, token: DL_TOKEN, timeoutMs: 400, log }),
 });
 
 const reader = sessionFor('reader@example.com').access_token;
@@ -172,8 +252,8 @@ const cron = (job) => call({ action: 'run_job', job }, { origin: null, headers: 
 const READER = { role: 'authenticated', sub: USERS['reader@example.com'].id };
 const SHIP = { name: 'Asha Rao', phone: '9876543210', address: '12 MG Road, Near City Palace', city: 'Udaipur', state: 'Rajasthan', pincode: '313001' };
 const books = (await db.query(`select id from public.books where is_visible and stock_quantity >= 5 order by id limit 5`)).rows.map((r) => r.id);
-async function placeCod(bookId, qty = 1) {
-  const r = await asRole(db, READER, (tx) => tx.query(`select public.create_order($1::jsonb, $2::jsonb, 'cod') as id`, [JSON.stringify([{ book_id: bookId, quantity: qty }]), JSON.stringify(SHIP)]));
+async function placeCod(bookId, qty = 1, ship = SHIP) {
+  const r = await asRole(db, READER, (tx) => tx.query(`select public.create_order($1::jsonb, $2::jsonb, 'cod') as id`, [JSON.stringify([{ book_id: bookId, quantity: qty }]), JSON.stringify(ship)]));
   const id = r.rows[0].id;
   await db.query(`update public.shipments set book_after = now() - interval '1 minute' where order_id = $1`, [id]);
   return id;
@@ -457,6 +537,218 @@ try {
   const r1 = await shipmentOf(o1, 'reverse');
   check('return pickup is booked for a delivered order', ret.status === 200 && r1.status === 'booked' && XB.lastReturn.consignee.pincode === '313001' && XB.lastReturn.pickup.warehouse_name === 'Kitaabaurkona Udaipur');
 
+  // ---------- Delhivery: a separate workflow, chosen per order ----------
+  const dlBooks = (await db.query(`select id from public.books where is_visible and stock_quantity >= 3 order by id offset 5 limit 14`)).rows.map((r) => r.id);
+  const eventOf2 = async (orderId, action) => (await db.query(`select detail from public.shipment_events where order_id = $1 and action = $2 order by id desc limit 1`, [orderId, action])).rows[0]?.detail ?? '';
+  const subtotalOf = async (id) => Number((await db.query(`select subtotal from public.orders where id = $1`, [id])).rows[0].subtotal);
+  check('helpers: Delhivery text drops & # % ; and \\', dlvText('Flat #4 & 5; 100% \\ Road', 80) === 'Flat 4 and 5 100 Road', dlvText('Flat #4 & 5; 100% \\ Road', 80));
+  check('helpers: label links only from Delhivery or Amazon S3 over https', labelUrl('https://s3-ap-southeast-1.amazonaws.com/x.pdf') && labelUrl('https://cdn.delhivery.com/x.pdf') && !labelUrl('http://s3.amazonaws.com/x.pdf') && !labelUrl('https://amazonaws.com.evil.example/x.pdf') && !labelUrl('https://evil.example.com/x.pdf'));
+  check(
+    'helpers: Delhivery statuses map to ours',
+    mapDelhiveryStatus({ StatusType: 'UD', Status: 'Manifested' }) === 'booked' &&
+      mapDelhiveryStatus({ StatusType: 'UD', Status: 'Not Picked' }) === 'booked' &&
+      mapDelhiveryStatus({ StatusType: 'UD', Status: 'In Transit' }) === 'in_transit' &&
+      mapDelhiveryStatus({ StatusType: 'UD', Status: 'Dispatched' }) === 'out_for_delivery' &&
+      mapDelhiveryStatus({ StatusType: 'UD', Status: 'Pending', StatusCode: 'EOD-74' }) === 'exception' &&
+      mapDelhiveryStatus({ StatusType: 'DL', Status: 'Delivered' }) === 'delivered' &&
+      mapDelhiveryStatus({ StatusType: 'RT', Status: 'In Transit' }) === 'rto' &&
+      mapDelhiveryStatus({ StatusType: 'DL', Status: 'RTO' }) === 'rto' &&
+      mapDelhiveryStatus({ StatusType: 'UD', Status: 'Cancelled' }) === 'cancelled' &&
+      mapDelhiveryStatus({ StatusType: 'XX', Status: 'Teleported' }) === null,
+  );
+  const wrongToken = createDelhivery({ baseUrl: DL_URL, token: 'wrong', timeoutMs: 400 });
+  check('a wrong Delhivery token says to check the secret', await wrongToken.pincode('313001').then(() => false, (e) => /DELHIVERY_API_TOKEN/.test(e.message)));
+  check('Delhivery is not used without its token', await (async () => { try { createDelhivery({ baseUrl: DL_URL, token: '' }); return false; } catch (e) { return /not set up/.test(e.message); } })());
+
+  const dlCallsBefore = DL.calls.length;
+  const oD1 = await placeCod(dlBooks[0], 1);
+  check('new orders start with the default carrier (Xpressbees)', (await shipmentOf(oD1)).carrier === 'xpressbees');
+  check('customers cannot switch carriers', (await call({ action: 'set_carrier', order_id: oD1, carrier: 'delhivery' }, { token: reader })).status === 403);
+  check('an unknown carrier is refused', (await call({ action: 'set_carrier', order_id: oD1, carrier: 'bluedart' }, { token: admin })).status === 400);
+  const sw = await call({ action: 'set_carrier', order_id: oD1, carrier: 'delhivery' }, { token: admin });
+  check('admin moves an order to Delhivery before booking', sw.status === 200 && (await shipmentOf(oD1)).carrier === 'delhivery', JSON.stringify(sw.json));
+  check('the switch is logged', /Xpressbees -> Delhivery/.test(await eventOf2(oD1, 'carrier_set')));
+  const noWh = await call({ action: 'book_now', order_id: oD1 }, { token: admin });
+  check('no Delhivery booking until its warehouse name is set', noWh.status === 409 && /Delhivery warehouse/.test(noWh.json.error) && DL.books.length === 0, JSON.stringify(noWh.json));
+  await db.query(`update public.shipping_settings set delhivery_warehouse_name = 'Kitaabaurkona DL'`);
+  const dlRates = await call({ action: 'rates', order_id: oD1 }, { token: admin });
+  check('Delhivery rates: Surface and Express, cheapest first', dlRates.status === 200 && dlRates.json.data.carrier === 'delhivery' && dlRates.json.data.couriers.map((c) => c.id).join() === 'surface,express' && dlRates.json.data.couriers[0].total_charges === 116.14, JSON.stringify(dlRates.json));
+  check('rates are asked as cash on delivery with the order amount and parcel weight', DL.lastRate.pt === 'COD' && Number(DL.lastRate.cod) === (await subtotalOf(oD1)) && Number(DL.lastRate.cgm) > 0 && DL.lastRate.o_pin === '313002');
+  const xbBooksBefore = XB.books.length;
+  const dlBook = await call({ action: 'book_now', order_id: oD1 }, { token: admin });
+  const sD1 = await shipmentOf(oD1);
+  const sentD = DL.books.at(-1);
+  const shD = sentD?.data.shipments[0];
+  check('admin books the order with Delhivery', dlBook.status === 200 && sD1.status === 'booked' && /^\d+$/.test(sD1.awb_number) && sD1.carrier === 'delhivery', JSON.stringify(dlBook.json));
+  check('nothing was sent to Xpressbees for it', XB.books.length === xbBooksBefore);
+  check('Delhivery gets format=json&data=… form-encoded', sentD.format === 'json' && /x-www-form-urlencoded/.test(DL.contentType));
+  check('Delhivery booking: our order number, COD for the order total', shD.order === `KAK-${(await db.query('select order_number from public.orders where id = $1', [oD1])).rows[0].order_number}` && shD.payment_mode === 'COD' && shD.cod_amount === (await subtotalOf(oD1)) && shD.total_amount === (await subtotalOf(oD1)));
+  check('Delhivery booking: customer from the order, our warehouse and return address', shD.pin === '313001' && shD.phone === '9876543210' && sentD.data.pickup_location.name === 'Kitaabaurkona DL' && shD.return_pin === '313002');
+  check('Delhivery booking: weight in grams, size in cm, books HSN, Surface', shD.weight > 0 && Number.isInteger(shD.shipment_length) && shD.hsn_code === '4901' && shD.shipping_mode === 'Surface');
+  check('the Delhivery parcel saves mode and cost', sD1.courier_id === 'surface' && sD1.courier_name === 'Delhivery Surface' && Number(sD1.total_charges) === 116.14 && sD1.label_url === null);
+  check('Delhivery parcels cannot be switched once booked', (await call({ action: 'set_carrier', order_id: oD1, carrier: 'xpressbees' }, { token: admin })).status === 409);
+
+  // Admin picks Express for the next one.
+  const oD2 = await placeCod(dlBooks[1], 1);
+  await call({ action: 'set_carrier', order_id: oD2, carrier: 'delhivery' }, { token: admin });
+  check('an Xpressbees courier id is refused for a Delhivery parcel', (await call({ action: 'set_courier', order_id: oD2, courier_id: '1' }, { token: admin })).status === 400);
+  const setE = await call({ action: 'set_courier', order_id: oD2, courier_id: 'express' }, { token: admin });
+  check('admin can choose Delhivery Express', setE.status === 200 && (await shipmentOf(oD2)).courier_id === 'express');
+  await call({ action: 'book_now', order_id: oD2 }, { token: admin });
+  check('Express is used for the booking', DL.books.at(-1).data.shipments[0].shipping_mode === 'Express' && (await shipmentOf(oD2)).courier_name === 'Delhivery Express');
+
+  // Default carrier Delhivery: booked automatically with it.
+  await db.query(`update public.shipping_settings set default_carrier = 'delhivery'`);
+  const oD3 = await placeCod(dlBooks[2], 1);
+  check('with Delhivery as default, new orders start with Delhivery', (await shipmentOf(oD3)).carrier === 'delhivery');
+  const dlJob = await cron('book_due');
+  check('the automatic job books Delhivery parcels with Delhivery', dlJob.json?.data?.booked >= 1 && (await shipmentOf(oD3)).status === 'booked' && (await shipmentOf(oD3)).carrier === 'delhivery', JSON.stringify(dlJob.json));
+  DL.mode.noRates = true;
+  const oD4 = await placeCod(dlBooks[3], 1);
+  await cron('book_due');
+  check('a missing Delhivery price does not stop the booking', (await shipmentOf(oD4)).status === 'booked' && (await shipmentOf(oD4)).total_charges === null);
+  DL.mode.noRates = false;
+
+  // PIN codes Delhivery does not serve.
+  const oD5 = await placeCod(dlBooks[4], 1, { ...SHIP, pincode: '799996' });
+  await cron('book_due');
+  const sD5 = await shipmentOf(oD5);
+  check('no Delhivery COD to that PIN: fails with advice to switch, sends nothing', sD5.status === 'failed' && /switch this parcel to Xpressbees/.test(sD5.last_error) && !DL.books.some((b) => b.data.shipments[0].pin === '799996'), sD5.last_error);
+  const back = await call({ action: 'set_carrier', order_id: oD5, carrier: 'xpressbees' }, { token: admin });
+  const rebook = await call({ action: 'book_now', order_id: oD5 }, { token: admin });
+  const sD5b = await shipmentOf(oD5);
+  check('switched to Xpressbees, it books there', back.status === 200 && rebook.status === 200 && sD5b.carrier === 'xpressbees' && sD5b.status === 'booked' && /^\d+$/.test(sD5b.courier_id), JSON.stringify(rebook.json));
+
+  // Unclear answers hold the parcel; nothing is sent twice.
+  DL.mode.duplicate = true;
+  const oD6 = await placeCod(dlBooks[5], 1);
+  const n6 = DL.books.length;
+  await cron('book_due');
+  const sD6 = await shipmentOf(oD6);
+  check('"Duplicate order id": held for a check, not resent', sD6.status === 'failed' && sD6.needs_check === true && DL.books.length - n6 === 1 && /already exists/.test(sD6.last_error) && /Delhivery panel/.test(sD6.last_error), sD6.last_error);
+  DL.mode.duplicate = false;
+  await cron('book_due');
+  check('the job never resends a held Delhivery parcel', DL.books.length - n6 === 1);
+  const unconfirmedD = await call({ action: 'book_now', order_id: oD6 }, { token: admin });
+  check('Retry on a held Delhivery parcel needs the panel check confirmed', unconfirmedD.status === 409 && /Delhivery may already have booked/.test(unconfirmedD.json.error));
+  const unconfirmedSwitch = await call({ action: 'set_carrier', order_id: oD6, carrier: 'xpressbees' }, { token: admin });
+  check('switching a held parcel to the other carrier also needs that check', unconfirmedSwitch.status === 409 && (await shipmentOf(oD6)).carrier === 'delhivery');
+  const linkedD = await call({ action: 'link_awb', order_id: oD6, awb: '5021319999999' }, { token: admin });
+  check('admin links the AWB found in the Delhivery panel', linkedD.status === 200 && (await shipmentOf(oD6)).awb_number === '5021319999999' && (await shipmentOf(oD6)).status === 'booked' && /Delhivery panel/.test(await eventOf2(oD6, 'awb_linked')), JSON.stringify(linkedD.json));
+
+  DL.mode.internal = true;
+  const oD7 = await placeCod(dlBooks[6], 1);
+  await cron('book_due');
+  check('"internal error": held for a check', (await shipmentOf(oD7)).needs_check === true && (await shipmentOf(oD7)).next_attempt_at === null);
+  DL.mode.internal = false;
+  const confirmedSwitch = await call({ action: 'set_carrier', order_id: oD7, carrier: 'xpressbees', checked: true }, { token: admin });
+  const s7 = await shipmentOf(oD7);
+  check('after confirming the check, the parcel moves to Xpressbees and the hold clears', confirmedSwitch.status === 200 && s7.carrier === 'xpressbees' && s7.needs_check === false && s7.status === 'failed');
+
+  DL.mode.bookDown = true;
+  const oD8 = await placeCod(dlBooks[7], 1);
+  await cron('book_due');
+  check('a Delhivery server error on booking: held for a check, not retried', (await shipmentOf(oD8)).needs_check === true && (await shipmentOf(oD8)).status === 'failed');
+  DL.mode.bookDown = false;
+  DL.mode.slowBook = true;
+  const oD9 = await placeCod(dlBooks[8], 1);
+  await cron('book_due');
+  check('a Delhivery booking that times out: held for a check', (await shipmentOf(oD9)).needs_check === true);
+  DL.mode.slowBook = false;
+
+  DL.mode.badWarehouse = true;
+  const oD10 = await placeCod(dlBooks[9], 1);
+  await cron('book_due');
+  const sD10 = await shipmentOf(oD10);
+  check("a clear refusal (wrong warehouse) waits for an admin with Delhivery's words", sD10.status === 'failed' && sD10.needs_check === false && /ClientWarehouse matching query/.test(sD10.last_error), sD10.last_error);
+  DL.mode.badWarehouse = false;
+  const retryD10 = await call({ action: 'book_now', order_id: oD10 }, { token: admin });
+  check('after fixing it, Retry books it (no check needed)', retryD10.status === 200 && (await shipmentOf(oD10)).status === 'booked');
+
+  // Tracking, failed deliveries, labels.
+  await db.query(`update public.shipments set last_tracked_at = null where order_id = $1`, [oD1]);
+  const trD = await call({ action: 'track', order_id: oD1 }, { token: reader });
+  const trS = trD.json?.data?.shipments?.[0];
+  check('customer tracks a Delhivery parcel', trD.status === 200 && trS.status === 'in_transit' && (await orderStatus(oD1)) === 'shipped', JSON.stringify(trD.json));
+  check('Delhivery history is cleaned and newest first', trS.history[0].message === 'Latest scan' && !JSON.stringify(trS.history).includes('<script>'));
+  check('customers see no Delhivery cost or label', !('total_charges' in trS) && !('label_url' in trS));
+  DL.track = { StatusType: 'UD', Status: 'Pending', StatusCode: 'EOD-74' };
+  await db.query(`update public.shipments set last_tracked_at = null where order_id = $1`, [oD1]);
+  await cron('track_active');
+  check('a failed Delhivery attempt shows as a delivery exception', (await shipmentOf(oD1)).status === 'exception');
+  const ndrD = await call({ action: 'ndr_list' }, { token: admin });
+  const ndrItem = ndrD.json?.data?.items?.find((i) => i.awb === sD1.awb_number);
+  check('failed deliveries list Delhivery parcels next to Xpressbees ones', ndrD.status === 200 && ndrItem?.carrier === 'delhivery' && ndrItem.remarks === 'Latest scan' && ndrD.json.data.items.some((i) => i.carrier === 'xpressbees'), JSON.stringify(ndrD.json).slice(0, 300));
+  const todayIn = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const later = new Date(Date.now() + 330 * 60000 + 2 * 86400000).toISOString().slice(0, 10);
+  const xbNdrBefore = XB.lastNdr;
+  const actD = await call({ action: 'ndr_action', items: [{ awb: sD1.awb_number, action: 're-attempt', action_data: { re_attempt_date: todayIn } }] }, { token: admin });
+  check('Delhivery re-attempt today is RE-ATTEMPT, sent to Delhivery only', actD.status === 200 && DL.ndr.at(-1).data[0].act === 'RE-ATTEMPT' && XB.lastNdr === xbNdrBefore && actD.json.data.results[0].ok, JSON.stringify(actD.json));
+  await call({ action: 'ndr_action', items: [{ awb: sD1.awb_number, action: 're-attempt', action_data: { re_attempt_date: later } }] }, { token: admin });
+  check('a later date becomes DEFER_DLV with that date', DL.ndr.at(-1).data[0].act === 'DEFER_DLV' && DL.ndr.at(-1).data[0].action_data.deferred_date === later);
+  await call({ action: 'ndr_action', items: [{ awb: sD1.awb_number, action: 'change_phone', action_data: { phone: '9123456780' } }] }, { token: admin });
+  check('a new phone becomes EDIT_DETAILS', DL.ndr.at(-1).data[0].act === 'EDIT_DETAILS' && DL.ndr.at(-1).data[0].action_data.phone === '9123456780');
+  const lab = await call({ action: 'label', order_id: oD2 }, { token: admin });
+  check('the Delhivery label is made on request', lab.status === 200 && lab.json.data.url.startsWith('https://s3-ap-southeast-1.amazonaws.com/'), JSON.stringify(lab.json));
+  DL.mode.evilLabel = true;
+  check('a Delhivery label link from another host is refused', (await call({ action: 'label', order_id: oD2 }, { token: admin })).status === 502);
+  DL.mode.evilLabel = false;
+  check('customers cannot fetch labels', (await call({ action: 'label', order_id: oD2 }, { token: reader })).status === 403);
+  check('Xpressbees labels come from the saved link', (await call({ action: 'label', order_id: o5 }, { token: admin })).json?.data?.url?.startsWith('https://xb-files.s3.amazonaws.com/'));
+  check('the Xpressbees manifest leaves Delhivery parcels out', (await call({ action: 'manifest', order_ids: [oD2] }, { token: admin })).status === 400);
+
+  // Pickup requests.
+  const pick = await call({ action: 'pickup_request', date: todayIn, time: '14:00', count: 3 }, { token: admin });
+  check('admin asks Delhivery for a pickup', pick.status === 200 && pick.json.data.pickup_id === '4323300' && DL.pickups.at(-1).pickup_location === 'Kitaabaurkona DL' && DL.pickups.at(-1).pickup_time === '14:00:00' && DL.pickups.at(-1).expected_package_count === 3, JSON.stringify(pick.json));
+  check('the pickup request is logged', Boolean((await db.query(`select 1 from public.shipment_events where action = 'pickup_requested'`)).rows[0]));
+  check('pickup requests need a valid time and count', (await call({ action: 'pickup_request', date: todayIn, time: '25:00', count: 3 }, { token: admin })).status === 400 && (await call({ action: 'pickup_request', date: todayIn, time: '14:00', count: 0 }, { token: admin })).status === 400);
+  check('pickup dates far ahead are refused', (await call({ action: 'pickup_request', date: '2099-01-01', time: '14:00', count: 1 }, { token: admin })).status === 400);
+  check('customers cannot request pickups', (await call({ action: 'pickup_request', date: todayIn, time: '14:00', count: 1 }, { token: reader })).status === 403);
+  await db.query(`update public.shipping_settings set delhivery_warehouse_name = 'Old name'`);
+  const badPick = await call({ action: 'pickup_request', date: todayIn, time: '14:00', count: 1 }, { token: admin });
+  check("a refused pickup shows Delhivery's reason, not a token error", badPick.status === 502 && /Invalid Pickup Location/.test(badPick.json.error) && !/TOKEN/.test(badPick.json.error), JSON.stringify(badPick.json));
+  await db.query(`update public.shipping_settings set delhivery_warehouse_name = 'Kitaabaurkona DL'`);
+
+  // Cancelling, delivery and returns.
+  const oD11 = await placeCod(dlBooks[10], 1);
+  await cron('book_due');
+  const sD11 = await shipmentOf(oD11);
+  await asRole(db, READER, (tx) => tx.query(`select public.cancel_order($1)`, [oD11]));
+  await cron('cancel_requested');
+  check('a cancelled order is cancelled with Delhivery', DL.cancels.some((c) => c.waybill === sD11.awb_number && c.cancellation === 'true') && (await shipmentOf(oD11)).status === 'cancelled');
+  DL.track = { StatusType: 'DL', Status: 'Delivered', StatusCode: 'EOD-38' };
+  await db.query(`update public.shipments set last_tracked_at = null where order_id = $1`, [oD2]);
+  await cron('track_active');
+  check('Delhivery delivered: the order becomes delivered', (await orderStatus(oD2)) === 'delivered');
+  const retD = await call({ action: 'return_pickup', order_id: oD2 }, { token: admin });
+  const rD = await shipmentOf(oD2, 'reverse');
+  const retSent = DL.books.at(-1).data.shipments[0];
+  check('return pickup goes with Delhivery for a Delhivery order', retD.status === 200 && rD.carrier === 'delhivery' && rD.status === 'booked' && retSent.payment_mode === 'Pickup' && /-R$/.test(retSent.order) && retSent.pin === '313001', JSON.stringify(retD.json));
+  DL.track = { StatusType: 'UD', Status: 'In Transit', StatusCode: 'X-PPOM' };
+
+  // PIN check at checkout with both carriers.
+  await db.query(`delete from public.pincode_checks`);
+  const both = await call({ action: 'check_pincode', pincode: '799998' }, { token: admin });
+  check('PIN check: Delhivery COD counts where Xpressbees has none', both.json?.data?.deliverable === true && both.json.data.cod === true, JSON.stringify(both.json));
+  const noneD = await call({ action: 'check_pincode', pincode: '799999' }, { token: admin });
+  check('PIN check: a PIN neither carrier serves is not deliverable', noneD.json?.data?.deliverable === false);
+  const embargo = await call({ action: 'check_pincode', pincode: '799997' }, { token: admin });
+  check('PIN check: a Delhivery embargo falls back to Xpressbees', embargo.json?.data?.deliverable === true);
+  DL.mode.down = true;
+  await db.query(`delete from public.pincode_checks`);
+  const dlDown = await call({ action: 'check_pincode', pincode: '313001' }, { token: admin });
+  check('PIN check: Delhivery down, Xpressbees still answers', dlDown.status === 200 && dlDown.json.data.deliverable === true);
+  const dlDownNo = await call({ action: 'check_pincode', pincode: '799999' }, { token: admin });
+  check('PIN check: a "no" is not trusted while Delhivery is down', dlDownNo.status === 502);
+  DL.mode.down = false;
+  const healthD = await cron('health');
+  check('the health job checks Delhivery too', healthD.json?.data?.connected === true && healthD.json.data.delhivery?.connected === true && healthD.json.data.delhivery.warehouse_set === true, JSON.stringify(healthD.json));
+  check('Delhivery is only ever called on its own host', DL.calls.length > dlCallsBefore);
+
+  // Back to the Xpressbees-only setup for the checks below.
+  await db.query(`update public.shipping_settings set default_carrier = 'xpressbees', delhivery_warehouse_name = ''`);
+  await db.query(`delete from public.pincode_checks`);
+
   // ---------- Errors and logs ----------
   XB.mode.down = true;
   await db.query(`delete from public.pincode_checks`);
@@ -465,11 +757,13 @@ try {
   XB.mode.down = false;
   const all = logs.join('\n');
   check('logs never contain the password, token, phone numbers or emails', !all.includes('correct-horse') && !all.includes(TOKEN) && !/9876543210|@example\.com/.test(all));
+  check('logs never contain the Delhivery token', !all.includes(DL_TOKEN));
   check('the Xpressbees token is stored only in the service-only table', (await db.query(`select count(*)::int as n from public.integration_tokens`)).rows[0].n === 1);
 } finally {
   if (process.env.SHOW_LOGS) console.log(logs.filter((l) => /"ok":false/.test(l)).slice(0, 8).join('\n'));
   supa.close();
   xbServer.close();
+  dlServer.close();
   await db.close();
 }
 

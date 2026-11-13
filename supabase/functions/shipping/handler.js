@@ -3,13 +3,34 @@
 //
 // Who may do what:
 //   signed-in customer  check_pincode, track (own orders only)
-//   admin               the above for any order, plus rates, set_courier, book_now,
-//                       cancel_shipment, manifest, ndr_list, ndr_action, return_pickup
+//   admin               the above for any order, plus rates, set_courier, set_carrier,
+//                       book_now, link_awb, label, cancel_shipment, manifest,
+//                       pickup_request, ndr_list, ndr_action, return_pickup
 //   scheduler (cron)    run_job, with the cron secret header (no user)
+//
+// Two carriers, two separate workflows. Every parcel says which carrier it goes with
+// (shipments.carrier): new orders take the default from Admin > Shipping, and an admin
+// can switch a parcel to the other carrier until it is booked. Booking, tracking,
+// cancelling, labels, failed deliveries and returns then go to that carrier only.
+//   Xpressbees  cheapest of its couriers, label + manifest PDFs, NDR list from Xpressbees
+//   Delhivery   Surface or Express (cheapest), label on request, pickup requests, NDR
+//               actions on parcels whose tracking shows a failed attempt
 
 import { LIMITS, PIN_CHECK_PARCEL } from './config.js';
 import { ADMIN_ACTIONS, CRON_ACTIONS, InputError, parseRequest } from './validate.js';
+import { CARRIER_NAMES, CarrierError } from './carrier.js';
 import { XpressbeesError } from './xpressbees.js';
+import { DelhiveryError } from './delhivery.js';
+import {
+  delhiveryHistory,
+  delhiveryOptions,
+  delhiveryPayload,
+  delhiveryReturnPayload,
+  delhiveryStatusText,
+  DELHIVERY_MODES,
+  indiaDateTime,
+  mapDelhiveryStatus,
+} from './delhivery-shipping.js';
 import { clean } from './text.js';
 import {
   bookingPayload,
@@ -60,9 +81,26 @@ function corsHeaders(origin, allowed) {
   };
 }
 
-export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, log = console, now = () => new Date() }) {
+// Where an admin looks a parcel up by its KAK number when a carrier answered unclearly.
+const PANELS = { xpressbees: 'Xpressbees dashboard (Orders', delhivery: 'Delhivery panel (Shipments' };
+
+export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSecret, allowedOrigins, log = console, now = () => new Date() }) {
   let xbClient = null;
   const xb = () => (xbClient ??= makeXpressbees());
+  let dlClient = null;
+  const dl = () => {
+    if (!makeDelhivery) throw new DelhiveryError('Delhivery is not set up');
+    return (dlClient ??= makeDelhivery());
+  };
+  // True when the Delhivery API token is set (no request is made).
+  const delhiveryReady = () => {
+    try {
+      dl();
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   const rpc = async (fn, args = {}) => {
     const { data, error } = await db.rpc(fn, args);
@@ -146,7 +184,97 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
     throw new XpressbeesError(message.slice(0, 300), { status: refusals[0]?.status ?? 0, reason: refusals[0]?.reason ?? '' });
   }
 
+  // Delhivery prices for Surface and Express, cheapest first. A price it will not give is
+  // left empty rather than stopping the booking.
+  async function delhiveryRates(data, pkg) {
+    const cod = data.order.payment_method === 'cod';
+    const rates = {};
+    for (const m of Object.values(DELHIVERY_MODES)) {
+      try {
+        rates[m.id] = await dl().rate({ mode: m.code, origin: data.settings.pickup_pincode, destination: data.order.pincode, grams: pkg.weight, cod, amount: data.order.subtotal });
+      } catch (e) {
+        if (!(e instanceof CarrierError)) throw e;
+      }
+    }
+    return delhiveryOptions(rates);
+  }
+
+  // Can Delhivery take this parcel (PIN code served for this way of paying)?
+  async function delhiveryServes(data) {
+    const pin = await dl().pincode(data.order.pincode);
+    return data.order.payment_method === 'cod' ? pin.cod : pin.prepaid;
+  }
+
+  // Books a Delhivery parcel: Surface or Express (the admin's pick, else the cheapest).
+  // Delhivery refuses a second booking of the same order number ("Duplicate order id"),
+  // and that refusal, like any unclear answer, holds the parcel for a check.
+  async function bookWithDelhivery(shipment, data, pkg) {
+    const options = await delhiveryRates(data, pkg);
+    const option = (shipment.courier_chosen_by_admin && options.find((o) => o.id === shipment.courier_id)) || options[0];
+    const orderNumber = `KAK-${data.order.order_number}`;
+    try {
+      const answer = await dl().book(delhiveryPayload(data, pkg, option, now()));
+      return { answer, option };
+    } catch (e) {
+      if (e instanceof CarrierError && e.uncertain) {
+        const why = e.duplicate
+          ? `Delhivery says ${orderNumber} already exists`
+          : `Delhivery answered unclearly (${e.status ? `HTTP ${e.status}${e.reason ? `: ${e.reason}` : ', no reason given'}` : e.message}) when booking ${orderNumber}, so it may have booked it anyway`;
+        throw new DelhiveryError(
+          `${why}. Check the ${PANELS.delhivery}, search ${orderNumber}): link its AWB here if it is booked, or retry once you are sure it is not.`.slice(0, 300),
+          { status: e.status, reason: e.reason, uncertain: true },
+        );
+      }
+      throw e;
+    }
+  }
+
+  // What is saved for a Delhivery booking (the label is made on request, not stored).
+  function delhiveryRecord(answer, pkg, option) {
+    const awbNumber = String(answer?.waybill ?? '');
+    if (!/^[0-9A-Za-z]{6,30}$/.test(awbNumber)) return null;
+    return {
+      awb_number: awbNumber,
+      xb_order_id: answer?.refnum ? clean(answer.refnum, 40) : null,
+      xb_shipment_id: null,
+      xb_status: clean(answer?.status, 80) || 'Manifested',
+      courier_id: option?.id ?? null,
+      courier_name: option?.name ?? 'Delhivery',
+      freight_charges: option?.freight_charges ?? null,
+      cod_charges: option?.cod_charges ?? null,
+      total_charges: option?.total_charges ?? null,
+      label_url: null,
+      manifest_url: null,
+      package_weight_g: pkg.weight,
+      package_length_cm: pkg.length,
+      package_breadth_cm: pkg.breadth,
+      package_height_cm: pkg.height,
+    };
+  }
+
+  // Saves a booking, then cancels it at once if the customer cancelled while it was in
+  // flight (the background job would otherwise do it on its next run).
+  async function saveBooking(shipment, record, actor) {
+    try {
+      await rpc('record_booking', { p_shipment: shipment.id, p: { ...record, actor } });
+    } catch (e) {
+      // Booked with the carrier but not saved: keep the AWB in the logs so it can be recovered.
+      log.error(JSON.stringify({ event: 'booked_not_saved', shipment: shipment.id, carrier: shipment.carrier, awb: record.awb_number }));
+      throw e;
+    }
+    const now_ = (await select(db.from('shipments').select('*').eq('id', shipment.id).limit(1)))[0];
+    if (now_?.status === 'cancel_requested') {
+      try {
+        await cancelWithCarrier(now_, actor);
+      } catch (e) {
+        if (!(e instanceof CarrierError)) throw e;
+      }
+    }
+    return { ok: true, awb: record.awb_number };
+  }
+
   async function bookOne(shipment, actor = null) {
+    const carrier = shipment.carrier === 'delhivery' ? 'delhivery' : 'xpressbees';
     try {
       const data = await rpc('shipment_booking_data', { p_shipment: shipment.id });
       if (!data || !['confirmed', 'paid'].includes(data.order.status)) {
@@ -154,6 +282,30 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         return { ok: false, reason: 'order_inactive' };
       }
       const pkg = buildPackage(data.items);
+      if (carrier === 'delhivery') {
+        if (!(await delhiveryServes(data))) {
+          await rpc('record_booking_failure', {
+            p_shipment: shipment.id,
+            p_error: `Delhivery does not deliver ${data.order.payment_method === 'cod' ? 'cash on delivery ' : ''}to PIN ${data.order.pincode}; switch this parcel to Xpressbees`,
+            p_retry: false,
+            p_actor: actor,
+          });
+          return { ok: false, reason: 'not_serviceable' };
+        }
+        const { answer, option } = await bookWithDelhivery(shipment, data, pkg);
+        const record = delhiveryRecord(answer, pkg, option);
+        if (!record) {
+          await rpc('record_booking_failure', {
+            p_shipment: shipment.id,
+            p_error: `Delhivery accepted KAK-${data.order.order_number} but sent no AWB number. Check the Delhivery panel and link its AWB here.`,
+            p_retry: false,
+            p_actor: actor,
+            p_needs_check: true,
+          });
+          return { ok: false, reason: 'bad_answer' };
+        }
+        return await saveBooking(shipment, record, actor);
+      }
       const options = await xb().serviceability({
         origin: data.settings.pickup_pincode,
         destination: data.order.pincode,
@@ -166,7 +318,7 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
           p_shipment: shipment.id,
           p_error: shipment.courier_chosen_by_admin
             ? `The courier chosen for this parcel no longer delivers to PIN ${data.order.pincode}; choose another`
-            : `No Xpressbees courier delivers this parcel to PIN ${data.order.pincode}`,
+            : `No Xpressbees courier delivers this parcel to PIN ${data.order.pincode}${delhiveryReady() ? '; switch it to Delhivery' : ''}`,
           p_retry: false,
           p_actor: actor,
         });
@@ -207,28 +359,11 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         }
         log.warn(JSON.stringify({ event: host ? 'file_link_set_aside' : 'file_link_missing', shipment: shipment.id, field, host }));
       }
-      try {
-        await rpc('record_booking', { p_shipment: shipment.id, p: { ...record, actor } });
-      } catch (e) {
-        // Booked with Xpressbees but not saved: keep the AWB in the logs so it can be recovered.
-        log.error(JSON.stringify({ event: 'booked_not_saved', shipment: shipment.id, awb: record.awb_number }));
-        throw e;
-      }
-      // The customer cancelled while this booking was in flight: cancel it with
-      // Xpressbees now (the background job would otherwise do it on its next run).
-      const now_ = (await select(db.from('shipments').select('*').eq('id', shipment.id).limit(1)))[0];
-      if (now_?.status === 'cancel_requested') {
-        try {
-          await cancelWithXpressbees(now_, actor);
-        } catch (e) {
-          if (!(e instanceof XpressbeesError)) throw e;
-        }
-      }
-      return { ok: true, awb: record.awb_number };
+      return await saveBooking(shipment, record, actor);
     } catch (e) {
-      const message = e instanceof XpressbeesError ? e.message : 'Internal error while booking';
-      const uncertain = e instanceof XpressbeesError && e.uncertain;
-      if (!(e instanceof XpressbeesError)) log.error(JSON.stringify({ event: 'book_error', shipment: shipment.id, error: String(e.message).slice(0, 120) }));
+      const message = e instanceof CarrierError ? e.message : 'Internal error while booking';
+      const uncertain = e instanceof CarrierError && e.uncertain;
+      if (!(e instanceof CarrierError)) log.error(JSON.stringify({ event: 'book_error', shipment: shipment.id, error: String(e.message).slice(0, 120) }));
       if (uncertain) log.warn(JSON.stringify({ event: 'booking_uncertain', shipment: shipment.id, status: e.status }));
       for (const r of e?.refusals ?? []) {
         try {
@@ -241,7 +376,7 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         await rpc('record_booking_failure', {
           p_shipment: shipment.id,
           p_error: message,
-          p_retry: uncertain ? false : e instanceof XpressbeesError ? e.retryable : true,
+          p_retry: uncertain ? false : e instanceof CarrierError ? e.retryable : true,
           p_actor: actor,
           p_needs_check: uncertain,
         });
@@ -253,6 +388,20 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
   }
 
   async function refreshTracking(shipment) {
+    if (shipment.carrier === 'delhivery') {
+      const found = await dl().track(shipment.awb_number);
+      // Nothing at Delhivery yet (just booked): nothing to change.
+      if (!found) return shipment.status;
+      const next = mapDelhiveryStatus(found.Status) ?? (RECORDABLE.includes(shipment.status) ? shipment.status : null);
+      if (!next) return shipment.status;
+      await rpc('record_tracking', {
+        p_shipment: shipment.id,
+        p_status: next,
+        p_xb_status: delhiveryStatusText(found.Status),
+        p_history: delhiveryHistory(found.Scans),
+      });
+      return next;
+    }
     const data = await xb().track(shipment.awb_number);
     // No tracking events yet (just booked): nothing to change.
     if (!data) return shipment.status;
@@ -267,15 +416,15 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
     return mapped;
   }
 
-  async function cancelWithXpressbees(shipment, actor = null) {
+  async function cancelWithCarrier(shipment, actor = null) {
     if (!shipment.awb_number) {
       await rpc('record_cancelled', { p_shipment: shipment.id, p_actor: actor, p_detail: 'Not booked yet' });
       return true;
     }
     try {
-      await xb().cancel(shipment.awb_number);
+      await (shipment.carrier === 'delhivery' ? dl() : xb()).cancel(shipment.awb_number);
     } catch (e) {
-      if (!(e instanceof XpressbeesError) || !/already cancel/i.test(e.message)) throw e;
+      if (!(e instanceof CarrierError) || !/already cancel/i.test(e.message)) throw e;
     }
     await rpc('record_cancelled', { p_shipment: shipment.id, p_actor: actor, p_detail: `AWB ${shipment.awb_number} cancelled` });
     return true;
@@ -298,12 +447,37 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         cached[type] = await rpc('get_pincode_check', { p_pincode: pincode, p_payment_type: type, p_max_age_minutes: LIMITS.pinCacheMinutes });
       }
       const missing = ['prepaid', 'cod'].filter((t) => cached[t] === null || cached[t] === undefined);
+      // Deliverable when either carrier serves the PIN code. Delhivery counts once its
+      // warehouse name and API token are set; one Delhivery call answers both ways of paying,
+      // and Xpressbees is asked only when Delhivery says no. A "no" is trusted only when
+      // every carrier asked could answer; otherwise the customer sees a plain error.
       if (missing.length) {
-        const origin = (await settings()).pickup_pincode;
+        const st = await settings();
+        const useDelhivery = Boolean(st.delhivery_warehouse_name) && delhiveryReady();
+        let dlPin = null;
+        let dlError = null;
+        if (useDelhivery) {
+          try {
+            dlPin = await dl().pincode(pincode);
+          } catch (e) {
+            if (!(e instanceof CarrierError)) throw e;
+            dlError = e;
+          }
+        }
         for (const type of missing) {
-          const options = await xb().serviceability({ origin, destination: pincode, payment_type: type, ...PIN_CHECK_PARCEL });
-          cached[type] = chooseCourier(options) !== null;
-          await rpc('save_pincode_check', { p_pincode: pincode, p_payment_type: type, p_serviceable: cached[type] });
+          let ok = Boolean(dlPin?.[type]);
+          if (!ok) {
+            try {
+              const options = await xb().serviceability({ origin: st.pickup_pincode, destination: pincode, payment_type: type, ...PIN_CHECK_PARCEL });
+              ok = chooseCourier(options) !== null;
+            } catch (e) {
+              if (!(e instanceof CarrierError)) throw e;
+              throw dlError ?? e;
+            }
+            if (!ok && dlError) throw dlError;
+          }
+          cached[type] = ok;
+          await rpc('save_pincode_check', { p_pincode: pincode, p_payment_type: type, p_serviceable: ok });
         }
       }
       return { pincode, deliverable: Boolean(cached.prepaid || cached.cod), cod: Boolean(cached.cod) };
@@ -320,7 +494,7 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
           try {
             await refreshTracking(s);
           } catch (e) {
-            if (!(e instanceof XpressbeesError)) throw e;
+            if (!(e instanceof CarrierError)) throw e;
           }
         }
       }
@@ -330,11 +504,18 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       return { shipments: fresh };
     },
 
+    // The couriers an admin can choose for a parcel not booked yet: Xpressbees' couriers,
+    // or Delhivery Surface / Express, cheapest first, with prices.
     async rates({ order_id }) {
       const s = await forwardShipment(order_id);
       if (!s) throw new AppError(404, 'This order has no parcel');
       const data = await rpc('shipment_booking_data', { p_shipment: s.id });
       const pkg = buildPackage(data.items);
+      const chosen = s.courier_chosen_by_admin ? s.courier_id : null;
+      if (s.carrier === 'delhivery') {
+        if (!(await delhiveryServes(data))) throw new AppError(409, `Delhivery does not deliver this parcel to PIN ${data.order.pincode}; switch it to Xpressbees`);
+        return { carrier: 'delhivery', couriers: await delhiveryRates(data, pkg), chosen, package: pkg };
+      }
       const options = await xb().serviceability({
         origin: data.settings.pickup_pincode,
         destination: data.order.pincode,
@@ -342,7 +523,7 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         order_amount: data.order.subtotal,
         ...pkg,
       });
-      return { couriers: listCouriers(options), chosen: s.courier_chosen_by_admin ? s.courier_id : null, package: pkg };
+      return { carrier: 'xpressbees', couriers: listCouriers(options), chosen, package: pkg };
     },
 
     async set_courier({ order_id, courier_id }, { user }) {
@@ -355,13 +536,29 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       return { courier };
     },
 
+    // The admin decides which carrier ships a parcel, any time before it is booked.
+    // After an unclear answer the first carrier may have booked it already: switching
+    // then needs the admin to confirm they checked that carrier's panel.
+    async set_carrier({ order_id, carrier, checked }, { user }) {
+      const s = await forwardShipment(order_id);
+      if (!s || !['queued', 'failed'].includes(s.status)) throw new AppError(409, 'The carrier can only be changed before booking');
+      if (s.carrier === carrier) return { carrier };
+      if (s.needs_check && !checked) {
+        throw new AppError(409, `${CARRIER_NAMES[s.carrier]} may already have booked this order. Check the ${PANELS[s.carrier]}) first, then confirm.`);
+      }
+      if (carrier === 'delhivery' && !delhiveryReady()) throw new AppError(409, 'Delhivery is not set up yet (its API token secret is missing)');
+      await rpc('set_shipment_carrier', { p_shipment: s.id, p_carrier: carrier, p_actor: user.id });
+      return { carrier };
+    },
+
     async book_now({ order_id, checked }, { user }) {
       const s = await forwardShipment(order_id);
       if (!s) throw new AppError(404, 'This order has no parcel');
-      // After an unclear answer the parcel may already be booked with Xpressbees: book
-      // again only once the admin confirms they checked the dashboard.
+      // After an unclear answer the parcel may already be booked with the carrier: book
+      // again only once the admin confirms they checked its panel.
       if (s.needs_check && !checked) {
-        throw new AppError(409, 'Xpressbees may already have booked this order. Check the Xpressbees dashboard first, then confirm.');
+        const name = CARRIER_NAMES[s.carrier] ?? 'The carrier';
+        throw new AppError(409, `${name} may already have booked this order. Check the ${PANELS[s.carrier] ?? 'carrier panel ('}) first, then confirm.`);
       }
       const claimed = await rpc('claim_shipment', { p_shipment: s.id });
       if (!Array.isArray(claimed) || claimed.length === 0) throw new AppError(409, 'This parcel is already booked or being booked');
@@ -370,78 +567,177 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       return { awb_number: result.awb };
     },
 
-    // An admin found the parcel booked in the Xpressbees dashboard (after an unclear
-    // answer) and links its AWB, so tracking, cancelling and labels work from here.
+    // An admin found the parcel booked in the carrier's panel (after an unclear answer)
+    // and links its AWB, so tracking, cancelling and labels work from here.
     async link_awb({ order_id, awb }, { user }) {
       const s = await forwardShipment(order_id);
       if (!s || !['queued', 'failed'].includes(s.status)) throw new AppError(409, 'Only a parcel that is not booked yet can be linked to an AWB');
       const taken = (await select(db.from('shipments').select('id').eq('awb_number', awb).limit(1)))[0];
       if (taken) throw new AppError(409, 'That AWB already belongs to another parcel');
+      const delhivery = s.carrier === 'delhivery';
       let tracked = null;
       try {
-        tracked = await xb().track(awb);
+        tracked = await (delhivery ? dl() : xb()).track(awb);
       } catch (e) {
-        if (!(e instanceof XpressbeesError)) throw e;
+        if (!(e instanceof CarrierError)) throw e;
       }
       const claimed = await rpc('claim_shipment', { p_shipment: s.id });
       if (!Array.isArray(claimed) || claimed.length === 0) throw new AppError(409, 'This parcel is already being booked');
       const data = await rpc('shipment_booking_data', { p_shipment: s.id });
-      const record = bookingRecord({ awb_number: awb, status: tracked?.status ?? 'booked' }, buildPackage(data.items), null);
-      await rpc('record_booking', { p_shipment: s.id, p: { ...record, courier_name: s.courier_name, actor: user.id } });
-      await rpc('log_shipment_event', { p_shipment: s.id, p_order: s.order_id, p_actor: user.id, p_action: 'awb_linked', p_detail: `AWB ${awb} linked from the Xpressbees dashboard` });
+      const pkg = buildPackage(data.items);
+      const record = delhivery
+        ? delhiveryRecord({ waybill: awb, status: delhiveryStatusText(tracked?.Status) || 'Manifested' }, pkg, DELHIVERY_MODES[s.courier_id] ?? null)
+        : bookingRecord({ awb_number: awb, status: tracked?.status ?? 'booked' }, pkg, null);
+      await rpc('record_booking', { p_shipment: s.id, p: { ...record, courier_name: s.courier_name ?? record.courier_name, actor: user.id } });
+      await rpc('log_shipment_event', {
+        p_shipment: s.id,
+        p_order: s.order_id,
+        p_actor: user.id,
+        p_action: 'awb_linked',
+        p_detail: `AWB ${awb} linked from the ${delhivery ? 'Delhivery panel' : 'Xpressbees dashboard'}`,
+      });
       return { awb_number: awb };
+    },
+
+    // The label PDF: Xpressbees' is saved at booking; Delhivery's is made on request.
+    async label({ order_id, kind }) {
+      const s = (await select(db.from('shipments').select('*').eq('order_id', order_id).eq('kind', kind).neq('status', 'cancelled').order('created_at', { ascending: false }).limit(1)))[0];
+      if (!s?.awb_number) throw new AppError(404, 'This parcel is not booked yet');
+      if (s.carrier !== 'delhivery') {
+        if (!fileUrl(s.label_url)) throw new AppError(404, 'Xpressbees sent no label for this parcel');
+        return { url: s.label_url };
+      }
+      try {
+        return { url: await dl().label(s.awb_number) };
+      } catch (e) {
+        if (e instanceof CarrierError) throw new AppError(502, e.message);
+        throw e;
+      }
     },
 
     async cancel_shipment({ order_id }, { user }) {
       const s = (await select(db.from('shipments').select('*').eq('order_id', order_id).eq('kind', 'forward').eq('status', 'cancel_requested').limit(1)))[0];
       if (!s) throw new AppError(409, 'Only parcels of cancelled orders are cancelled here');
-      await cancelWithXpressbees(s, user.id);
+      await cancelWithCarrier(s, user.id);
       return { cancelled: true };
     },
 
+    // Xpressbees pickup manifest (PDF) for chosen orders. Delhivery has none: its parcels
+    // are collected through a pickup request (pickup_request).
     async manifest({ order_ids }) {
       const rows = await select(
-        db.from('shipments').select('awb_number, status').in('order_id', order_ids).eq('kind', 'forward').in('status', ['booked', 'in_transit']),
+        db.from('shipments').select('awb_number, status').in('order_id', order_ids).eq('kind', 'forward').eq('carrier', 'xpressbees').in('status', ['booked', 'in_transit']),
       );
       const awbs = rows.map((r) => r.awb_number).filter(Boolean);
-      if (awbs.length === 0) throw new AppError(400, 'None of those orders has a booked parcel');
+      if (awbs.length === 0) throw new AppError(400, 'None of those orders has a booked Xpressbees parcel');
       const url = fileUrl(await xb().manifest(awbs));
       if (!url) throw new AppError(502, 'Xpressbees did not return a manifest link');
       return { url, count: awbs.length };
     },
 
-    async ndr_list() {
-      const list = await xb().ndrList();
-      const awbs = list.map((r) => String(r?.awb_number ?? '')).filter((a) => /^[0-9A-Za-z]{6,30}$/.test(a));
-      if (awbs.length === 0) return { items: [] };
-      const ours = await select(db.from('shipments').select('order_id, awb_number, status').in('awb_number', awbs));
-      const orders = ours.length ? await select(db.from('orders').select('id, order_number, shipping_name').in('id', ours.map((s) => s.order_id))) : [];
-      const byAwb = new Map(ours.map((s) => [s.awb_number, s]));
-      const byOrder = new Map(orders.map((o) => [o.id, o]));
-      return {
-        items: list
-          .filter((r) => byAwb.has(String(r?.awb_number)))
-          .map((r) => {
-            const s = byAwb.get(String(r.awb_number));
-            const o = byOrder.get(s.order_id);
-            return {
-              awb: s.awb_number,
-              order_id: s.order_id,
-              order_number: o?.order_number ?? null,
-              customer: clean(o?.shipping_name, 80),
-              date: clean(r.event_date, 20),
-              remarks: clean(r.courier_remarks, 160),
-              attempts: Number.parseInt(r.total_attempts, 10) || 0,
-            };
-          }),
-      };
+    // Asks Delhivery to collect parcels from our registered warehouse.
+    async pickup_request({ date, time, count }, { user }) {
+      const st = await settings();
+      if (!st.delhivery_warehouse_name) throw new AppError(409, 'Set the Delhivery warehouse name in Admin > Shipping first');
+      let answer;
+      try {
+        answer = await dl().pickup({ date, time, location: st.delhivery_warehouse_name, count });
+      } catch (e) {
+        if (e instanceof CarrierError) throw new AppError(502, e.message);
+        throw e;
+      }
+      await rpc('log_shipment_event', {
+        p_shipment: null,
+        p_order: null,
+        p_actor: user.id,
+        p_action: 'pickup_requested',
+        p_detail: `Delhivery pickup ${answer.pickup_id} on ${date} at ${time} for ${count} parcel${count === 1 ? '' : 's'}`,
+      });
+      return { pickup_id: answer.pickup_id, date, time, count };
     },
 
-    async ndr_action({ items }, { user }) {
-      const ours = await select(db.from('shipments').select('id, order_id, awb_number').in('awb_number', items.map((i) => i.awb)));
-      if (ours.length !== items.length) throw new AppError(400, 'Some of those parcels are not ours');
-      const results = await xb().ndrCreate(items);
+    // Failed delivery attempts on both carriers. Xpressbees lists its own; for Delhivery
+    // they are our parcels whose latest tracking shows a failed attempt. A carrier that
+    // cannot be reached is named in `unavailable` instead of hiding the other's list.
+    async ndr_list() {
+      const items = [];
+      const unavailable = [];
+      let list = [];
+      try {
+        list = await xb().ndrList();
+      } catch (e) {
+        if (!(e instanceof CarrierError)) throw e;
+        unavailable.push('Xpressbees');
+      }
+      const awbs = list.map((r) => String(r?.awb_number ?? '')).filter((a) => /^[0-9A-Za-z]{6,30}$/.test(a));
+      const ours = awbs.length ? await select(db.from('shipments').select('order_id, awb_number, status').eq('carrier', 'xpressbees').in('awb_number', awbs)) : [];
+      const dlRows = await select(db.from('shipments').select('order_id, awb_number, status, history, updated_at').eq('carrier', 'delhivery').eq('kind', 'forward').eq('status', 'exception').limit(100));
+      const orderIds = [...new Set([...ours, ...dlRows].map((s) => s.order_id))];
+      const orders = orderIds.length ? await select(db.from('orders').select('id, order_number, shipping_name').in('id', orderIds)) : [];
       const byAwb = new Map(ours.map((s) => [s.awb_number, s]));
+      const byOrder = new Map(orders.map((o) => [o.id, o]));
+      for (const r of list.filter((x) => byAwb.has(String(x?.awb_number)))) {
+        const s = byAwb.get(String(r.awb_number));
+        const o = byOrder.get(s.order_id);
+        items.push({
+          carrier: 'xpressbees',
+          awb: s.awb_number,
+          order_id: s.order_id,
+          order_number: o?.order_number ?? null,
+          customer: clean(o?.shipping_name, 80),
+          date: clean(r.event_date, 20),
+          remarks: clean(r.courier_remarks, 160),
+          attempts: Number.parseInt(r.total_attempts, 10) || 0,
+        });
+      }
+      for (const s of dlRows) {
+        const o = byOrder.get(s.order_id);
+        const latest = Array.isArray(s.history) ? s.history[0] : null;
+        items.push({
+          carrier: 'delhivery',
+          awb: s.awb_number,
+          order_id: s.order_id,
+          order_number: o?.order_number ?? null,
+          customer: clean(o?.shipping_name, 80),
+          date: clean(latest?.at ?? s.updated_at, 20),
+          remarks: clean(latest?.message, 160),
+          attempts: null,
+        });
+      }
+      return { items, unavailable };
+    },
+
+    // Re-attempt (on a date), new address or new phone for failed deliveries, each sent
+    // to the parcel's own carrier. Delhivery takes these asynchronously: "sent" means it
+    // accepted the request.
+    async ndr_action({ items }, { user }) {
+      const ours = await select(db.from('shipments').select('id, order_id, awb_number, carrier').in('awb_number', items.map((i) => i.awb)));
+      if (ours.length !== items.length) throw new AppError(400, 'Some of those parcels are not ours');
+      const byAwb = new Map(ours.map((s) => [s.awb_number, s]));
+      const xbItems = items.filter((i) => byAwb.get(i.awb).carrier !== 'delhivery');
+      const dlItems = items.filter((i) => byAwb.get(i.awb).carrier === 'delhivery');
+      const results = xbItems.length ? await xb().ndrCreate(xbItems) : [];
+      if (dlItems.length) {
+        const today = indiaDateTime(now()).slice(0, 10);
+        const data = dlItems.map((i) => {
+          if (i.action === 're-attempt') {
+            return i.action_data.re_attempt_date > today
+              ? { waybill: i.awb, act: 'DEFER_DLV', action_data: { deferred_date: i.action_data.re_attempt_date } }
+              : { waybill: i.awb, act: 'RE-ATTEMPT' };
+          }
+          if (i.action === 'change_address') {
+            return { waybill: i.awb, act: 'EDIT_DETAILS', action_data: { name: i.action_data.name, add: [i.action_data.address_1, i.action_data.address_2].filter(Boolean).join(', ') } };
+          }
+          return { waybill: i.awb, act: 'EDIT_DETAILS', action_data: { phone: i.action_data.phone } };
+        });
+        try {
+          const { request_id } = await dl().ndr(data);
+          for (const i of dlItems) results.push({ awb: i.awb, ok: true, message: `Sent to Delhivery (request ${request_id})` });
+        } catch (e) {
+          if (!(e instanceof CarrierError)) throw e;
+          for (const i of dlItems) results.push({ awb: i.awb, ok: false, message: e.message });
+        }
+      }
       for (const r of results) {
         const s = byAwb.get(r.awb);
         if (s) await rpc('log_shipment_event', { p_shipment: s.id, p_order: s.order_id, p_actor: user.id, p_action: r.ok ? 'ndr_submitted' : 'ndr_refused', p_detail: r.message });
@@ -449,29 +745,67 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
       return { results: results.filter((r) => byAwb.has(r.awb)) };
     },
 
+    // A return pickup goes with the carrier that delivered the order.
     async return_pickup({ order_id }, { user }) {
-      const id = await rpc('create_return_shipment', { p_order: order_id, p_actor: user.id });
+      const forward = (await select(db.from('shipments').select('carrier').eq('order_id', order_id).eq('kind', 'forward').neq('status', 'cancelled').limit(1)))[0];
+      const carrier = forward?.carrier === 'delhivery' ? 'delhivery' : 'xpressbees';
+      const id = await rpc('create_return_shipment', { p_order: order_id, p_actor: user.id, p_carrier: carrier });
       try {
         const data = await rpc('shipment_booking_data', { p_shipment: id });
         const pkg = buildPackage(data.items);
-        const answer = await xb().bookReturn(returnPayload(data, pkg));
-        const record = bookingRecord(answer, pkg, null);
-        if (!record) throw new XpressbeesError('Xpressbees answered without an AWB number');
+        let record;
+        if (carrier === 'delhivery') {
+          if (!data.settings.delhivery_warehouse_name) throw new DelhiveryError('Set the Delhivery warehouse name in Admin > Shipping first');
+          let answer;
+          try {
+            answer = await dl().book(delhiveryReturnPayload(data, pkg, now()));
+          } catch (e) {
+            if (e instanceof CarrierError && e.uncertain) {
+              e.message = `${e.message}. Delhivery may have booked it anyway: check the Delhivery panel for KAK-${data.order.order_number}-R before asking again.`.slice(0, 300);
+            }
+            throw e;
+          }
+          record = delhiveryRecord(answer, pkg, { id: 'surface', name: 'Delhivery Reverse' });
+          if (record) Object.assign(record, { freight_charges: null, cod_charges: null, total_charges: null });
+          if (!record) throw new DelhiveryError('Delhivery answered without an AWB number');
+        } else {
+          const answer = await xb().bookReturn(returnPayload(data, pkg));
+          record = bookingRecord(answer, pkg, null);
+          if (!record) throw new XpressbeesError('Xpressbees answered without an AWB number');
+        }
         await rpc('record_booking', { p_shipment: id, p: { ...record, actor: user.id } });
         return { awb_number: record.awb_number };
       } catch (e) {
         // Leave nothing half-made: the return can simply be requested again.
-        await rpc('record_cancelled', { p_shipment: id, p_actor: user.id, p_detail: e instanceof XpressbeesError ? e.message : 'Internal error' });
-        if (e instanceof XpressbeesError) throw new AppError(502, e.message);
+        await rpc('record_cancelled', { p_shipment: id, p_actor: user.id, p_detail: e instanceof CarrierError ? e.message : 'Internal error' });
+        if (e instanceof CarrierError) throw new AppError(502, e.message);
         throw e;
       }
     },
 
     async run_job({ job }) {
-      // Connection check: logs in (if needed) and lists couriers. Free, books nothing.
+      // Connection check for both carriers. Free, books nothing: Xpressbees logs in (if
+      // needed) and lists couriers; Delhivery looks up our pickup PIN code.
       if (job === 'health') {
-        const couriers = await xb().couriers();
-        return { connected: true, couriers: couriers.length };
+        const out = { connected: false, couriers: 0, delhivery: { configured: delhiveryReady(), connected: false } };
+        try {
+          out.couriers = (await xb().couriers()).length;
+          out.connected = true;
+        } catch (e) {
+          if (!(e instanceof CarrierError)) throw e;
+          out.error = e.message;
+        }
+        if (out.delhivery.configured) {
+          try {
+            const st = await settings();
+            const pin = await dl().pincode(st.pickup_pincode);
+            out.delhivery = { configured: true, connected: true, pickup_served: pin.pickup, warehouse_set: Boolean(st.delhivery_warehouse_name) };
+          } catch (e) {
+            if (!(e instanceof CarrierError)) throw e;
+            out.delhivery.error = e.message;
+          }
+        }
+        return out;
       }
       if (job === 'book_due') {
         const due = (await rpc('claim_due_shipments', { p_limit: LIMITS.bookBatch })) ?? [];
@@ -486,9 +820,9 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
           // A parcel still mid-booking gets its AWB first (or is picked up again later).
           if (!s.awb_number && now() - new Date(s.updated_at) < 15 * 60000) continue;
           try {
-            if (await cancelWithXpressbees(s)) done += 1;
+            if (await cancelWithCarrier(s)) done += 1;
           } catch (e) {
-            if (!(e instanceof XpressbeesError)) throw e;
+            if (!(e instanceof CarrierError)) throw e;
           }
         }
         return { pending: rows.length, cancelled: done };
@@ -501,7 +835,7 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
           await refreshTracking(s);
           updated += 1;
         } catch (e) {
-          if (!(e instanceof XpressbeesError)) throw e;
+          if (!(e instanceof CarrierError)) throw e;
         }
       }
       return { checked: rows.length, updated };
@@ -576,8 +910,8 @@ export function createHandler({ db, makeXpressbees, cronSecret, allowedOrigins, 
         log.info(JSON.stringify({ ref, action, ok: false, status: e.status }));
         return fail(e.status, e.message);
       }
-      if (e instanceof XpressbeesError) {
-        log.warn(JSON.stringify({ ref, action, ok: false, xb: e.message.slice(0, 120) }));
+      if (e instanceof CarrierError) {
+        log.warn(JSON.stringify({ ref, action, ok: false, carrier: e.message.slice(0, 120) }));
         return fail(502, 'The shipping service is not responding right now. Try again shortly.');
       }
       if (e?.db?.hint === 'no_warehouse') return fail(409, e.db.message);

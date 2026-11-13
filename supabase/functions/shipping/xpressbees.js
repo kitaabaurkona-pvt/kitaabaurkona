@@ -1,23 +1,15 @@
-import { clean } from './text.js';
+import { CarrierError } from './carrier.js';
+import { cleanMessage, redact } from './text.js';
 
 // Client for the Xpressbees Custom API (shipment.xpressbees.com).
 // Sends requests to one fixed host only, times out after 15 s, keeps the session token in
 // the database (service role only) and logs in again once if Xpressbees says it expired.
 // Never logs the password, the token or customer details.
 
-export class XpressbeesError extends Error {
-  // retryable: a later attempt may work (network, timeout, 5xx, 429).
-  // reason: Xpressbees' own words, without our prefix ('' when it gave none).
-  // afterSend: the request itself may have reached Xpressbees.
-  // uncertain: a booking whose outcome is unknown; Xpressbees may have booked it.
-  constructor(message, { status = 0, retryable = false, reason = '', afterSend = false, uncertain = false } = {}) {
-    super(message);
+export class XpressbeesError extends CarrierError {
+  constructor(message, options) {
+    super(message, options);
     this.name = 'XpressbeesError';
-    this.status = status;
-    this.retryable = retryable;
-    this.reason = reason;
-    this.afterSend = afterSend;
-    this.uncertain = uncertain;
   }
 }
 
@@ -33,14 +25,9 @@ export function tokenExpiry(token, now = Date.now()) {
   return new Date(now + 2 * 3600000);
 }
 
-// Xpressbees messages can echo request data: phone numbers and email addresses are
-// blanked, and the text is kept short and on one line.
-export function redact(value) {
-  return String(value ?? '')
-    .replace(/(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{9}(?!\d)/g, '[phone]')
-    .replace(/[^\s@<>"]+@[^\s@<>"]+\.[a-z]{2,}/gi, '[email]');
-}
-export const cleanMessage = (value) => clean(redact(value), 200);
+// Xpressbees messages can echo request data: redact() and cleanMessage() (text.js) blank
+// phone numbers and email addresses and keep the text short and on one line.
+export { cleanMessage, redact };
 
 // Everything readable in an answer, whatever its shape: { message }, { error },
 // Laravel-style { errors: { field: ["…"] } }, { data: "…" } or an HTML error page.
