@@ -24,7 +24,4 @@ our main website for kitaabaurkona
 3. When the owner says to ship: run lint, build and the browser tests, then move `main` to
    exactly what is on `test` (`git push origin test:main`, a fast-forward). Vercel deploys
    the live store.
-4. Database changes (`supabase/schema.sql`) and Edge Function deploys are applied to the
-   one shared Supabase project only with the owner's go, since both sites use it.
-
-Never commit `.env*` files; keys live in Vercel and Supabase settings.
+4. Database changes (`supabase/schema.sql`)
