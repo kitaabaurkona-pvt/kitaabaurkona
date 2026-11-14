@@ -2672,6 +2672,65 @@
   flex: none;
 }
 
+/* Order now checkout: the rest of the cart, each book one tap from joining the order. */
+.checkout-line-action {
+  color: var(--c-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.checkout-lines .checkout-line-action {
+  display: block;
+  margin-top: 2px;
+}
+
+.checkout-more {
+  padding-top: 12px;
+  border-top: 1px solid var(--c-line);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.checkout-more-title {
+  margin: 0 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.checkout-more ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout-more li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 16px;
+}
+
+.checkout-more-name {
+  min-width: 0;
+  color: var(--c-muted);
+  overflow-wrap: anywhere;
+}
+
+.checkout-more-price {
+  font-weight: 500;
+}
+
+.checkout-more .checkout-line-action {
+  justify-self: start;
+}
+
+@media (hover: hover) {
+  .checkout-line-action:hover {
+    color: var(--c-ink);
+  }
+}
+
 /* ---------- Forms, panels ---------- */
 
 .form-grid {

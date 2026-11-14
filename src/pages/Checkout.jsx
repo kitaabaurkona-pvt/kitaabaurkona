@@ -1,7 +1,7 @@
 import { previewMode } from '../preview/mode';
 import PreviewCheckout from '../preview/PreviewCheckout';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useCart } from '../hooks/useCart';
 import { useCartLines } from '../hooks/useCartLines';
@@ -65,9 +65,11 @@ const PIN_MESSAGES = {
   unknown: "Couldn't check delivery right now. You can still place the order.",
 };
 
-function CheckoutForm({ initial, lines, totals }) {
+// `others` are books in the cart that are not part of this order (an "Order now"
+// checkout starts with one book); `onInclude` / `onExclude` move them in and out.
+function CheckoutForm({ initial, lines, totals, others = [], removable = [], onInclude, onExclude, wholeCart }) {
   const navigate = useNavigate();
-  const { clear } = useCart();
+  const { clear, remove } = useCart();
   const [form, setForm] = useState(initial);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
@@ -104,7 +106,9 @@ function CheckoutForm({ initial, lines, totals }) {
         shipping,
         'cod',
       );
-      clear();
+      // Only what was ordered leaves the cart.
+      if (wholeCart) clear();
+      else lines.forEach((line) => remove(line.id));
       navigate(`/orders/${orderId}`, { replace: true, state: { placed: true } });
     } catch (err) {
       busy.current = false;
@@ -174,11 +178,34 @@ function CheckoutForm({ initial, lines, totals }) {
               <div key={line.id}>
                 <dt>
                   {line.book.title} × {line.quantity}
+                  {removable.includes(line.id) && (
+                    <button type="button" className="btn-link checkout-line-action" onClick={() => onExclude(line.id)} aria-label={`Remove ${line.book.title} from this order`}>
+                      Remove
+                    </button>
+                  )}
                 </dt>
                 <dd>{formatPrice(Number(line.book.price) * line.quantity)}</dd>
               </div>
             ))}
           </dl>
+          {others.length > 0 && (
+            <div className="checkout-more">
+              <h3 className="checkout-more-title">Also in your cart</h3>
+              <ul>
+                {others.map((line) => (
+                  <li key={line.id}>
+                    <span className="checkout-more-name">
+                      {line.book.title} × {line.quantity}
+                    </span>
+                    <span className="checkout-more-price">{formatPrice(Number(line.book.price) * line.quantity)}</span>
+                    <button type="button" className="btn-link checkout-line-action" onClick={() => onInclude(line.id)} aria-label={`Add ${line.book.title} to this order`}>
+                      Add to this order
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {error && !error.field && (
             <p className="notice" data-tone="error" role="alert">
               {error.message}
@@ -204,6 +231,29 @@ function Checkout() {
   const cart = useCartLines();
   const profile = useAsync(() => getProfile(user.id), [user.id]);
   const { retry: refreshCart } = cart;
+  // "Order now" opens /checkout?buy=<book id>: the order is that book alone, plus any
+  // other cart books the shopper adds here. Without it (or if that book is no longer in
+  // the cart) checkout is for the whole cart.
+  const [params] = useSearchParams();
+  const buyParam = params.get('buy');
+  const buyId = buyParam && ids.includes(buyParam) ? buyParam : null;
+  const [included, setIncluded] = useState([]);
+  const inOrder = (line) => !buyId || line.id === buyId || included.includes(line.id);
+  const lines = cart.lines.filter(inOrder);
+  const others = cart.lines.filter((line) => !inOrder(line) && line.available);
+  const totals = buyId
+    ? lines
+        .filter((line) => line.available)
+        .reduce(
+          (sum, line) => ({
+            count: sum.count + line.quantity,
+            subtotal: sum.subtotal + Number(line.book.price) * line.quantity,
+            mrp: sum.mrp + Number(line.book.mrp) * line.quantity,
+          }),
+          { count: 0, subtotal: 0, mrp: 0 },
+        )
+    : cart.totals;
+  const blocked = lines.some((line) => !line.available && !line.pending);
 
   // Checkout always starts from freshly read prices and stock.
   useEffect(() => {
@@ -223,7 +273,7 @@ function Checkout() {
     content = <LinesSkeleton count={3} label="Preparing checkout…" />;
   } else if (cart.error) {
     content = <LoadError onRetry={cart.retry} what="your cart" />;
-  } else if (cart.blocked || cart.totals.count === 0) {
+  } else if (blocked || totals.count === 0) {
     content = (
       <StateBlock title="Some books in your cart are no longer available.">
         <Link to="/cart" className="btn btn-dark">
@@ -236,8 +286,13 @@ function Checkout() {
     content = (
       <CheckoutForm
         initial={{ name: p.full_name ?? '', phone: p.phone ?? '', address: p.address ?? '', city: '', state: '', pincode: '' }}
-        lines={cart.lines}
-        totals={cart.totals}
+        lines={lines}
+        totals={totals}
+        others={others}
+        removable={buyId ? included : []}
+        onInclude={(id) => setIncluded((current) => [...current, id])}
+        onExclude={(id) => setIncluded((current) => current.filter((other) => other !== id))}
+        wholeCart={!buyId}
       />
     );
   }

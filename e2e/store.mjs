@@ -875,6 +875,12 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await sleep(400);
     await page.screenshot({ path: path.join(SHOTS, 'account-dark-1280.png'), fullPage: true });
     const orderBook = await one(`select id from public.books where is_visible and stock_quantity > 2 order by id desc limit 1`);
+    // Another book is already in the cart: Order now must not pull it into the order.
+    const cartBook = await one(`select id, title from public.books where is_visible and stock_quantity > 2 and id <> $1 order by id asc limit 1`, [orderBook.id]);
+    await goto(page, `/books/${cartBook.id}`);
+    await waitSel(page, '.buy-stack .btn-outline');
+    await page.$eval('.buy-stack .btn-outline', (b) => b.click());
+    await waitCart(page, 1, 4000);
     await goto(page, `/books/${orderBook.id}`);
     await waitSel(page, '.buy-stack .order-now');
     await page.click('.buy-stack .order-now');
@@ -882,6 +888,34 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     const orderTitle = (await one(`select title from public.books where id = $1`, [orderBook.id])).title.split(' by ')[0].slice(0, 20);
     const onCheckout = await page.waitForFunction((t) => location.pathname === '/checkout' && document.querySelector('main')?.innerText.includes(t), { timeout: 6000 }, orderTitle).then(() => true).catch(() => false);
     check('Order now: a signed-in shopper lands on checkout with the book in the order', onCheckout, orderTitle);
+    const cartTitle = cartBook.title.slice(0, 20);
+    const orderRows = () => page.$$eval('.checkout-lines > div', (rows) => rows.map((r) => r.innerText));
+    const moreRows = () => page.$$eval('.checkout-more li', (rows) => rows.map((r) => r.innerText));
+    await waitSel(page, '.checkout-more li');
+    let rows = await orderRows();
+    check('Order now: the order holds only the book ordered', rows.length === 1 && rows[0].includes(orderTitle) && !rows[0].includes(cartTitle), JSON.stringify(rows));
+    check('Order now: the other cart book is offered under "Also in your cart"', (await moreRows()).some((r) => r.includes(cartTitle)));
+    check('Order now: the summary counts one item', /Items\s*1(?!\d)/.test(await text(page, '.summary-rows')));
+    await page.click('.checkout-more li button');
+    await page.waitForFunction(() => document.querySelectorAll('.checkout-lines > div').length === 2, { timeout: 3000 }).catch(() => {});
+    rows = await orderRows();
+    check('Order now: "Add to this order" brings the cart book in', rows.length === 2 && rows.some((r) => r.includes(cartTitle)) && (await page.$('.checkout-more')) === null && /Items\s*2(?!\d)/.test(await text(page, '.summary-rows')), JSON.stringify(rows));
+    await page.click('.checkout-lines button');
+    await page.waitForFunction(() => document.querySelectorAll('.checkout-lines > div').length === 1, { timeout: 3000 }).catch(() => {});
+    check('Order now: Remove takes it back out of the order', (await orderRows()).length === 1 && (await moreRows()).length === 1);
+    check('Order now: checkout does not scroll sideways', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    await page.type('#ship-city', 'Udaipur');
+    await page.select('#ship-state', 'Rajasthan');
+    await page.type('#ship-pincode', '313001');
+    await waitSel(page, '.pin-check[data-state="ok"]', 6000);
+    await page.screenshot({ path: path.join(SHOTS, 'checkout-order-now-light-1280.png'), fullPage: true });
+    const ordersBefore = (await one('select count(*)::int as n from public.orders')).n;
+    await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Place order/.test(b.textContent))?.click());
+    await page.waitForFunction(() => /^\/orders\//.test(location.pathname), { timeout: 8000 }).catch(() => {});
+    const buyOrderId = new URL(page.url()).pathname.split('/').pop();
+    const buyItems = (await one(`select count(*)::int as n, min(book_id::text) as book from public.order_items where order_id = $1`, [buyOrderId]).catch(() => null)) ?? {};
+    check('Order now: the order saved has only that book', (await one('select count(*)::int as n from public.orders')).n === ordersBefore + 1 && buyItems.n === 1 && buyItems.book === String(orderBook.id), JSON.stringify(buyItems));
+    check('Order now: the other book stays in the cart after ordering', await waitCart(page, 1, 4000));
     check('signed-in flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }

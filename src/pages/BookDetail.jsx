@@ -46,12 +46,12 @@ function BookView({ book }) {
   const inStock = book.stock_quantity > 0;
 
   // Order now: the book goes into the cart (once; never a second copy if it is already
-  // there) and the shopper goes straight to checkout. Signed-out shoppers sign in first
-  // and come back to checkout.
+  // there) and the shopper goes straight to a checkout for this book alone; the rest of
+  // the cart can be added there. Signed-out shoppers sign in first and come back to it.
   function orderNow() {
     if (!inStock) return;
     if (quantityOf(book.id) === 0) add(book.id, 1, limit);
-    navigate('/checkout');
+    navigate(`/checkout?buy=${book.id}`);
   }
 
   return (
