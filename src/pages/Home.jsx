@@ -7,7 +7,6 @@ import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { categoryHref, underPriceHref } from '../utils/categories';
 import { featuredIds } from '../utils/featuredBooks';
-import { bookDisplay } from '../utils/bookDisplay';
 import { LoadError } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
 import BookCard from '../components/store/BookCard';
@@ -18,25 +17,29 @@ const genres = [
   {name:'Self-help', category:'Self-Help', mood:'A little room to grow', Icon:Plant},
   {name:'Manga', category:'Comics & Manga', mood:'A whole new world', Icon:Books},
 ];
-const heroImages = ['/images/hero-dawn-of-onyx.webp','/images/hero-everything-about-love.webp','/images/hero-heartstopper.webp'];
-const heroIds = ['e3f2ead5-b9e1-462a-8b47-7e868375f002','fd249dd4-5f1c-43fa-8052-dab6cf224bbc','6b811028-74fe-45aa-972d-46f3af1a3b46'];
+// The three covers in the hero are picture files on the site itself, so they are shown
+// the moment the page opens instead of waiting for the catalogue. Titles are the books'
+// own (used as the pictures' descriptions); update them here if a book is renamed.
+const heroBooks = [
+  { id: 'e3f2ead5-b9e1-462a-8b47-7e868375f002', title: 'A Dawn of Onyx', cover: '/images/hero-dawn-of-onyx.webp' },
+  { id: 'fd249dd4-5f1c-43fa-8052-dab6cf224bbc', title: 'Everything I Know About Love', cover: '/images/hero-everything-about-love.webp' },
+  { id: '6b811028-74fe-45aa-972d-46f3af1a3b46', title: 'Heartstopper: Volume 5', cover: '/images/hero-heartstopper.webp' },
+];
+// One request brings the shelf's books and tells whether the hero's books are still sold.
+const homeIds = [...new Set([...featuredIds, ...heroBooks.map((book) => book.id)])];
 export default function Home() {
   useDocumentTitle('Find your next favourite.');
   // Kept for the visit (useAsync keys), so coming back to the home page shows it at once.
-  const featured = useAsync(() => getBooksByIds(featuredIds), [], { key: 'home:featured' });
-  const hero = useAsync(() => getBooksByIds(heroIds), [], { key: 'home:hero' });
+  const featured = useAsync(() => getBooksByIds(homeIds), [], { key: 'home:books' });
   const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4 }), [], { key: 'home:affordable' });
   return <div className="reading-home container">
     <section className="bento-hero" aria-labelledby="hero-title">
       <div className="bento-main">
         <div className="bento-main-copy"><p className="eyebrow"><BookOpen size={17}/> Your little reading corner</p><h1 id="hero-title">What’s your <span>next read?</span></h1><p className="hero-description">Browse by genre or discover a new favourite.</p><Link to="/books?stock=1" className="btn btn-primary hero-cta">Browse books <ArrowUpRight size={20}/></Link></div>
         <div className="hero-books" aria-label="A few stories to discover">
-          {heroIds.map((id, index) => {
-            const book = hero.data?.find(item => item.id === id);
-            if (!book) return null;
-
-            const { title } = bookDisplay(book);
-            const cover = heroImages[index];
+          {heroBooks.map(({ id, title, cover }, index) => {
+            // A book that is no longer sold is taken out once the catalogue has answered.
+            if (featured.data && !featured.data.some(item => item.id === id)) return null;
             return (
               <Link key={id} to={`/books/${id}`} className={`hero-book hero-book-${index + 1}`} aria-label={`Explore ${title}`}>
                 <img
@@ -50,8 +53,6 @@ export default function Home() {
               </Link>
             );
           })}
-          {hero.loading && <p className="hero-loading" role="status">Finding your next read…</p>}
-          {hero.error && <p className="hero-loading">Your next story is on the shelf below.</p>}
         </div>
       </div>
       <Link className="bento-small bento-budget" to={underPriceHref}><span className="feature-kicker">Read within your budget</span><h2>Books under ₹300</h2><span className="feature-link">See the books <ArrowUpRight size={21}/></span><BookOpen className="feature-icon" size={72} weight="light" aria-hidden="true"/></Link>

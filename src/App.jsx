@@ -1,4 +1,4 @@
-import { lazy } from 'react';
+import { lazyPage } from './utils/lazyPage';
 import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -9,28 +9,28 @@ import SignUp from './pages/SignUp';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import Home from './pages/Home';
-const Books = lazy(() => import('./pages/Books'));
-const BookDetail = lazy(() => import('./pages/BookDetail'));
-const Offers = lazy(() => import('./pages/Offers'));
-const Cart = lazy(() => import('./pages/Cart'));
-const Checkout = lazy(() => import('./pages/Checkout'));
-const Orders = lazy(() => import('./pages/Orders'));
-const OrderDetail = lazy(() => import('./pages/OrderDetail'));
-const Wishlist = lazy(() => import('./pages/Wishlist'));
-const Account = lazy(() => import('./pages/Account'));
-const Forbidden = lazy(() => import('./pages/Forbidden'));
-const NotFound = lazy(() => import('./pages/NotFound'));
+const Books = lazyPage(() => import('./pages/Books'));
+const BookDetail = lazyPage(() => import('./pages/BookDetail'));
+const Offers = lazyPage(() => import('./pages/Offers'));
+const Cart = lazyPage(() => import('./pages/Cart'));
+const Checkout = lazyPage(() => import('./pages/Checkout'));
+const Orders = lazyPage(() => import('./pages/Orders'));
+const OrderDetail = lazyPage(() => import('./pages/OrderDetail'));
+const Wishlist = lazyPage(() => import('./pages/Wishlist'));
+const Account = lazyPage(() => import('./pages/Account'));
+const Forbidden = lazyPage(() => import('./pages/Forbidden'));
+const NotFound = lazyPage(() => import('./pages/NotFound'));
 
 // Pages most shoppers never open are split into their own files and loaded on demand.
-const Settings = lazy(() => import('./pages/Settings'));
-const Terms = lazy(() => import('./pages/Terms'));
-const PolicyPage = lazy(() => import('./pages/PolicyPage'));
-const AdminLayout = lazy(() => import('./pages/admin/AdminLayout'));
-const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
-const AdminBooks = lazy(() => import('./pages/admin/AdminBooks'));
-const AdminOrders = lazy(() => import('./pages/admin/AdminOrders'));
-const BulkUpload = lazy(() => import('./pages/admin/BulkUpload'));
-const AdminShipping = lazy(() => import('./pages/admin/AdminShipping'));
+const Settings = lazyPage(() => import('./pages/Settings'));
+const Terms = lazyPage(() => import('./pages/Terms'));
+const PolicyPage = lazyPage(() => import('./pages/PolicyPage'));
+const AdminLayout = lazyPage(() => import('./pages/admin/AdminLayout'));
+const AdminDashboard = lazyPage(() => import('./pages/admin/AdminDashboard'));
+const AdminBooks = lazyPage(() => import('./pages/admin/AdminBooks'));
+const AdminOrders = lazyPage(() => import('./pages/admin/AdminOrders'));
+const BulkUpload = lazyPage(() => import('./pages/admin/BulkUpload'));
+const AdminShipping = lazyPage(() => import('./pages/admin/AdminShipping'));
 
 function LegacyBookRedirect() {
   const { id } = useParams();

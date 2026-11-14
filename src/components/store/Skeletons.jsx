@@ -130,9 +130,11 @@ export function CirclesSkeleton({ count = 5 }) {
   );
 }
 
+// As tall as the screen, so the footer starts below it and does not jump down when the
+// real page arrives.
 export function PageSkeleton() {
   return (
-    <div className="container page">
+    <div className="container page" style={{ minHeight: '100vh' }}>
       <LoadingLabel label="Loading page…" />
       <div aria-hidden="true">
         <span className="skeleton" style={{ height: 40, width: 220 }} />

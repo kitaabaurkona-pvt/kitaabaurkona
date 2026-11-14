@@ -5,6 +5,7 @@ import SiteHeader from './SiteHeader';
 import SiteFooter from './SiteFooter';
 import FloatingCart from './FloatingCart';
 import { PageSkeleton } from '../store/Skeletons';
+import ErrorBoundary from '../ErrorBoundary';
 import CartPanel from '../cart/CartPanel';
 import { useScrollMemory } from '../../hooks/useScrollMemory';
 import { useReduceMotion } from '../../hooks/useReduceMotion';
@@ -29,9 +30,13 @@ function Layout() {
       <main id="main" className="site-main" tabIndex={-1}>
         {/* A short fade as each page comes in (none with Reduce animations). */}
         <motion.div key={pathname} initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: 'linear' }}>
-          <Suspense fallback={<PageSkeleton />}>
-            <Outlet />
-          </Suspense>
+          {/* A page that cannot be drawn or loaded shows a message here; the header,
+              footer and every other page keep working. */}
+          <ErrorBoundary>
+            <Suspense fallback={<PageSkeleton />}>
+              <Outlet />
+            </Suspense>
+          </ErrorBoundary>
         </motion.div>
       </main>
       {pathname === '/checkout' ? (

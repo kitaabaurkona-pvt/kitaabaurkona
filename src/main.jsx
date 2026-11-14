@@ -6,6 +6,8 @@ import '@fontsource-variable/bricolage-grotesque';
 import './index.css';
 import { captureAuthRedirectError } from './utils/authRedirect';
 import { homeOrigin } from './utils/release';
+import { reloadOnce } from './utils/lazyPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import { PreferencesProvider } from './context/PreferencesContext';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
@@ -17,6 +19,12 @@ import App from './App.jsx';
 function start() {
   captureAuthRedirectError();
 
+  // A page's files could not be fetched, usually because a new version of the site was
+  // released while this tab was open: reload once to get the current version.
+  window.addEventListener('vite:preloadError', (event) => {
+    if (reloadOnce()) event.preventDefault();
+  });
+
   createRoot(document.getElementById('root')).render(
     <StrictMode>
       <BrowserRouter>
@@ -26,7 +34,9 @@ function start() {
               <CartLinesProvider>
                 <WishlistProvider>
                   <ToastProvider>
-                    <App />
+                    <ErrorBoundary>
+                      <App />
+                    </ErrorBoundary>
                   </ToastProvider>
                 </WishlistProvider>
               </CartLinesProvider>

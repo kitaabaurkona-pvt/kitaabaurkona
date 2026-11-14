@@ -59,7 +59,7 @@ function BookGallery({ images, title, discount = 0 }) {
         >
           {photos.map((src, index) => (
             <div key={src ?? 'none'} className="gallery-slide" data-active={index === active || undefined} aria-hidden={(many && index !== active) || undefined}>
-              <BookCover src={src} title={title} eager={index === 0} />
+              <BookCover src={src} title={title} eager={index === 0} full />
             </div>
           ))}
         </div>
