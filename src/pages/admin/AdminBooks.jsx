@@ -1,129 +1,64 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { adminErrorMessage, adminListBooks, adminListCategories, adminUpdateBook, ADMIN_PAGE_SIZE } from '../../services/adminService';
-import { LIVE_ORIGIN } from '../../utils/release';
+import { Books, MagnifyingGlass, Plus, UploadSimple } from '@phosphor-icons/react';
+import { adminErrorMessage, adminListBooks, adminUpdateBook, ADMIN_PAGE_SIZE } from '../../services/adminService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useToast } from '../../hooks/useToast';
-import { coverOf, formatPrice, plural } from '../../utils/format';
-import { cleanText, parseAmount } from '../../utils/catalogueSanitizer';
-import BookCover from '../../components/store/BookCover';
+import { coverOf, plural } from '../../utils/format';
+import { parseAmount } from '../../utils/catalogueSanitizer';
 import { LoadError, StateBlock } from '../../components/store/States';
 import { LinesSkeleton } from '../../components/store/Skeletons';
+import PageHead from '../../components/admin/PageHead';
 
 const FILTERS = [
   ['all', 'All'],
+  ['visible', 'In the store'],
   ['hidden', 'Hidden'],
   ['out', 'Out of stock'],
   ['low', 'Low stock'],
+  ['nophoto', 'No photo'],
 ];
 
-function validate(form) {
-  const price = parseAmount(form.price);
-  const mrp = parseAmount(form.mrp);
-  const stock = parseAmount(form.stock_quantity);
-  if (price.empty || price.invalid) return 'Enter a valid selling price.';
-  if (mrp.empty || mrp.invalid) return 'Enter a valid MRP.';
-  if (price.value > mrp.value) return 'The selling price cannot be higher than the MRP.';
-  if (stock.empty || stock.invalid || !Number.isInteger(stock.value)) return 'Stock must be a whole number.';
-  const category = cleanText(form.category).slice(0, 100);
+const QUICK_FIELDS = ['price', 'mrp', 'stock_quantity', 'is_visible'];
+const draftOf = (book) => ({ price: String(book.price), mrp: String(book.mrp), stock_quantity: String(book.stock_quantity), is_visible: book.is_visible });
+
+// Checks one row's quick edit. Returns the changes to save, or a message.
+function checkDraft(draft, title) {
+  const price = parseAmount(draft.price);
+  const mrp = parseAmount(draft.mrp);
+  const stock = parseAmount(draft.stock_quantity);
+  if (price.empty || price.invalid) return `${title}: enter a valid selling price.`;
+  if (mrp.empty || mrp.invalid) return `${title}: enter a valid MRP.`;
+  if (price.value > mrp.value) return `${title}: the selling price cannot be more than the MRP.`;
+  if (stock.empty || stock.invalid || !Number.isInteger(stock.value)) return `${title}: stock must be a whole number.`;
   return {
     price: Math.round(price.value * 100) / 100,
     mrp: Math.round(mrp.value * 100) / 100,
     stock_quantity: stock.value,
-    is_visible: form.is_visible,
-    category: category || null,
+    is_visible: draft.is_visible,
   };
 }
 
-function EditBook({ book, categories, onSaved, onCancel }) {
-  const [form, setForm] = useState({
-    price: String(book.price),
-    mrp: String(book.mrp),
-    stock_quantity: String(book.stock_quantity),
-    is_visible: book.is_visible,
-    category: book.category ?? '',
-  });
-  const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const busy = useRef(false);
-  const set = (key) => (event) => setForm((c) => ({ ...c, [key]: event.target.value }));
-  const base = `edit-${book.id}`;
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    if (busy.current) return;
-    const patch = validate(form);
-    if (typeof patch === 'string') {
-      setError(patch);
-      return;
-    }
-    busy.current = true;
-    setSaving(true);
-    setError(null);
-    try {
-      onSaved(await adminUpdateBook(book.id, patch));
-    } catch (err) {
-      busy.current = false;
-      setSaving(false);
-      setError(adminErrorMessage(err));
-    }
-  }
-
-  return (
-    <form className="admin-edit" onSubmit={handleSubmit} noValidate aria-label={`Edit ${book.title}`}>
-      <div className="form-grid admin-edit-fields">
-        <div>
-          <label className="label" htmlFor={`${base}-price`}>Selling price (₹)</label>
-          <input id={`${base}-price`} className="input" inputMode="decimal" value={form.price} onChange={set('price')} />
-        </div>
-        <div>
-          <label className="label" htmlFor={`${base}-mrp`}>MRP (₹)</label>
-          <input id={`${base}-mrp`} className="input" inputMode="decimal" value={form.mrp} onChange={set('mrp')} />
-        </div>
-        <div>
-          <label className="label" htmlFor={`${base}-stock`}>Stock</label>
-          <input id={`${base}-stock`} className="input" inputMode="numeric" value={form.stock_quantity} onChange={set('stock_quantity')} />
-        </div>
-        <div className="span-2">
-          <label className="label" htmlFor={`${base}-category`}>Category</label>
-          <input id={`${base}-category`} className="input" list="admin-categories" maxLength={100} placeholder="For example Fiction" value={form.category} onChange={set('category')} />
-          <datalist id="admin-categories">
-            {categories.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        </div>
-        <label className="check-row" htmlFor={`${base}-visible`}>
-          <input id={`${base}-visible`} type="checkbox" checked={form.is_visible} onChange={(e) => setForm((c) => ({ ...c, is_visible: e.target.checked }))} />
-          Visible in the store
-        </label>
-      </div>
-      {error && <p className="notice" data-tone="error" role="alert">{error}</p>}
-      <div className="inline-actions">
-        <button type="submit" className="btn btn-primary btn-sm" aria-busy={saving} aria-disabled={saving || undefined}>
-          {saving && <span className="spinner" aria-hidden="true" />}
-          {saving ? 'Saving…' : 'Save changes'}
-        </button>
-        <button type="button" className="btn btn-outline btn-sm" onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
+function StockBadge({ quantity }) {
+  if (quantity === 0) return <span className="ap-badge" data-tone="danger">Out of stock</span>;
+  if (quantity <= 5) return <span className="ap-badge" data-tone="warn">Low stock</span>;
+  return null;
 }
 
 function AdminBooks() {
-  useDocumentTitle('Admin books');
+  useDocumentTitle('Books');
   const [params, setParams] = useSearchParams();
   const filter = FILTERS.some(([v]) => v === params.get('filter')) ? params.get('filter') : 'all';
   const q = params.get('q') ?? '';
   const [term, setTerm] = useState(q);
   const [page, setPage] = useState(0);
-  const [editing, setEditing] = useState(null);
-  const [savedId, setSavedId] = useState(null);
+  // Quick edits not saved yet, by book id: { book, draft }.
+  const [drafts, setDrafts] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+  const busy = useRef(false);
   const result = useAsync(() => adminListBooks({ search: q, filter, page }), [q, filter, page]);
-  const categories = useAsync(() => adminListCategories(), []);
   const { show } = useToast();
 
   useEffect(() => {
@@ -139,102 +74,241 @@ function AdminBooks() {
     return () => clearTimeout(timer);
   }, [term, q, setParams]);
 
+  const changed = Object.values(drafts);
+  useEffect(() => {
+    if (changed.length === 0) return undefined;
+    const warn = (event) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [changed.length]);
+
   function setFilter(value) {
     const next = new URLSearchParams(params);
     if (value === 'all') next.delete('filter');
     else next.set('filter', value);
     setParams(next, { replace: true });
     setPage(0);
-    setEditing(null);
+  }
+
+  function edit(book, key, value) {
+    setSaveError(null);
+    setDrafts((current) => {
+      const draft = { ...(current[book.id]?.draft ?? draftOf(book)), [key]: value };
+      const original = draftOf(book);
+      const next = { ...current };
+      if (QUICK_FIELDS.every((field) => String(draft[field]) === String(original[field]))) delete next[book.id];
+      else next[book.id] = { book, draft };
+      return next;
+    });
+  }
+
+  async function saveAll() {
+    if (busy.current || changed.length === 0) return;
+    const patches = [];
+    for (const { book, draft } of changed) {
+      const patch = checkDraft(draft, book.title);
+      if (typeof patch === 'string') {
+        setSaveError(patch);
+        return;
+      }
+      patches.push([book.id, patch]);
+    }
+    busy.current = true;
+    setSaving(true);
+    setSaveError(null);
+    const outcomes = await Promise.allSettled(patches.map(([id, patch]) => adminUpdateBook(id, patch)));
+    const saved = outcomes.filter((o) => o.status === 'fulfilled').map((o) => o.value);
+    const failed = outcomes.find((o) => o.status === 'rejected');
+    const byId = Object.fromEntries(saved.map((book) => [book.id, book]));
+    if (result.data) result.setData({ ...result.data, books: result.data.books.map((b) => byId[b.id] ?? b) });
+    setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !byId[id])));
+    if (saved.length > 0) show({ message: `Saved ${plural(saved.length, 'book')}` });
+    if (failed) setSaveError(adminErrorMessage(failed.reason));
+    busy.current = false;
+    setSaving(false);
   }
 
   const books = result.data?.books ?? [];
   const total = result.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
+  const valueOf = (book, key) => drafts[book.id]?.draft[key] ?? draftOf(book)[key];
 
   return (
-    <div className="stack-sm">
-      <div className="toolbar">
-        <div>
-          <label htmlFor="admin-book-search" className="visually-hidden">Search by title or SKU</label>
-          <input id="admin-book-search" className="input" type="search" placeholder="Search by title or SKU" maxLength={100} value={term} onChange={(e) => setTerm(e.target.value)} />
-        </div>
-        <div className="toolbar-row" role="group" aria-label="Filter books">
-          {FILTERS.map(([value, label]) => (
-            <button key={value} type="button" className="chip" aria-pressed={filter === value} onClick={() => setFilter(value)}>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <>
+      <PageHead title="Books">
+        <Link to="/admin/bulk-upload" className="btn btn-outline">
+          <UploadSimple size={18} aria-hidden="true" />
+          Bulk upload
+        </Link>
+        <Link to="/admin/books/new" className="btn btn-primary">
+          <Plus size={18} weight="bold" aria-hidden="true" />
+          Add book
+        </Link>
+      </PageHead>
 
-      {result.data && <p className="page-meta" aria-live="polite">{plural(total, 'book')}</p>}
-      {result.loading && !result.data && <LinesSkeleton count={5} label="Loading books…" />}
-      {result.error && <LoadError onRetry={result.retry} what="books" />}
-      {result.data && books.length === 0 && (
-        <StateBlock title={q || filter !== 'all' ? 'No books match.' : 'There are no books yet.'}>
-          <Link to="/admin/bulk-upload" className="btn btn-dark">Bulk upload books</Link>
-        </StateBlock>
-      )}
+      <section className="ap-card" aria-label="Books">
+        <div className="ap-toolbar">
+          <div className="ap-search">
+            <MagnifyingGlass size={18} aria-hidden="true" />
+            <label htmlFor="admin-book-search" className="visually-hidden">
+              Search by book name or SKU
+            </label>
+            <input id="admin-book-search" className="input" type="search" placeholder="Search by book name or SKU" maxLength={100} value={term} onChange={(e) => setTerm(e.target.value)} />
+          </div>
+          <div className="ap-tabs" role="group" aria-label="Show">
+            {FILTERS.map(([value, label]) => (
+              <button key={value} type="button" className="chip" aria-pressed={filter === value} onClick={() => setFilter(value)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-      {books.length > 0 && (
-        <ul className="line-list">
-          {books.map((book) => (
-            <li key={book.id} className="admin-row">
-              <BookCover src={coverOf(book)} title={book.title} />
-              <div className="admin-row-main">
-                <p className="line-title">
-                  {/* The book page is part of the store, which is a different site. */}
-                  <a href={`${LIVE_ORIGIN}/books/${book.id}`} target="_blank" rel="noopener noreferrer">{book.title}</a>
-                </p>
-                <div className="admin-row-meta">
-                  <span>SKU {book.sku}</span>
-                  <span>{formatPrice(book.price)} of {formatPrice(book.mrp)} MRP</span>
-                  <span>Stock {book.stock_quantity}</span>
-                  <span>{book.category ?? 'No category'}</span>
-                </div>
-                <div className="inline-actions">
-                  {!book.is_visible && <span className="tag tag-dark">Hidden</span>}
-                  {book.stock_quantity === 0 && <span className="tag">Out of stock</span>}
-                  {savedId === book.id && editing !== book.id && <span className="tag tag-accent" role="status">Saved</span>}
-                  {editing !== book.id && (
-                    <button type="button" className="btn-link" onClick={() => { setSavedId(null); setEditing(book.id); }}>
-                      Edit
-                    </button>
-                  )}
-                </div>
-                {editing === book.id && (
-                  <EditBook
-                    book={book}
-                    categories={categories.data ?? []}
-                    onCancel={() => setEditing(null)}
-                    onSaved={(updated) => {
-                      result.setData({ ...result.data, books: books.map((b) => (b.id === updated.id ? updated : b)) });
-                      setEditing(null);
-                      setSavedId(updated.id);
-                      show({ message: `Saved “${updated.title}”` });
-                      categories.retry();
-                    }}
-                  />
-                )}
+        {result.loading && !result.data && (
+          <div className="ap-card-body">
+            <LinesSkeleton count={5} label="Loading books…" />
+          </div>
+        )}
+        {result.error && (
+          <div className="ap-card-body">
+            <LoadError onRetry={result.retry} what="books" />
+          </div>
+        )}
+        {result.data && books.length === 0 && (
+          <div className="ap-card-body">
+            <StateBlock title={q || filter !== 'all' ? 'No books match.' : 'There are no books yet.'}>
+              <Link to="/admin/books/new" className="btn btn-primary">
+                Add book
+              </Link>
+            </StateBlock>
+          </div>
+        )}
+
+        {books.length > 0 && (
+          <div className="ap-table-wrap">
+            <table className="ap-table">
+              <thead>
+                <tr>
+                  <th scope="col">Book</th>
+                  <th scope="col" className="num">Selling price (₹)</th>
+                  <th scope="col" className="num">MRP (₹)</th>
+                  <th scope="col" className="num">Stock</th>
+                  <th scope="col">In the store</th>
+                  <th scope="col">
+                    <span className="visually-hidden">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {books.map((book) => {
+                  const cover = coverOf(book);
+                  const base = `quick-${book.id}`;
+                  return (
+                    <tr key={book.id} className="ap-book-row" data-dirty={drafts[book.id] ? true : undefined}>
+                      <td className="ap-col-book">
+                        <div className="ap-book-cell">
+                          {cover ? (
+                            <img className="ap-thumb" src={cover} alt="" width="44" height="60" loading="lazy" referrerPolicy="no-referrer" />
+                          ) : (
+                            <span className="ap-thumb ap-thumb-empty" aria-hidden="true">
+                              <Books size={20} />
+                            </span>
+                          )}
+                          <div>
+                            <Link to={`/admin/books/${book.id}`} className="ap-book-name">
+                              {book.title}
+                            </Link>
+                            <span className="ap-book-sku">
+                              SKU {book.sku}
+                              {book.category ? ` · ${book.category}` : ''}
+                            </span>
+                            <span className="inline-actions" style={{ marginTop: 4 }}>
+                              <StockBadge quantity={book.stock_quantity} />
+                              {!cover && <span className="ap-badge" data-tone="warn">No photo</span>}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="num" data-label="Selling price (₹)">
+                        <label htmlFor={`${base}-price`} className="visually-hidden">
+                          Selling price of {book.title}
+                        </label>
+                        <input id={`${base}-price`} className="input ap-cell-input" inputMode="decimal" value={valueOf(book, 'price')} onChange={(e) => edit(book, 'price', e.target.value)} />
+                      </td>
+                      <td className="num" data-label="MRP (₹)">
+                        <label htmlFor={`${base}-mrp`} className="visually-hidden">
+                          MRP of {book.title}
+                        </label>
+                        <input id={`${base}-mrp`} className="input ap-cell-input" inputMode="decimal" value={valueOf(book, 'mrp')} onChange={(e) => edit(book, 'mrp', e.target.value)} />
+                      </td>
+                      <td className="num" data-label="Stock">
+                        <label htmlFor={`${base}-stock`} className="visually-hidden">
+                          Stock of {book.title}
+                        </label>
+                        <input id={`${base}-stock`} className="input ap-cell-input ap-cell-stock" inputMode="numeric" value={valueOf(book, 'stock_quantity')} onChange={(e) => edit(book, 'stock_quantity', e.target.value)} />
+                      </td>
+                      <td data-label="In the store">
+                        <label className="ap-toggle" htmlFor={`${base}-visible`}>
+                          <input id={`${base}-visible`} type="checkbox" checked={valueOf(book, 'is_visible')} onChange={(e) => edit(book, 'is_visible', e.target.checked)} />
+                          <span className="ap-toggle-track" aria-hidden="true" />
+                          {valueOf(book, 'is_visible') ? 'Shown' : 'Hidden'}
+                        </label>
+                      </td>
+                      <td className="ap-col-actions">
+                        <div className="ap-row-actions">
+                          <Link to={`/admin/books/${book.id}`} className="btn btn-outline btn-sm" aria-label={`Edit ${book.title}`}>
+                            Edit
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {result.data && total > 0 && (
+          <div className="ap-pager">
+            <span className="page-meta" aria-live="polite">
+              {plural(total, 'book')}
+              {pages > 1 ? ` · page ${page + 1} of ${pages}` : ''}
+            </span>
+            {pages > 1 && (
+              <div className="ap-pager-buttons">
+                <button type="button" className="btn btn-outline btn-sm" aria-disabled={page === 0 || undefined} onClick={() => page > 0 && setPage(page - 1)}>
+                  Previous
+                </button>
+                <button type="button" className="btn btn-outline btn-sm" aria-disabled={page >= pages - 1 || undefined} onClick={() => page < pages - 1 && setPage(page + 1)}>
+                  Next
+                </button>
               </div>
-            </li>
-          ))}
-        </ul>
-      )}
+            )}
+          </div>
+        )}
+      </section>
 
-      {pages > 1 && (
-        <div className="inline-actions pager">
-          <button type="button" className="btn btn-outline btn-sm" aria-disabled={page === 0 || undefined} onClick={() => page > 0 && setPage(page - 1)}>
-            Previous
-          </button>
-          <span className="page-meta">Page {page + 1} of {pages}</span>
-          <button type="button" className="btn btn-outline btn-sm" aria-disabled={page >= pages - 1 || undefined} onClick={() => page < pages - 1 && setPage(page + 1)}>
-            Next
-          </button>
+      {changed.length > 0 && (
+        <div className="ap-savebar" role="region" aria-label="Unsaved changes">
+          <p>{plural(changed.length, 'book')} changed</p>
+          <div className="ap-savebar-actions">
+            <button type="button" className="btn btn-outline" disabled={saving} onClick={() => { setDrafts({}); setSaveError(null); }}>
+              Discard
+            </button>
+            <button type="button" className="btn btn-primary" aria-busy={saving} aria-disabled={saving || undefined} onClick={saveAll}>
+              {saving && <span className="spinner" aria-hidden="true" />}
+              Save changes
+            </button>
+          </div>
+          {saveError && (
+            <p className="notice" data-tone="error" role="alert" style={{ flexBasis: '100%' }}>
+              {saveError}
+            </p>
+          )}
         </div>
       )}
-    </div>
+    </>
   );
 }
 

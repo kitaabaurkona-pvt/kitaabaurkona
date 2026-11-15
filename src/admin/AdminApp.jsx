@@ -15,6 +15,7 @@ import AdminSignIn from './AdminSignIn';
 
 const AdminBooks = lazyPage(() => import('../pages/admin/AdminBooks'));
 const AdminOrders = lazyPage(() => import('../pages/admin/AdminOrders'));
+const BookEditor = lazyPage(() => import('../pages/admin/BookEditor'));
 const BulkUpload = lazyPage(() => import('../pages/admin/BulkUpload'));
 const AdminShipping = lazyPage(() => import('../pages/admin/AdminShipping'));
 
@@ -31,6 +32,8 @@ function AdminApp() {
           <Route path="/admin" element={<AdminLayout />}>
             <Route index element={<AdminDashboard />} />
             <Route path="books" element={<AdminBooks />} />
+            <Route path="books/new" element={<BookEditor />} />
+            <Route path="books/:id" element={<BookEditor />} />
             <Route path="orders" element={<AdminOrders />} />
             <Route path="bulk-upload" element={<BulkUpload />} />
             <Route path="shipping" element={<AdminShipping />} />

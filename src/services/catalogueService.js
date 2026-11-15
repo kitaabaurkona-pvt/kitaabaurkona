@@ -19,6 +19,19 @@ export async function uploadBooks(books) {
   return { inserted: summary?.inserted ?? 0, updated: summary?.updated ?? 0 };
 }
 
+// The photos books already have, by SKU, for the given SKUs. Bulk upload
+// uses it so a row without any photo keeps the book's current photos instead of
+// removing them.
+export async function currentPhotosBySku(skus) {
+  const found = new Map();
+  for (let i = 0; i < skus.length; i += 100) {
+    const { data, error } = await supabase.from('books').select('sku, image_urls').in('sku', skus.slice(i, i + 100));
+    if (error) throw Object.assign(new Error('lookup failed'), { code: error.code, details: error });
+    for (const row of data ?? []) if (row.image_urls?.length) found.set(row.sku, row.image_urls);
+  }
+  return found;
+}
+
 // Never shows database wording in the page; the full error goes to the console.
 // Known causes get a specific instruction; anything else shows its error code so it
 // can be looked up.

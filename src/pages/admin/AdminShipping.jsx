@@ -21,6 +21,7 @@ import { formatDate } from '../../utils/format';
 import { INDIAN_STATES } from '../../utils/storeForm';
 import { LoadError, StateBlock } from '../../components/store/States';
 import { LinesSkeleton } from '../../components/store/Skeletons';
+import PageHead from '../../components/admin/PageHead';
 
 // Today's date in India, as YYYY-MM-DD.
 const indiaToday = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
@@ -363,7 +364,7 @@ function DelhiveryPickup({ waiting }) {
 }
 
 function AdminShipping() {
-  useDocumentTitle('Admin shipping');
+  useDocumentTitle('Shipping');
   const settings = useAsync(() => getShippingSettings(), []);
   const problems = useAsync(() => listProblemShipments(), []);
   const ndr = useAsync(() => listNdr(), []);
@@ -372,13 +373,14 @@ function AdminShipping() {
 
   return (
     <div className="stack">
+      <PageHead title="Shipping" />
       {settings.loading && !settings.data && <LinesSkeleton count={2} label="Loading shipping settings…" />}
       {settings.error && <LoadError onRetry={settings.retry} what="shipping settings" />}
       {settings.data && <SettingsForm initial={settings.data} />}
       {settings.data?.delhivery_warehouse_name && waiting.data != null && <DelhiveryPickup key={waiting.data} waiting={waiting.data} />}
 
-      <section className="stack-sm" aria-labelledby="problems-heading">
-        <h2 id="problems-heading" className="section-title">Parcels needing attention</h2>
+      <section className="panel stack-sm" aria-labelledby="problems-heading">
+        <h2 id="problems-heading" className="panel-title">Parcels needing attention</h2>
         {problems.loading && !problems.data && <LinesSkeleton count={2} label="Loading parcels…" />}
         {problems.error && <LoadError onRetry={problems.retry} what="parcels" />}
         {problems.data && problems.data.length === 0 && <StateBlock title="Nothing needs attention." />}
@@ -401,8 +403,8 @@ function AdminShipping() {
         <Link to="/admin/orders" className="section-link">Open orders to retry or cancel</Link>
       </section>
 
-      <section className="stack-sm" aria-labelledby="ndr-heading">
-        <h2 id="ndr-heading" className="section-title">Failed delivery attempts</h2>
+      <section className="panel stack-sm" aria-labelledby="ndr-heading">
+        <h2 id="ndr-heading" className="panel-title">Failed delivery attempts</h2>
         {ndr.loading && !ndr.data && <LinesSkeleton count={2} label="Asking the couriers for failed deliveries…" />}
         {ndr.error && <LoadError onRetry={ndr.retry} what="failed deliveries" />}
         {ndr.data?.unavailable?.length > 0 && (

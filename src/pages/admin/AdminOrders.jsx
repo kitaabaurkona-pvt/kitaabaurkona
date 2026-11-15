@@ -10,6 +10,7 @@ import { LoadError, StateBlock } from '../../components/store/States';
 import { LinesSkeleton } from '../../components/store/Skeletons';
 import ParcelPanel from '../../components/admin/ParcelPanel';
 import { makeManifest } from '../../services/shippingService';
+import PageHead from '../../components/admin/PageHead';
 
 const ACTION_LABELS = {
   paid: 'Mark paid',
@@ -80,7 +81,7 @@ function OrderActions({ order, onChanged }) {
 }
 
 function AdminOrders() {
-  useDocumentTitle('Admin orders');
+  useDocumentTitle('Orders');
   const [params, setParams] = useSearchParams();
   const status = ORDER_STATUS_LABELS[params.get('status')] ? params.get('status') : 'all';
   const [page, setPage] = useState(0);
@@ -122,7 +123,8 @@ function AdminOrders() {
 
   return (
     <div className="stack-sm">
-      <div className="chip-scroll" role="group" aria-label="Filter orders">
+      <PageHead title="Orders" />
+      <div className="ap-tabs" role="group" aria-label="Show orders">
         <button type="button" className="chip" aria-pressed={status === 'all'} onClick={() => setStatus('all')}>All</button>
         {Object.entries(ORDER_STATUS_LABELS).map(([value, label]) => (
           <button key={value} type="button" className="chip" aria-pressed={status === value} onClick={() => setStatus(value)}>

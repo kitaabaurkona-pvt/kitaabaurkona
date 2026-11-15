@@ -36,3 +36,6 @@ dist-ssr
 
 # Browser test screenshots
 e2e/shots/
+
+# Hostinger photo upload settings (filled-in copy of config.example.php)
+/hostinger/photos/config.php

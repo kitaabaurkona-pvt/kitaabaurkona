@@ -1,0 +1,17 @@
+# Uploaded book photos. Nothing in this folder ever runs as a program, there is no
+# folder listing, and photos are cached for a year (each photo has its own unique name,
+# so a changed photo is always a new file).
+
+Options -Indexes -ExecCGI
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .php8 .phar .pl .py .cgi .sh
+RemoveType .php .phtml .php3 .php4 .php5 .php7 .php8 .phar
+
+<FilesMatch "(?i)\.(php\d?|phtml|phar|pl|py|cgi|sh|htaccess|html?|svg|js)$">
+  Require all denied
+</FilesMatch>
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Cache-Control "public, max-age=31536000, immutable"
+  Header set Access-Control-Allow-Origin "*"
+</IfModule>

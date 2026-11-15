@@ -9,6 +9,7 @@ const LIMITS = { title: 300, sku: 64, productCode: 64, description: 5000, shortT
 const MAX_AMOUNT = 99999999.99; // numeric(10, 2)
 const MAX_IMAGES = 10;
 const ATTRIBUTE_COLUMNS = [
+  ['attr_Author', 'author'],
   ['attr_Brand', 'brand'],
   ['attr_Country of Origin', 'country_of_origin'],
   ['attr_Ideal For', 'ideal_for'],
@@ -82,8 +83,14 @@ export function cleanUrl(raw) {
 const round2 = (value) => Math.round(value * 100) / 100;
 const round3 = (value) => Math.round(value * 1000) / 1000;
 
+// Image cells that hold a photo's file name instead of a link (bulk upload with photos)
+// become this prefix + the photo's key; the photo is uploaded before the books are saved.
+export const PHOTO_TOKEN = 'photo:';
+const looksLikeFileName = (text) => !text.includes('://') && /\.(jpe?g|png|webp|heic|gif)$/i.test(text);
+
 // Returns { book } for a valid row or { reason } explaining why it was skipped.
-export function sanitizeRow(row) {
+// options.photoFor(cell) returns the key of an added photo with that file name, if any.
+export function sanitizeRow(row, options = {}) {
   const get = (column) => row[column] ?? '';
 
   const title = cleanText(get('Name'));
@@ -92,6 +99,7 @@ export function sanitizeRow(row) {
   if (!title) return { reason: 'Name is empty' };
   if (!sku) return { reason: 'Sku Id is empty' };
   if (!productCode) return { reason: 'Product Code is empty' };
+  if (/^EXAMPLE-/i.test(sku)) return { reason: "This is the template's example row. Delete it from the file" };
   if (title.length > LIMITS.title) return { reason: `Name is longer than ${LIMITS.title} characters` };
   if (sku.length > LIMITS.sku) return { reason: `Sku Id is longer than ${LIMITS.sku} characters` };
   if (productCode.length > LIMITS.productCode) return { reason: `Product Code is longer than ${LIMITS.productCode} characters` };
@@ -136,8 +144,17 @@ export function sanitizeRow(row) {
 
   const imageUrls = [];
   for (let i = 1; i <= MAX_IMAGES; i += 1) {
-    const url = cleanUrl(get(`Image ${i}`));
-    if (url.invalid) return { reason: `Image ${i} is not a valid https link` };
+    const cell = String(get(`Image ${i}`)).trim();
+    const url = cleanUrl(cell);
+    if (url.invalid) {
+      const key = options.photoFor?.(cell);
+      if (key) {
+        imageUrls.push(`${PHOTO_TOKEN}${key}`);
+        continue;
+      }
+      if (looksLikeFileName(cell)) return { reason: `Image ${i} names the photo "${cell.slice(0, 80)}", which was not added with the file` };
+      return { reason: `Image ${i} is not a valid https link` };
+    }
     if (url.value) imageUrls.push(url.value);
   }
   const video = cleanUrl(get('Video 1'));
@@ -190,7 +207,7 @@ export function sanitizeRow(row) {
 
 // Sanitizes every row, yielding to the browser between batches so a large file never
 // freezes the page. Rows are numbered from 1 in file order (the header is not a row).
-export async function sanitizeCatalogue(rows) {
+export async function sanitizeCatalogue(rows, options = {}) {
   const books = [];
   const rejected = [];
   const seenSku = new Set();
@@ -199,7 +216,7 @@ export async function sanitizeCatalogue(rows) {
   for (let index = 0; index < rows.length; index += 1) {
     if (index > 0 && index % YIELD_EVERY === 0) await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const result = sanitizeRow(rows[index]);
+    const result = sanitizeRow(rows[index], options);
     const label = { row: index + 1, sku: cleanText(rows[index]['Sku Id'] ?? '') || null };
     if (result.reason) {
       rejected.push({ ...label, reason: result.reason });

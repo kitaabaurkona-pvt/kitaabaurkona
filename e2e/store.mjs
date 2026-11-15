@@ -16,6 +16,7 @@ import { createHandler } from '../supabase/functions/shipping/handler.js';
 import { createXpressbees } from '../supabase/functions/shipping/xpressbees.js';
 import { createDelhivery } from '../supabase/functions/shipping/delhivery.js';
 import { SEARCH_HINTS } from '../src/utils/searchHints.js';
+import { templateCsv } from '../src/utils/csvTemplate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.BASE || 'http://localhost:5199';
@@ -128,6 +129,33 @@ const shippingFunction = createHandler({
   makeDelhivery: () => createDelhivery({ baseUrl: 'https://track.delhivery.com', token: 'e2e-delhivery-token', fetchImpl: fakeDelhivery }),
 });
 
+// A stand-in for the Hostinger photo storage (hostinger/photos/upload.php): it asks the
+// fake Supabase whether the caller is an admin, like the real file does.
+const PHOTO_ORIGIN = 'https://photos.kitaabaurkona.com';
+const photoLog = { uploads: 0, refused: 0, deleted: [] };
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+async function photoHost(req, url) {
+  const cors = { 'access-control-allow-origin': new URL(ADMIN_BASE).origin, 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'POST, OPTIONS', vary: 'Origin' };
+  if (req.method() === 'OPTIONS') return req.respond({ status: 204, headers: cors });
+  if (req.method() === 'GET' && url.pathname.startsWith('/files/')) return req.respond({ status: 200, headers: { 'content-type': 'image/png', 'access-control-allow-origin': '*' }, body: TINY_PNG });
+  if (req.method() === 'POST' && url.pathname === '/upload.php') {
+    const json = (status, value) => req.respond({ status, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify(value) });
+    const admin = await handleRest(db, { method: 'POST', url: new URL('https://fake.supabase.co/rest/v1/rpc/is_admin'), headers: req.headers(), body: '{}' });
+    if (admin.status !== 200 || admin.body !== 'true') {
+      photoLog.refused += 1;
+      return json(403, { error: 'admin' });
+    }
+    if (String(req.headers()['content-type'] ?? '').startsWith('application/json')) {
+      const body = JSON.parse(req.postData() || '{}');
+      photoLog.deleted.push(...(body.urls ?? []));
+      return json(200, { deleted: (body.urls ?? []).length });
+    }
+    photoLog.uploads += 1;
+    return json(201, { url: `${PHOTO_ORIGIN}/files/2026/11/${crypto.randomBytes(16).toString('hex')}.webp` });
+  }
+  return req.respond({ status: 404, body: '' });
+}
+
 async function newPage({ width = 1280, height = 900, scheme = 'light', touch = false, prefs = null } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
@@ -142,6 +170,7 @@ async function newPage({ width = 1280, height = 900, scheme = 'light', touch = f
   await page.setRequestInterception(true);
   page.on('request', async (req) => {
     const url = new URL(req.url());
+    if (url.origin === PHOTO_ORIGIN) return photoHost(req, url);
     if (!url.hostname.endsWith('.supabase.co')) return req.continue();
     if (req.method() === 'OPTIONS') return req.respond({ status: 204, headers: CORS });
     if (url.pathname === '/functions/v1/shipping') {
@@ -948,7 +977,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       check(`admin site: ${p} is not a page here (back to sign-in)`, await onAdminPath(page, '/sign-in', 5000));
     }
     await gotoA(page, '/admin/orders');
-    check('admin site: the panel is closed to visitors', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.admin-tabs')) === null);
+    check('admin site: the panel is closed to visitors', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.ap-nav')) === null);
 
     // A customer account can prove who it is, but does not get in.
     await page.type('#email', 'reader@example.com');
@@ -957,7 +986,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('admin site: a customer is refused, with the reason', await page.waitForFunction(() => /not an admin/i.test(document.querySelector('.auth-error')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false));
     check('admin site: the refused customer is signed out again', await page.evaluate(() => Object.keys(localStorage).filter((k) => /^sb-.*-auth-token$/.test(k)).every((k) => !localStorage.getItem(k))));
     await gotoA(page, '/admin');
-    check('admin site: the refused customer still cannot open the panel', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.admin-tabs')) === null);
+    check('admin site: the refused customer still cannot open the panel', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.ap-nav')) === null);
 
     await page.type('#email', 'admin@example.com');
     await page.type('#password', 'wrong-password');
@@ -971,58 +1000,177 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.type('#password', 'admin-pass-1');
     await page.click('button[type=submit]');
     check('admin site: an admin signs in and lands on the page asked for', await onAdminPath(page, '/admin/orders'));
-    check('admin site: the top bar shows who is signed in', (await text(page, '.admin-bar-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
-    check('admin site: every section is in the tabs', (await page.$$eval('.admin-tabs a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Dashboard|Books|Orders|Shipping|Bulk upload');
-    check('admin site: "Open the store" goes to the live store', (await page.$eval('.admin-bar-actions a', (a) => a.href)) === 'https://www.kitaabaurkona.com/');
+    page.on('dialog', (d) => d.accept()); // "Leave site? Changes you made may not be saved"
+    const retype = async (handle, value) => {
+      await handle.evaluate((el) => el.select());
+      await page.keyboard.press('Backspace');
+      await handle.type(value);
+    };
+    const nav = (label) => page.$$eval('.ap-side .ap-nav-link', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), label);
+    check('admin site: the menu shows who is signed in', (await text(page, '.ap-side .ap-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
+    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Orders|Shipping');
+    check('admin site: "Open the store" goes to the live store', (await page.$$eval('.ap-side-foot a', (as) => as.map((a) => a.href))).includes('https://www.kitaabaurkona.com/'));
 
     await gotoA(page, '/admin');
-    check('admin dashboard: catalogue, order and shipping numbers load', await page.waitForFunction(() => document.querySelectorAll('.stat-value').length >= 6 && !document.querySelector('.skeleton'), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin home: order, book and shipping numbers load', await page.waitForFunction(() => document.querySelectorAll('.ap-stat-value').length >= 11 && !document.querySelector('.skeleton'), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin site: light grey page and a black main button', await page.evaluate(() => getComputedStyle(document.body).backgroundColor === 'rgb(243, 244, 246)' && getComputedStyle(document.querySelector('.ap .btn-primary')).backgroundColor === 'rgb(17, 17, 17)'));
     await page.screenshot({ path: path.join(SHOTS, 'admin-site-dashboard-1280.png'), fullPage: true });
 
-    // Listing: search, edit a book, bulk upload.
-    await page.$$eval('.admin-tabs a', (as) => as.find((a) => a.textContent.trim() === 'Books')?.click());
-    check('admin books: the catalogue is listed', (await waitSel(page, '.admin-row', 8000)) && /\d+ books/.test(await text(page, '.page-meta')));
-    const target = await one(`select id, title, sku, price, stock_quantity from public.books where is_visible order by title limit 1`);
+    // ---- Books: list, search, quick edit ----
+    await nav('Books');
+    check('admin books: the catalogue is listed with covers', (await waitSel(page, '.ap-book-row', 8000)) && /\d+ books/.test(await text(page, '.ap-pager .page-meta')) && (await page.$$('.ap-book-row img.ap-thumb')).length > 0);
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-books-1280.png') });
+    const target = await one(`select id, title, sku, price, mrp, stock_quantity, description, image_urls from public.books where is_visible and cardinality(image_urls) between 1 and 8 order by title limit 1`);
     await page.type('#admin-book-search', target.sku);
-    check('admin books: search by SKU finds the book', await page.waitForFunction((t) => document.querySelectorAll('.admin-row').length === 1 && document.querySelector('.admin-row .line-title')?.textContent.includes(t), { timeout: 6000 }, target.title.slice(0, 20)).then(() => true).catch(() => false));
-    await page.$$eval('.admin-row .btn-link', (bs) => bs.find((b) => /Edit/.test(b.textContent))?.click());
-    await waitSel(page, '.admin-edit');
-    const stockInput = await page.$('.admin-edit input[id$="-stock"]');
-    await stockInput.click({ clickCount: 3 });
-    await stockInput.type(String(target.stock_quantity + 3));
-    await page.click('.admin-edit button[type=submit]');
-    check('admin books: an edit is saved to the database', await page.waitForFunction(() => /Saved/.test(document.querySelector('.admin-row .tag-accent')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false) && (await one(`select stock_quantity from public.books where id = $1`, [target.id])).stock_quantity === target.stock_quantity + 3);
+    check('admin books: search by SKU finds the book', await page.waitForFunction((t) => document.querySelectorAll('.ap-book-row').length === 1 && document.querySelector('.ap-book-row .ap-book-name')?.textContent.includes(t), { timeout: 6000 }, target.title.slice(0, 20)).then(() => true).catch(() => false));
+    const stockInput = await page.$(`#quick-${target.id}-stock`);
+    await retype(stockInput, String(target.stock_quantity + 3));
+    check('admin books: a quick edit shows the save bar', (await waitSel(page, '.ap-savebar', 3000)) && /1 book changed/.test(await text(page, '.ap-savebar p')));
+    const priceInput = await page.$(`#quick-${target.id}-price`);
+    await retype(priceInput, String(Number(target.mrp) + 50));
+    await page.$$eval('.ap-savebar button', (bs) => bs.find((b) => /Save changes/.test(b.textContent))?.click());
+    check('admin books: a price above the MRP is refused in the list', await page.waitForFunction(() => /cannot be more than the MRP/.test(document.querySelector('.ap-savebar .notice')?.textContent ?? ''), { timeout: 4000 }).then(() => true).catch(() => false) && Number((await one(`select price from public.books where id = $1`, [target.id])).price) === Number(target.price));
+    await retype(priceInput, String(Number(target.price)));
+    await page.$$eval('.ap-savebar button', (bs) => bs.find((b) => /Save changes/.test(b.textContent))?.click());
+    const quickSaved = await page.waitForFunction(() => !document.querySelector('.ap-savebar'), { timeout: 6000 }).then(() => true).catch(() => false);
+    const quickStock = (await one(`select stock_quantity from public.books where id = $1`, [target.id])).stock_quantity;
+    check('admin books: a quick edit is saved to the database', quickSaved && quickStock === target.stock_quantity + 3, JSON.stringify({ quickSaved, quickStock, want: target.stock_quantity + 3, bar: await text(page, '.ap-savebar') }));
     await db.query(`update public.books set stock_quantity = $2 where id = $1`, [target.id, target.stock_quantity]);
-    await page.screenshot({ path: path.join(SHOTS, 'admin-site-books-1280.png'), fullPage: true });
 
-    await page.$$eval('.admin-tabs a', (as) => as.find((a) => a.textContent.trim() === 'Bulk upload')?.click());
-    check('admin bulk upload: the page opens', await waitSel(page, '#bulk-heading', 8000));
+    // ---- Book editor: description and a new photo ----
+    const photoA = path.join(SHOTS, 'e2e-photo-a.png');
+    fs.writeFileSync(photoA, TINY_PNG);
+    await page.$eval('.ap-book-row .ap-book-name', (a) => a.click());
+    check('admin editor: opens from the book name', (await onAdminPath(page, `/admin/books/${target.id}`)) && (await waitSel(page, '#book-description', 8000)));
+    check('admin editor: shows the current photos, cover first', (await page.$$('.ap-photo')).length === target.image_urls.length && (await page.$eval('.ap-photo .ap-photo-cover', (e) => e.textContent).catch(() => '')) === 'Cover');
+    await page.$eval('#book-description', (el) => el.select());
+    await page.keyboard.press('Backspace');
+    await page.type('#book-description', 'Written by the browser test. Line one.');
+    const uploadsBefore = photoLog.uploads;
+    await (await page.$('.ap-photo-add input[type=file]')).uploadFile(photoA);
+    check('admin editor: a photo is shrunk and uploaded to the photo storage', await page.waitForFunction((n) => document.querySelectorAll('.ap-photo').length === n && !/Uploading/.test(document.querySelector('.ap-photos').innerText), { timeout: 10000 }, target.image_urls.length + 1).then(() => true).catch(() => false) && photoLog.uploads === uploadsBefore + 1);
+    // Make the new (last) photo the cover.
+    await page.$$eval('.ap-photo-tools button', (bs) => bs.filter((b) => /the cover/.test(b.getAttribute('aria-label') ?? '')).pop()?.click());
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-editor-1280.png'), fullPage: true });
+    await page.$$eval('.ap-savebar button', (bs) => bs.find((b) => /Save changes/.test(b.textContent))?.click());
+    const savedOk = await page.waitForFunction(() => /All changes saved/.test(document.querySelector('.ap-savebar p')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false);
+    const afterSave = await one(`select description, image_urls from public.books where id = $1`, [target.id]);
+    check('admin editor: description and photos are saved, new photo as cover', savedOk && afterSave.description === 'Written by the browser test. Line one.' && afterSave.image_urls.length === target.image_urls.length + 1 && afterSave.image_urls[0].startsWith(`${PHOTO_ORIGIN}/files/`) && afterSave.image_urls[1] === target.image_urls[0], JSON.stringify(afterSave));
+    // Remove it again: after saving, the photo is deleted from the storage.
+    const newPhoto = afterSave.image_urls[0];
+    await page.$$eval('.ap-photo-tools button', (bs) => bs.find((b) => b.getAttribute('aria-label') === 'Remove photo 1')?.click());
+    await page.$$eval('.ap-savebar button', (bs) => bs.find((b) => /Save changes/.test(b.textContent))?.click());
+    const removedOk = await page.waitForFunction(() => /All changes saved/.test(document.querySelector('.ap-savebar p')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false);
+    await new Promise((r) => setTimeout(r, 800));
+    check('admin editor: a removed photo is deleted from the photo storage', removedOk && photoLog.deleted.includes(newPhoto) && JSON.stringify((await one(`select image_urls from public.books where id = $1`, [target.id])).image_urls) === JSON.stringify(target.image_urls));
+    await db.query(`update public.books set description = $2 where id = $1`, [target.id, target.description]);
+
+    // ---- Add a book ----
+    await gotoA(page, '/admin/books');
+    await waitSel(page, '.ap-book-row', 8000);
+    await page.$$eval('.ap-head-actions a', (as) => as.find((a) => /Add book/.test(a.textContent))?.click());
+    check('admin add book: an empty editor opens', (await onAdminPath(page, '/admin/books/new')) && (await waitSel(page, '#book-title', 8000)));
+    await page.$$eval('.ap-savebar button[type=submit]', (bs) => bs[0]?.click());
+    check('admin add book: missing details are marked', await page.waitForFunction(() => document.querySelectorAll('.ap-field-error').length >= 4 && document.activeElement?.id === 'book-title', { timeout: 4000 }).then(() => true).catch(() => false));
+    await page.type('#book-title', 'The Browser Test Book');
+    await page.type('#book-author', 'Test Author');
+    await page.type('#book-description', 'A book added from the admin panel.');
+    await page.select('#book-category', 'Romance');
+    await page.type('#book-price', '150');
+    await page.type('#book-mrp', '200');
+    check('admin add book: the discount is shown', /save 25%/i.test((await text(page, '.ap-discount')) ?? ''));
+    await page.type('#book-stock_quantity', '2');
+    await page.type('#book-sku', 'E2E-NEW-1');
+    await page.$eval('#more-details', (d) => d.setAttribute('open', ''));
+    await page.type('#book-cost_price', '90');
+    await page.$$eval('.ap-savebar button[type=submit]', (bs) => bs[0]?.click());
+    const added = await page.waitForFunction(() => /^\/admin\/books\/[0-9a-f-]{36}$/.test(location.pathname), { timeout: 8000 }).then(() => true).catch(() => false);
+    const newBook = await one(`select b.*, i.cost_price from public.books b left join public.book_internal i on i.book_id = b.id where b.sku = 'E2E-NEW-1'`);
+    check('admin add book: the book is saved with its details and cost price', added && newBook && newBook.title === 'The Browser Test Book' && newBook.product_code === 'E2E-NEW-1' && newBook.attributes.author === 'Test Author' && newBook.category === 'Romance' && Number(newBook.price) === 150 && Number(newBook.cost_price) === 90 && newBook.is_visible === true, JSON.stringify({ added, newBook, bar: await text(page, '.ap-savebar'), errs: await page.$$eval('.ap-field-error', (es) => es.map((e) => e.id + ':' + e.textContent)) }));
+    await gotoA(page, '/admin/books/new');
+    await waitSel(page, '#book-title', 8000);
+    await page.type('#book-title', 'Duplicate');
+    await page.type('#book-price', '1');
+    await page.type('#book-mrp', '1');
+    await page.type('#book-stock_quantity', '1');
+    await page.type('#book-sku', 'E2E-NEW-1');
+    await page.$$eval('.ap-savebar button[type=submit]', (bs) => bs[0]?.click());
+    check('admin add book: a SKU already in use is refused', await page.waitForFunction(() => /already/.test(document.querySelector('#book-sku-error')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false) && (await one(`select count(*)::int as n from public.books where sku = 'E2E-NEW-1'`)).n === 1);
+    await db.query(`delete from public.books where sku = 'E2E-NEW-1'`);
+
+    // ---- Bulk upload with photos and the template ----
+    await gotoA(page, '/admin/books');
+    await waitSel(page, '.ap-book-row', 8000);
+    await nav('Bulk upload');
+    check('admin bulk upload: the page opens with the steps and the template button', (await waitSel(page, '.ap-steps', 8000)) && (await page.$$eval('.ap-head-actions button', (bs) => bs.some((b) => /Download template/.test(b.textContent)))));
+    const template = path.join(SHOTS, 'e2e-template.csv');
+    fs.writeFileSync(template, templateCsv());
+    await (await page.$('.dropzone input[type=file]')).uploadFile(template);
+    check('admin bulk upload: the template example row is skipped, not added', await page.waitForFunction(() => /example row/.test(document.body.innerText) && !/Upload \d+ book/.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
+    await page.$$eval('.ap-files button', (bs) => bs.forEach((b) => b.click()));
+
     const csv = path.join(SHOTS, 'e2e-upload.csv');
-    fs.writeFileSync(csv, '"Product Code","Sku Id","Name","Selling Price","MRP","Quantity","Visibility"\n"E2E-ADMIN-1","E2E-ADMIN-SKU-1","The Admin Site Test Book","199","299","4","true"\n');
-    await (await page.$('input[type=file]')).uploadFile(csv);
-    const uploadButton = await page.waitForFunction(() => [...document.querySelectorAll('button')].find((b) => /^Upload 1 book$/.test(b.textContent.trim())), { timeout: 8000 }).catch(() => null);
-    check('admin bulk upload: the file is read and checked', Boolean(uploadButton));
+    fs.writeFileSync(csv, '"Product Code","Sku Id","Name","Selling Price","MRP","Quantity","Visibility","Image 1","attr_Author"\n"E2E-ADMIN-1","E2E-ADMIN-SKU-1","The Admin Site Test Book","199","299","4","true","Cover-A.png","Bulk Author"\n"E2E-ADMIN-2","E2E-ADMIN-SKU-2","Second Test Book","99","149","1","true","",""\n');
+    const files = { 'cover-a.png': TINY_PNG, 'E2E-ADMIN-SKU-2.png': TINY_PNG, 'E2E-ADMIN-SKU-2-2.png': TINY_PNG, 'stray.png': TINY_PNG };
+    const photoPaths = Object.entries(files).map(([name, data]) => {
+      const file = path.join(SHOTS, name);
+      fs.writeFileSync(file, data);
+      return file;
+    });
+    await (await page.$('.dropzone input[type=file]')).uploadFile(csv, ...photoPaths);
+    const uploadButton = await page.waitForFunction(() => [...document.querySelectorAll('button')].find((b) => /^Upload 2 books$/.test(b.textContent.trim())), { timeout: 8000 }).catch(() => null);
+    check('admin bulk upload: the CSV and photos are read, matched and checked', Boolean(uploadButton) && /2 books get new photos/.test(await page.$eval('body', (b) => b.innerText)));
+    check('admin bulk upload: a photo that matches no book is pointed out', /stray\.png/.test(await page.$eval('body', (b) => b.innerText)));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-bulk-1280.png'), fullPage: true });
+    const uploadsBeforeBulk = photoLog.uploads;
     if (uploadButton) await uploadButton.click();
-    check('admin bulk upload: the book reaches the catalogue', await page.waitForFunction(() => !/Uploading/.test(document.body.innerText) && /uploaded|added|updated/i.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false) && Number((await one(`select price from public.books where product_code = 'E2E-ADMIN-1'`))?.price) === 199);
-    await db.query(`delete from public.books where product_code = 'E2E-ADMIN-1'`);
-    fs.rmSync(csv, { force: true });
+    const bulkDone = await page.waitForFunction(() => /Uploaded 2 books/.test(document.body.innerText), { timeout: 15000 }).then(() => true).catch(() => false);
+    const b1 = await one(`select price, image_urls, attributes from public.books where sku = 'E2E-ADMIN-SKU-1'`);
+    const b2 = await one(`select image_urls from public.books where sku = 'E2E-ADMIN-SKU-2'`);
+    check('admin bulk upload: books and their photos reach the catalogue', bulkDone && Number(b1?.price) === 199 && b1.attributes.author === 'Bulk Author' && b1.image_urls.length === 1 && b2?.image_urls.length === 2 && [...b1.image_urls, ...b2.image_urls].every((u) => u.startsWith(`${PHOTO_ORIGIN}/files/`)) && photoLog.uploads === uploadsBeforeBulk + 3, JSON.stringify({ b1, b2, uploads: photoLog.uploads - uploadsBeforeBulk }));
+    // Uploading a row again without photos keeps the photos the book has.
+    fs.writeFileSync(csv, '"Product Code","Sku Id","Name","Selling Price","MRP","Quantity"\n"E2E-ADMIN-2","E2E-ADMIN-SKU-2","Second Test Book","89","149","1"\n');
+    await (await page.$('.dropzone input[type=file]')).uploadFile(csv);
+    const again = await page.waitForFunction(() => [...document.querySelectorAll('button')].find((b) => /^Upload 1 book$/.test(b.textContent.trim())), { timeout: 8000 }).catch(() => null);
+    check('admin bulk upload: a row without photos keeps the current photos', Boolean(again) && /keep the photos they already have/.test(await page.$eval('body', (b) => b.innerText)));
+    if (again) await again.click();
+    await page.waitForFunction(() => /Uploaded 1 book/.test(document.body.innerText), { timeout: 8000 }).catch(() => null);
+    const b2again = await one(`select price, image_urls from public.books where sku = 'E2E-ADMIN-SKU-2'`);
+    check('admin bulk upload: and they are still there after the upload', Number(b2again?.price) === 89 && JSON.stringify(b2again?.image_urls) === JSON.stringify(b2?.image_urls));
+    await db.query(`delete from public.books where product_code in ('E2E-ADMIN-1', 'E2E-ADMIN-2')`);
+    for (const f of [csv, template, photoA, ...photoPaths]) fs.rmSync(f, { force: true });
 
-    for (const [tab, sel] of [['Orders', '.chip-scroll'], ['Shipping', '#ship-warehouse_name']]) {
-      await page.$$eval('.admin-tabs a', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), tab);
-      check(`admin site: ${tab} opens`, await waitSel(page, sel, 8000));
+    for (const [label, sel] of [['Orders', '.ap-tabs'], ['Shipping', '#ship-warehouse_name']]) {
+      await nav(label);
+      check(`admin site: ${label} opens`, await waitSel(page, sel, 8000));
+      await page.screenshot({ path: path.join(SHOTS, `admin-site-${label.toLowerCase()}-1280.png`), fullPage: true });
     }
 
+    // ---- Phone width: slide-out menu, no sideways scrolling ----
     await page.setViewport({ width: 375, height: 800 });
     await gotoA(page, '/admin');
-    await waitSel(page, '.stat-value', 8000);
-    check('admin site at 375px: no sideways scrolling', (await overflow(page)) <= 0, await overflow(page));
+    await waitSel(page, '.ap-stat-value', 8000);
+    check('admin site at 375px: no sideways scrolling on Home', (await overflow(page)) <= 0, await overflow(page));
     await page.screenshot({ path: path.join(SHOTS, 'admin-site-dashboard-375.png'), fullPage: true });
+    await page.click('.ap-top button[aria-label="Open menu"]');
+    check('admin site at 375px: the menu slides out', await waitSel(page, '.ap-drawer .ap-nav-link', 3000));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-menu-375.png') });
+    await page.$$eval('.ap-drawer .ap-nav-link', (as) => as.find((a) => a.textContent.trim() === 'Books')?.click());
+    check('admin site at 375px: choosing a section closes the menu', (await onAdminPath(page, '/admin/books')) && (await gone(page, '.ap-drawer', 3000)));
+    await waitSel(page, '.ap-book-row', 8000);
+    check('admin site at 375px: no sideways scrolling on Books', (await overflow(page)) <= 0, await overflow(page));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-books-375.png'), fullPage: true });
+    await gotoA(page, `/admin/books/${target.id}`);
+    await waitSel(page, '#book-title', 8000);
+    check('admin site at 375px: no sideways scrolling in the editor', (await overflow(page)) <= 0, await overflow(page));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-editor-375.png'), fullPage: true });
     await page.setViewport({ width: 1280, height: 900 });
 
-    await page.$$eval('.admin-bar-button', (bs) => bs.find((b) => /Sign out/.test(b.textContent))?.click());
+    await page.$$eval('.ap-side .ap-nav-link', (bs) => bs.find((b) => /Sign out/.test(b.textContent))?.click());
     check('admin site: Sign out returns to the sign-in page', await onAdminPath(page, '/sign-in'));
     await gotoA(page, '/admin/books');
-    check('admin site: after signing out the panel is closed again', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.admin-row')) === null);
+    check('admin site: after signing out the panel is closed again', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.ap-book-row')) === null);
+    check('admin site: the photo storage never refused the signed-in admin', photoLog.refused === 0);
     await page.setViewport({ width: 375, height: 800 });
     check('admin sign-in at 375px: no sideways scrolling', (await overflow(page)) <= 0);
     await page.screenshot({ path: path.join(SHOTS, 'admin-site-sign-in-375.png'), fullPage: true });
@@ -1041,7 +1189,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
     for (const p of ['/admin', '/admin/orders', '/admin/bulk-upload']) {
       await goto(page, p);
-      check(`store: ${p} is not found, even for an admin`, await page.waitForFunction(() => /not found|doesn.t exist|404/i.test(document.querySelector('main')?.innerText ?? '') && !document.querySelector('.admin-tabs'), { timeout: 8000 }).then(() => true).catch(() => false));
+      check(`store: ${p} is not found, even for an admin`, await page.waitForFunction(() => /not found|doesn.t exist|404/i.test(document.querySelector('main')?.innerText ?? '') && !document.querySelector('.ap-nav'), { timeout: 8000 }).then(() => true).catch(() => false));
     }
     await goto(page, '/account');
     check('store: an admin gets a link to the admin site', await page.waitForFunction(() => [...document.querySelectorAll('main a')].some((a) => /Open admin panel/.test(a.textContent) && a.href === 'https://kitaabaurkona.vercel.app/'), { timeout: 8000 }).then(() => true).catch(() => false));

@@ -1,0 +1,19 @@
+# Root of the photos subdomain (photos.kitaabaurkona.com) on Hostinger.
+
+Options -Indexes
+
+# Some servers drop the Authorization header before PHP sees it; pass it through.
+CGIPassAuth On
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+</IfModule>
+
+# config.php holds the settings; it is never sent to anyone.
+<Files "config.php">
+  Require all denied
+</Files>
+<FilesMatch "^(config\.example\.php|README.*)$">
+  Require all denied
+</FilesMatch>

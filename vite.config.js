@@ -54,6 +54,7 @@ function siteEntry(site) {
       handler(html) {
         if (site !== 'admin') return html
         return html
+          .replace('<html lang="en"', '<html lang="en" data-site="admin"')
           .replace('src="/src/main.jsx"', 'src="/src/admin/main.jsx"')
           .replace('<title>Kitaab Aur Kona</title>', '<title>Kitaab Aur Kona Admin</title>')
           .replace(/<meta name="description"[^>]*>/, '<meta name="robots" content="noindex, nofollow" />')

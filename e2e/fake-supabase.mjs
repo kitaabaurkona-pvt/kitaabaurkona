@@ -251,6 +251,7 @@ function condition(col, expr, params) {
     case 'gte': sql = `${c} >= ${p(value)}`; break;
     case 'lt': sql = `${c} < ${p(value)}`; break;
     case 'lte': sql = `${c} <= ${p(value)}`; break;
+    case 'cs': sql = `${c} @> ${p(value)}`; break;
     case 'ilike': sql = `${c} ilike ${p(value.replace(/\*/g, '%'))}`; break;
     case 'is': sql = value === 'null' ? `${c} is null` : `${c} is ${value === 'true' ? 'true' : 'false'}`; break;
     case 'in': {
@@ -363,14 +364,21 @@ export async function handleRest(db, { method, url, headers, body }) {
         for (const row of rowsIn) {
           const cols = Object.keys(row);
           cols.forEach(ident);
-          const vals = cols.map((c) => (row[c] !== null && typeof row[c] === 'object' ? JSON.stringify(row[c]) : row[c]));
+          // Lists go to array columns as they are (image_urls); objects are JSON.
+          const vals = cols.map((c) => (row[c] !== null && typeof row[c] === 'object' && !Array.isArray(row[c]) ? JSON.stringify(row[c]) : row[c]));
+          // Upsert (Prefer: resolution=merge-duplicates with ?on_conflict=column).
+          const conflict = prefer.includes('merge-duplicates') && url.searchParams.get('on_conflict');
+          const upsert = conflict ? ` on conflict (${ident(conflict)}) do update set ${cols.map((c) => `"${c}" = excluded."${c}"`).join(', ')}` : '';
           const r = await tx.query(
-            `insert into public.${ident(table)} (${cols.map((c) => `"${c}"`).join(', ')}) values (${cols.map((_, i) => `$${i + 1}`).join(', ')}) returning *`,
+            `insert into public.${ident(table)} (${cols.map((c) => `"${c}"`).join(', ')}) values (${cols.map((_, i) => `$${i + 1}`).join(', ')})${upsert} returning *`,
             vals,
           );
           out.push(...r.rows);
         }
-        return prefer.includes('return=representation') ? { status: 201, body: JSON.stringify(out) } : { status: 201, body: '' };
+        if (!prefer.includes('return=representation')) return { status: 201, body: '' };
+        // .insert(...).select().single() asks for one object, like PostgREST gives.
+        if (wantObject) return out.length === 1 ? { status: 201, body: JSON.stringify(out[0]) } : { status: 406, body: JSON.stringify({ code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' }) };
+        return { status: 201, body: JSON.stringify(out) };
       });
     }
 
