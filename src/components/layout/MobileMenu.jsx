@@ -1,6 +1,7 @@
 import { List } from '@phosphor-icons/react';
 import { useRef, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { ADMIN_ORIGIN } from '../../utils/release';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, motion } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -19,7 +20,6 @@ import {
   SettingsIcon,
   ShieldIcon,
   StoreIcon,
-  UploadIcon,
   UserIcon,
 } from '../icons';
 
@@ -134,10 +134,10 @@ function MobileMenu() {
                 {role === 'admin' && (
                   <nav aria-label="Admin" className="drawer-section">
                     <h2>Admin</h2>
-                    {item('/admin', 'Dashboard', ShieldIcon, { end: true })}
-                    {item('/admin/books', 'Manage books', BookIcon)}
-                    {item('/admin/orders', 'Manage orders', ReceiptIcon)}
-                    {item('/admin/bulk-upload', 'Bulk upload', UploadIcon)}
+                    <a href={ADMIN_ORIGIN} className="drawer-link" target="_blank" rel="noopener noreferrer" onClick={close}>
+                      <ShieldIcon size={20} />
+                      Open admin panel
+                    </a>
                   </nav>
                 )}
 

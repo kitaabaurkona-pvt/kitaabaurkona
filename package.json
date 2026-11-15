@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:admin": "vite --mode admin --port 5198",
     "build": "vite build",
+    "build:admin": "vite build --mode admin --outDir dist-admin",
     "lint": "oxlint",
     "preview": "vite preview",
+    "preview:admin": "vite preview --outDir dist-admin --port 5201",
     "e2e": "node e2e/store.mjs",
     "test:shipping": "node e2e/shipping-db.mjs && node e2e/shipping-fn.mjs",
     "covers": "node scripts/make-covers.mjs"

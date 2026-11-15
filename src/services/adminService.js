@@ -27,7 +27,9 @@ export async function getAdminStats() {
 export const ADMIN_PAGE_SIZE = 25;
 
 // Characters with special meaning in the API's filter syntax are removed from the search.
-const cleanSearch = (value) => value.replace(/[%_\\",()*:]/g, ' ').trim().slice(0, 100);
+// An underscore stays: SKUs contain them (2008_FREE SIZE), and in a search it only means
+// "any one character", so a full SKU still finds its book.
+const cleanSearch = (value) => value.replace(/[%\\",()*:]/g, ' ').trim().slice(0, 100);
 
 export async function adminListBooks({ search = '', filter = 'all', page = 0 } = {}) {
   let query = supabase

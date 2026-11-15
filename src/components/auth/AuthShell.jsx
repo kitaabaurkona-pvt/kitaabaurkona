@@ -11,12 +11,14 @@ function AuthShell({ title, subtitle, backTo, backLabel, children }) {
   return (
     <div className="auth-page">
       <header className="auth-header">
-        <Link to={backTo} className="auth-back" aria-label={backLabel}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M19 12H5" />
-            <path d="m12 19-7-7 7-7" />
-          </svg>
-        </Link>
+        {backTo && (
+          <Link to={backTo} className="auth-back" aria-label={backLabel}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M19 12H5" />
+              <path d="m12 19-7-7 7-7" />
+            </svg>
+          </Link>
+        )}
         <BrandLink />
       </header>
       <main className="auth-main">

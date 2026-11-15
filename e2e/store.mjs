@@ -19,6 +19,7 @@ import { SEARCH_HINTS } from '../src/utils/searchHints.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = process.env.BASE || 'http://localhost:5199';
+const ADMIN_BASE = process.env.ADMIN_BASE || 'http://localhost:5198';
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const SHOTS = path.join(ROOT, 'e2e', 'shots');
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -106,7 +107,7 @@ const shippingDb = createClient('https://fake.supabase.co', SERVICE_TOKEN, { aut
 const shippingFunction = createHandler({
   db: shippingDb,
   cronSecret: 'e2e-cron-secret-0123456789abcdef',
-  allowedOrigins: [new URL(BASE).origin],
+  allowedOrigins: [new URL(BASE).origin, new URL(ADMIN_BASE).origin],
   log: { info() {}, warn() {}, error() {} },
   makeXpressbees: () =>
     createXpressbees({
@@ -155,6 +156,21 @@ async function newPage({ width = 1280, height = 900, scheme = 'light', touch = f
 }
 
 const goto = (page, p) => page.goto(`${BASE}${p}`, { waitUntil: 'domcontentloaded' });
+// The admin panel is its own site (npm run build:admin + preview:admin, or dev:admin).
+const gotoA = (page, p) => page.goto(`${ADMIN_BASE}${p}`, { waitUntil: 'domcontentloaded' });
+const onAdminPath = (page, want, ms = 8000) =>
+  page
+    .waitForFunction((p) => location.pathname === p, { timeout: ms }, want)
+    .then(() => true)
+    .catch(() => false);
+async function adminSignIn(page, email = 'admin@example.com', password = 'admin-pass-1') {
+  await gotoA(page, '/sign-in');
+  await waitSel(page, '#email');
+  await page.type('#email', email);
+  await page.type('#password', password);
+  await page.click('button[type=submit]');
+  if (email === 'admin@example.com') await onAdminPath(page, '/admin');
+}
 const waitSel = (page, sel, ms = 10000) => page.waitForSelector(sel, { timeout: ms }).then(() => true).catch(() => false);
 const gone = (page, sel, ms = 3000) => page.waitForSelector(sel, { hidden: true, timeout: ms }).then(() => true).catch(() => false);
 const text = (page, sel) => page.$eval(sel, (e) => e.textContent.trim()).catch(() => null);
@@ -920,7 +936,101 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await ctx.close();
   }
 
-  // ---------- Admin: shipping settings, booking a parcel, manifest; customer tracking ----------
+  // ---------- The admin site: sign-in only, admins only, and no shop ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    await gotoA(page, '/');
+    check('admin site: a visitor lands on the sign-in page', (await onAdminPath(page, '/sign-in')) && (await text(page, '.auth-title')) === 'Admin log in');
+    check('admin site: no shop header, cart, footer or sign-up', (await page.$('.site-header')) === null && (await page.$('.cart-button')) === null && (await page.$('.site-footer')) === null && !/Sign up/i.test(await page.$eval('body', (b) => b.innerText)));
+    check('admin site: it tells search engines to stay away', (await page.$eval('meta[name="robots"]', (m) => m.content).catch(() => '')) === 'noindex, nofollow' && (await page.title()).includes('Admin'));
+    for (const p of ['/books', '/cart', '/checkout', '/sign-up', '/account']) {
+      await gotoA(page, p);
+      check(`admin site: ${p} is not a page here (back to sign-in)`, await onAdminPath(page, '/sign-in', 5000));
+    }
+    await gotoA(page, '/admin/orders');
+    check('admin site: the panel is closed to visitors', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.admin-tabs')) === null);
+
+    // A customer account can prove who it is, but does not get in.
+    await page.type('#email', 'reader@example.com');
+    await page.type('#password', 'reader-pass-1');
+    await page.click('button[type=submit]');
+    check('admin site: a customer is refused, with the reason', await page.waitForFunction(() => /not an admin/i.test(document.querySelector('.auth-error')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin site: the refused customer is signed out again', await page.evaluate(() => Object.keys(localStorage).filter((k) => /^sb-.*-auth-token$/.test(k)).every((k) => !localStorage.getItem(k))));
+    await gotoA(page, '/admin');
+    check('admin site: the refused customer still cannot open the panel', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.admin-tabs')) === null);
+
+    await page.type('#email', 'admin@example.com');
+    await page.type('#password', 'wrong-password');
+    await page.click('button[type=submit]');
+    check('admin site: a wrong password is refused', await page.waitForFunction(() => (document.querySelector('.auth-error')?.textContent ?? '').length > 0 && location.pathname === '/sign-in', { timeout: 8000 }).then(() => true).catch(() => false));
+
+    // An admin gets in, and lands on the page first asked for.
+    await gotoA(page, '/admin/orders');
+    await onAdminPath(page, '/sign-in', 5000);
+    await page.type('#email', 'admin@example.com');
+    await page.type('#password', 'admin-pass-1');
+    await page.click('button[type=submit]');
+    check('admin site: an admin signs in and lands on the page asked for', await onAdminPath(page, '/admin/orders'));
+    check('admin site: the top bar shows who is signed in', (await text(page, '.admin-bar-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
+    check('admin site: every section is in the tabs', (await page.$$eval('.admin-tabs a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Dashboard|Books|Orders|Shipping|Bulk upload');
+    check('admin site: "Open the store" goes to the live store', (await page.$eval('.admin-bar-actions a', (a) => a.href)) === 'https://www.kitaabaurkona.com/');
+
+    await gotoA(page, '/admin');
+    check('admin dashboard: catalogue, order and shipping numbers load', await page.waitForFunction(() => document.querySelectorAll('.stat-value').length >= 6 && !document.querySelector('.skeleton'), { timeout: 8000 }).then(() => true).catch(() => false));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-dashboard-1280.png'), fullPage: true });
+
+    // Listing: search, edit a book, bulk upload.
+    await page.$$eval('.admin-tabs a', (as) => as.find((a) => a.textContent.trim() === 'Books')?.click());
+    check('admin books: the catalogue is listed', (await waitSel(page, '.admin-row', 8000)) && /\d+ books/.test(await text(page, '.page-meta')));
+    const target = await one(`select id, title, sku, price, stock_quantity from public.books where is_visible order by title limit 1`);
+    await page.type('#admin-book-search', target.sku);
+    check('admin books: search by SKU finds the book', await page.waitForFunction((t) => document.querySelectorAll('.admin-row').length === 1 && document.querySelector('.admin-row .line-title')?.textContent.includes(t), { timeout: 6000 }, target.title.slice(0, 20)).then(() => true).catch(() => false));
+    await page.$$eval('.admin-row .btn-link', (bs) => bs.find((b) => /Edit/.test(b.textContent))?.click());
+    await waitSel(page, '.admin-edit');
+    const stockInput = await page.$('.admin-edit input[id$="-stock"]');
+    await stockInput.click({ clickCount: 3 });
+    await stockInput.type(String(target.stock_quantity + 3));
+    await page.click('.admin-edit button[type=submit]');
+    check('admin books: an edit is saved to the database', await page.waitForFunction(() => /Saved/.test(document.querySelector('.admin-row .tag-accent')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false) && (await one(`select stock_quantity from public.books where id = $1`, [target.id])).stock_quantity === target.stock_quantity + 3);
+    await db.query(`update public.books set stock_quantity = $2 where id = $1`, [target.id, target.stock_quantity]);
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-books-1280.png'), fullPage: true });
+
+    await page.$$eval('.admin-tabs a', (as) => as.find((a) => a.textContent.trim() === 'Bulk upload')?.click());
+    check('admin bulk upload: the page opens', await waitSel(page, '#bulk-heading', 8000));
+    const csv = path.join(SHOTS, 'e2e-upload.csv');
+    fs.writeFileSync(csv, '"Product Code","Sku Id","Name","Selling Price","MRP","Quantity","Visibility"\n"E2E-ADMIN-1","E2E-ADMIN-SKU-1","The Admin Site Test Book","199","299","4","true"\n');
+    await (await page.$('input[type=file]')).uploadFile(csv);
+    const uploadButton = await page.waitForFunction(() => [...document.querySelectorAll('button')].find((b) => /^Upload 1 book$/.test(b.textContent.trim())), { timeout: 8000 }).catch(() => null);
+    check('admin bulk upload: the file is read and checked', Boolean(uploadButton));
+    if (uploadButton) await uploadButton.click();
+    check('admin bulk upload: the book reaches the catalogue', await page.waitForFunction(() => !/Uploading/.test(document.body.innerText) && /uploaded|added|updated/i.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false) && Number((await one(`select price from public.books where product_code = 'E2E-ADMIN-1'`))?.price) === 199);
+    await db.query(`delete from public.books where product_code = 'E2E-ADMIN-1'`);
+    fs.rmSync(csv, { force: true });
+
+    for (const [tab, sel] of [['Orders', '.chip-scroll'], ['Shipping', '#ship-warehouse_name']]) {
+      await page.$$eval('.admin-tabs a', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), tab);
+      check(`admin site: ${tab} opens`, await waitSel(page, sel, 8000));
+    }
+
+    await page.setViewport({ width: 375, height: 800 });
+    await gotoA(page, '/admin');
+    await waitSel(page, '.stat-value', 8000);
+    check('admin site at 375px: no sideways scrolling', (await overflow(page)) <= 0, await overflow(page));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-dashboard-375.png'), fullPage: true });
+    await page.setViewport({ width: 1280, height: 900 });
+
+    await page.$$eval('.admin-bar-button', (bs) => bs.find((b) => /Sign out/.test(b.textContent))?.click());
+    check('admin site: Sign out returns to the sign-in page', await onAdminPath(page, '/sign-in'));
+    await gotoA(page, '/admin/books');
+    check('admin site: after signing out the panel is closed again', (await onAdminPath(page, '/sign-in', 5000)) && (await page.$('.admin-row')) === null);
+    await page.setViewport({ width: 375, height: 800 });
+    check('admin sign-in at 375px: no sideways scrolling', (await overflow(page)) <= 0);
+    await page.screenshot({ path: path.join(SHOTS, 'admin-site-sign-in-375.png'), fullPage: true });
+    check('admin site: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  // ---------- The store has no admin panel any more ----------
   {
     const { page, ctx, errors } = await newPage();
     await goto(page, '/sign-in');
@@ -929,7 +1039,22 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.type('#password', 'admin-pass-1');
     await page.click('button[type=submit]');
     await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
-    await goto(page, '/admin/shipping');
+    for (const p of ['/admin', '/admin/orders', '/admin/bulk-upload']) {
+      await goto(page, p);
+      check(`store: ${p} is not found, even for an admin`, await page.waitForFunction(() => /not found|doesn.t exist|404/i.test(document.querySelector('main')?.innerText ?? '') && !document.querySelector('.admin-tabs'), { timeout: 8000 }).then(() => true).catch(() => false));
+    }
+    await goto(page, '/account');
+    check('store: an admin gets a link to the admin site', await page.waitForFunction(() => [...document.querySelectorAll('main a')].some((a) => /Open admin panel/.test(a.textContent) && a.href === 'https://kitaabaurkona.vercel.app/'), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('store: no test-site bar', (await page.$('.test-site-bar')) === null);
+    check('store without admin: no console errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  // ---------- Admin: shipping settings, booking a parcel, manifest; customer tracking ----------
+  {
+    const { page, ctx, errors } = await newPage();
+    await adminSignIn(page);
+    await gotoA(page, '/admin/shipping');
     check('admin shipping: settings load', await waitSel(page, '#ship-warehouse_name'));
     check('admin shipping: warns that nothing is booked without a warehouse name', /Nothing is booked with Xpressbees until its warehouse name/i.test(await page.$eval('main', (m) => m.innerText)));
     check('admin shipping: a carrier for new orders can be chosen (Xpressbees by default)', (await page.$eval('#ship-default_carrier', (s) => s.value).catch(() => '')) === 'xpressbees');
@@ -944,7 +1069,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('admin shipping: failed deliveries list loads from the courier', await page.waitForFunction(() => /No failed delivery attempts/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-light-1280.png'), fullPage: true });
 
-    await goto(page, '/admin/orders?status=confirmed');
+    await gotoA(page, '/admin/orders?status=confirmed');
     check('admin orders: the COD order shows its queued parcel', await page.waitForFunction(() => /Parcel: Queued/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Change courier/.test(b.textContent))?.click());
     check('admin orders: courier prices load for the parcel', await waitSel(page, '.parcel-admin select', 6000));
@@ -991,13 +1116,8 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     const dlOrder = placed.rows[0].id;
 
     const { page, ctx, errors } = await newPage();
-    await goto(page, '/sign-in');
-    await waitSel(page, '#email');
-    await page.type('#email', 'admin@example.com');
-    await page.type('#password', 'admin-pass-1');
-    await page.click('button[type=submit]');
-    await page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
-    await goto(page, '/admin/shipping');
+    await adminSignIn(page);
+    await gotoA(page, '/admin/shipping');
     await waitSel(page, '#ship-delhivery_warehouse_name');
     await page.type('#ship-delhivery_warehouse_name', 'Kitaabaurkona DL');
     await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Save settings/.test(b.textContent))?.click());
@@ -1013,7 +1133,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     );
     check('admin shipping: buttons are not left busy after registering', await page.$$eval('main button[aria-busy="true"]', (bs) => bs.length === 0));
 
-    await goto(page, '/admin/orders?status=confirmed');
+    await gotoA(page, '/admin/orders?status=confirmed');
     check('admin orders: a new order waits with Xpressbees selected', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Ship with Delhivery instead/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Ship with Delhivery instead/.test(b.textContent))?.click());
     check('admin orders: the admin moves it to Delhivery', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Book now with Delhivery/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
@@ -1032,7 +1152,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     if (labelPage) await labelPage.close();
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-light-1280.png'), fullPage: true });
 
-    await goto(page, '/admin/shipping');
+    await gotoA(page, '/admin/shipping');
     check('admin shipping: the Delhivery pickup form counts the booked parcel', await page.waitForFunction(() => /1 Delhivery parcel is booked/.test(document.body.innerText) && document.querySelector('#dl-pickup-count')?.value === '1', { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Request Delhivery pickup/.test(b.textContent))?.click());
     check('admin shipping: a Delhivery pickup is requested', await page.waitForFunction(() => /Delhivery pickup 4323300 requested/.test(document.querySelector('.toast')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
@@ -1041,7 +1161,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await sleep(150);
     check('admin shipping at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-delhivery-375.png'), fullPage: true });
-    await goto(page, '/admin/orders?status=confirmed');
+    await gotoA(page, '/admin/orders?status=confirmed');
     await page.waitForFunction(() => /AWB/.test(document.body.innerText), { timeout: 6000 }).catch(() => {});
     check('admin orders at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-375.png'), fullPage: true });

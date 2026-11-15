@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { ADMIN_ORIGIN } from '../utils/release';
 import { useAuth } from '../hooks/useAuth';
 import { useWishlist } from '../hooks/useWishlist';
 import { useAsync } from '../hooks/useAsync';
@@ -201,9 +202,9 @@ function Account() {
 
         <div className="inline-actions">
           {role === 'admin' && (
-            <Link to="/admin" className="btn btn-dark">
+            <a href={ADMIN_ORIGIN} className="btn btn-dark" target="_blank" rel="noopener noreferrer">
               Open admin panel
-            </Link>
+            </a>
           )}
           <Link to="/settings" className="btn btn-outline">
             Settings

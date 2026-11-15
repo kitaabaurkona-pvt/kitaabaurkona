@@ -307,3 +307,93 @@
 .admin-button {
   color: var(--c-on-accent);
 }
+
+/* ---------- The admin site's top bar (src/admin/AdminShell.jsx) ---------- */
+.admin-bar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: #000;
+  color: #fff;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.admin-bar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  min-height: 64px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.admin-bar-brand {
+  display: inline-flex;
+  flex: none;
+}
+
+.admin-bar-brand img {
+  display: block;
+  width: auto;
+  height: 34px;
+}
+
+.admin-bar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-width: 0;
+}
+
+.admin-bar-user {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.admin-bar-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  padding: 0 16px;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.admin-bar-button[data-kind='solid'] {
+  border-color: #fff;
+  background: #fff;
+  color: #000;
+}
+
+.admin-bar-button:focus-visible,
+.admin-bar-brand:focus-visible {
+  outline: 2px solid #ffd21f;
+  outline-offset: 3px;
+}
+
+@media (hover: hover) {
+  .admin-bar-button:hover {
+    border-color: #fff;
+    background: rgba(255, 255, 255, 0.14);
+  }
+
+  .admin-bar-button[data-kind='solid']:hover {
+    background: rgba(255, 255, 255, 0.86);
+  }
+}

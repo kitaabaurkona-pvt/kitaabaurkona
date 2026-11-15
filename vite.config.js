@@ -41,9 +41,33 @@ function preloadFonts() {
   }
 }
 
+// One codebase builds two separate sites:
+//   store  the shop customers use (branch main, www.kitaabaurkona.com)
+//   admin  the admin panel, sign-in only (branch test, kitaabaurkona.vercel.app)
+// Vercel's branch decides; locally, add --mode admin (npm run dev:admin / build:admin).
+// The admin site starts from its own entry file, so neither site ships the other's pages.
+function siteEntry(site) {
+  return {
+    name: 'site-entry',
+    transformIndexHtml: {
+      order: 'pre',
+      handler(html) {
+        if (site !== 'admin') return html
+        return html
+          .replace('src="/src/main.jsx"', 'src="/src/admin/main.jsx"')
+          .replace('<title>Kitaab Aur Kona</title>', '<title>Kitaab Aur Kona Admin</title>')
+          .replace(/<meta name="description"[^>]*>/, '<meta name="robots" content="noindex, nofollow" />')
+      },
+    },
+  }
+}
+
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), preloadFonts()],
-  define: release,
-  preview: { headers: vercelHeaders() },
+export default defineConfig(({ mode }) => {
+  const site = mode === 'admin' || process.env.VERCEL_GIT_COMMIT_REF === 'test' ? 'admin' : 'store'
+  return {
+    plugins: [react(), preloadFonts(), siteEntry(site)],
+    define: { ...release, 'import.meta.env.VITE_SITE': JSON.stringify(site) },
+    preview: { headers: vercelHeaders() },
+  }
 })

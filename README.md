@@ -1,27 +1,42 @@
 # kitaabaurkona
 our main website for kitaabaurkona
 
-## Two versions: test and live
+## Two sites from one codebase
 
-| Branch | Site | Who it is for |
+| Branch | Site | What it is |
 | --- | --- | --- |
-| `test` | https://kitaabaurkona.vercel.app | Trying new work before customers see it. Shows a striped "Test site" bar. |
-| `main` | https://www.kitaabaurkona.com | The live store. |
+| `main` | https://www.kitaabaurkona.com | The store customers use. It has no admin pages. |
+| `test` | https://kitaabaurkona.vercel.app | The admin panel: a sign-in page and the panel, nothing else. Only admins get in. |
 
-- Vercel builds each branch on its own. A build knows its branch (`src/utils/release.js`), and
-  anyone who opens it on another Vercel address is sent to its own site: the live store
-  always ends up on www.kitaabaurkona.com, the test site on kitaabaurkona.vercel.app
+- Both branches hold the same code. Vercel builds each branch on its own, and the build
+  decides which site it is from its branch (`vite.config.js`, `src/utils/release.js`):
+  `main` starts from `src/main.jsx` (the store), `test` from `src/admin/main.jsx` (the admin
+  panel). Neither site ships the other's pages.
+- The admin site asks everyone to sign in. An account that is not an admin is signed out
+  again straight away. There is no sign-up there; admins are made in the database
+  (`supabase/admin.sql`). The database and the shipping function check the admin role on
+  every request as well, so the sign-in page is not the only lock.
+- Anyone who opens a build on another Vercel address is sent to its own site: the store
+  always ends up on www.kitaabaurkona.com, the admin panel on kitaabaurkona.vercel.app
   (`vercel.json` redirects the known aliases before the page loads; the app catches any
   other Vercel address).
-- Vercel addresses are marked `noindex`, so search engines only list the live store.
-- Both versions use the same Supabase database, so orders placed on the test site are
-  real orders (stock, Xpressbees booking). The bar says so.
+- Vercel addresses are marked `noindex`, so search engines only list the store.
+- Both sites use the same Supabase database.
+
+## Running it locally
+
+| What | Command | Address |
+| --- | --- | --- |
+| Store | `npm run dev` | http://localhost:5173 |
+| Admin panel | `npm run dev:admin` | http://localhost:5198 |
+| Browser tests | `npm run build`, `npm run build:admin`, `npm run preview -- --port 5200`, `npm run preview:admin`, then `BASE=http://localhost:5200 ADMIN_BASE=http://localhost:5201 npm run e2e` | |
 
 ## Releasing
 
-1. New work is committed to `test` and pushed. Vercel deploys it to the test site.
-2. Check it on https://kitaabaurkona.vercel.app.
-3. When the owner says to ship: run lint, build and the browser tests, then move `main` to
-   exactly what is on `test` (`git push origin test:main`, a fast-forward). Vercel deploys
-   the live store.
+1. Run lint, both builds and the browser tests.
+2. Commit, then push the same commit to both branches: `git push origin test` updates the
+   admin panel, `git push origin test:main` (a fast-forward) updates the store. Only when
+   the owner says to ship.
+3. There is no separate test site any more. To try store work before customers see it,
+   push it to another branch and open the preview address Vercel gives that branch.
 4. Database changes (`supabase/schema.sql`)

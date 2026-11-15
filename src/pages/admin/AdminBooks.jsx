@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { adminErrorMessage, adminListBooks, adminListCategories, adminUpdateBook, ADMIN_PAGE_SIZE } from '../../services/adminService';
+import { LIVE_ORIGIN } from '../../utils/release';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useToast } from '../../hooks/useToast';
@@ -183,7 +184,8 @@ function AdminBooks() {
               <BookCover src={coverOf(book)} title={book.title} />
               <div className="admin-row-main">
                 <p className="line-title">
-                  <Link to={`/books/${book.id}`}>{book.title}</Link>
+                  {/* The book page is part of the store, which is a different site. */}
+                  <a href={`${LIVE_ORIGIN}/books/${book.id}`} target="_blank" rel="noopener noreferrer">{book.title}</a>
                 </p>
                 <div className="admin-row-meta">
                   <span>SKU {book.sku}</span>
