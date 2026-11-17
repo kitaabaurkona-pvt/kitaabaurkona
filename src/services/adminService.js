@@ -1,4 +1,5 @@
-import { supabase } from '../clients/supabase';
+// Admin site only: the client is part of the admin panel's first download anyway.
+import { supabase } from '../clients/supabaseClient';
 import { unwrap } from './request';
 
 // Every call here is also enforced by the database: RLS and is_admin() refuse non-admins.

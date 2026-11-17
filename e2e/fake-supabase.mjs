@@ -268,7 +268,9 @@ function condition(col, expr, params) {
 function whereClause(url, params) {
   const conds = [];
   for (const [key, value] of url.searchParams) {
-    if (['select', 'order', 'limit', 'offset', 'columns', 'on_conflict'].includes(key)) continue;
+    // apikey: the public key may be sent in the address (src/services/publicRead.js); the
+    // real gateway takes it from there, it is not a filter.
+    if (['select', 'order', 'limit', 'offset', 'columns', 'on_conflict', 'apikey'].includes(key)) continue;
     if (key === 'or') {
       const inner = splitTop(value.replace(/^\(|\)$/g, '')).map((part) => {
         const d = part.indexOf('.');

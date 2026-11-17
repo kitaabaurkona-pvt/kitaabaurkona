@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MotionConfig } from 'motion/react';
+import { LazyMotion, MotionConfig } from 'motion/react';
 import { PreferencesContext } from './preferencesContextObject';
 import { applyPreferences, readPreferences, savePreferences } from '../utils/preferences';
+
+// Animations use the small `m.` components; the engine that runs them is a separate
+// file, fetched while the first screen is drawn (nothing animates before a visitor does
+// something). `strict` makes a full `motion.` component, which would bring the whole
+// engine back into the first download, an error.
+const loadMotionFeatures = () => import('../utils/motionFeatures').then((module) => module.default);
 
 // Theme (system / light / dark) and motion (system / reduce), saved in this browser.
 export function PreferencesProvider({ children }) {
@@ -27,7 +33,9 @@ export function PreferencesProvider({ children }) {
 
   return (
     <PreferencesContext.Provider value={value}>
-      <MotionConfig reducedMotion={prefs.motion === 'reduce' ? 'always' : 'user'}>{children}</MotionConfig>
+      <LazyMotion features={loadMotionFeatures} strict>
+        <MotionConfig reducedMotion={prefs.motion === 'reduce' ? 'always' : 'user'}>{children}</MotionConfig>
+      </LazyMotion>
     </PreferencesContext.Provider>
   );
 }

@@ -1,4 +1,4 @@
-import { supabase } from '../clients/supabase';
+import { loadSupabase } from '../clients/supabase';
 import { previewMode } from '../preview/mode';
 import { unwrap } from './request';
 import { STAGING } from '../utils/release';
@@ -21,6 +21,7 @@ export const gokwikEnabled = !previewMode && /^[a-z0-9]{6,40}$/i.test(MID);
 // Saves the books of this order as a checkout cart and returns its id. Only book ids and
 // quantities are sent; the database prices the cart itself.
 export async function createCheckoutCart(items) {
+  const supabase = await loadSupabase();
   const { data } = unwrap(
     await supabase.rpc('create_checkout_cart', {
       p_items: items.map(({ bookId, quantity }) => ({ book_id: bookId, quantity })),
@@ -32,6 +33,7 @@ export async function createCheckoutCart(items) {
 
 // The order made from a checkout cart of the signed-in customer (null until placed).
 export async function getCheckoutCartOrder(cartId) {
+  const supabase = await loadSupabase();
   const { data } = unwrap(await supabase.rpc('checkout_cart_order', { p_cart: cartId }));
   return data ?? null;
 }

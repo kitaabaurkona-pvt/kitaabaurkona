@@ -1,5 +1,5 @@
-import { motion, useReducedMotion } from 'motion/react';
-import { usePreferences } from '../../hooks/usePreferences';
+import { m } from 'motion/react';
+import { useReduceMotion } from '../../hooks/useReduceMotion';
 import { useEffect, useState } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { MagnifyingGlass, User, ShoppingCart, BookmarkSimple } from '@phosphor-icons/react';
@@ -41,7 +41,7 @@ function useSearchHint(reduceMotion) {
   return { hint: SEARCH_HINTS[index], fading };
 }
 export default function SiteHeader() {
- const systemReduced=useReducedMotion(); const {motion:motionPreference}=usePreferences(); const reduceMotion=systemReduced || motionPreference==='reduce';
+ const reduceMotion=useReduceMotion();
  const {isAuthenticated}=useAuth(); const {cartOpen,openCart}=useCartLines();
  // While a cover is flying to the cart the count waits, and updates as it lands.
  const badge=useCartBadge();
@@ -78,7 +78,7 @@ export default function SiteHeader() {
   <div className="container header-top">
    <div className="header-left"><MobileMenu/><BrandLink /></div>
    <form className="header-search" role="search" onSubmit={search} onFocus={()=>setFocused(true)} onBlur={e=>{if(!e.currentTarget.contains(e.relatedTarget))setFocused(false);}} onKeyDown={e=>{if(e.key==='Escape')setFocused(false);}}><label className="visually-hidden" htmlFor="header-search">Search books by title</label><MagnifyingGlass size={23}/><input id="header-search" type="search" className={fading?'search-hint-fading':undefined} placeholder={hint} value={term} maxLength={100} onChange={e=>setTerm(e.target.value)}/><button type="submit" aria-label="Search books"><MagnifyingGlass size={19} weight="regular" aria-hidden="true"/></button>{showSuggestions&&<section className="search-suggestions" aria-label="Search suggestions"><p className="suggestion-heading">Matching books</p>{suggestions.loading || term.trim()!==suggestionTerm ? <p role="status">Finding books…</p> : suggestions.error ? <p>Suggestions are unavailable. You can still search.</p> : suggestions.data?.books.length ? <ul>{suggestions.data.books.map(book=><li key={book.id}><Link to={`/books/${book.id}`} onClick={()=>setFocused(false)}><img src={book.image_urls?.[0]} alt=""/><span><strong>{bookDisplay(book).title}</strong><small>{bookDisplay(book).author || book.category}</small></span></Link></li>)}</ul> : <p>No matching titles. Try another title or browse all books.</p>}<Link className="search-all-link" to={`/books?q=${encodeURIComponent(term.trim())}`} onClick={()=>setFocused(false)}>See all results for “{term.trim()}”</Link></section>}</form>
-   <div className="header-right"><Link className="icon-button header-wishlist" to="/wishlist" aria-label="Wishlist"><BookmarkSimple size={18} weight="regular" aria-hidden="true"/></Link><Link className="header-utility" aria-label={isAuthenticated ? 'Account' : 'Sign in'} to={isAuthenticated?'/account':'/sign-in'}><User size={23} weight="regular" aria-hidden="true"/><span>{isAuthenticated?'Account':'Sign in'}</span></Link><button className="header-utility cart-button" onClick={openCart} aria-label={`Cart, ${badge} ${badge===1?'item':'items'}`} aria-haspopup="dialog" aria-expanded={cartOpen}><motion.div key={badge} className="cart-icon-motion" initial={false} animate={{ scale: reduceMotion || !badge ? 1 : [1, 1.18, 1], rotate: reduceMotion || !badge ? 0 : [0, -7, 0] }} transition={{ duration: 0.32 }}><ShoppingCart size={26} weight="regular" aria-hidden="true"/></motion.div><span>Cart{badge>0?` (${badge})`:''}</span>{badge>0&&<small className="mobile-cart-count" aria-hidden="true">{badge>99?'99+':badge}</small>}</button></div>
+   <div className="header-right"><Link className="icon-button header-wishlist" to="/wishlist" aria-label="Wishlist"><BookmarkSimple size={18} weight="regular" aria-hidden="true"/></Link><Link className="header-utility" aria-label={isAuthenticated ? 'Account' : 'Sign in'} to={isAuthenticated?'/account':'/sign-in'}><User size={23} weight="regular" aria-hidden="true"/><span>{isAuthenticated?'Account':'Sign in'}</span></Link><button className="header-utility cart-button" onClick={openCart} aria-label={`Cart, ${badge} ${badge===1?'item':'items'}`} aria-haspopup="dialog" aria-expanded={cartOpen}><m.div key={badge} className="cart-icon-motion" initial={false} animate={{ scale: reduceMotion || !badge ? 1 : [1, 1.18, 1], rotate: reduceMotion || !badge ? 0 : [0, -7, 0] }} transition={{ duration: 0.32 }}><ShoppingCart size={26} weight="regular" aria-hidden="true"/></m.div><span>Cart{badge>0?` (${badge})`:''}</span>{badge>0&&<small className="mobile-cart-count" aria-hidden="true">{badge>99?'99+':badge}</small>}</button></div>
   </div>
   <nav className="header-nav" aria-label="Main"><div className="container header-nav-row"><NavLink to="/books" className="nav-link">Browse books</NavLink><NavMenu label="Categories" links={CATEGORIES.map(c=>({to:categoryHref(c),label:c}))} groups={groups}/><Link to={underPriceHref} className="nav-link">Budget reads</Link><Link to="/about" className="nav-link nav-about">Our story</Link></div></nav>
  </header>;

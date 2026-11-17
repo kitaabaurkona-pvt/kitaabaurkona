@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { ChevronDownIcon } from '../icons';
 
 const OPEN_DELAY = 120;
@@ -96,7 +96,7 @@ function NavMenu({ label, links, groups, current = false }) {
       </button>
       <AnimatePresence>
         {open && (
-          <motion.div
+          <m.div
             id={panelId}
             className={groups ? "nav-menu-panel grouped-book-menu" : "nav-menu-panel"}
             initial={{ opacity: 0, y: -6 }}
@@ -113,7 +113,7 @@ function NavMenu({ label, links, groups, current = false }) {
                 </li>
               ))}
             </ul>}
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
     </div>

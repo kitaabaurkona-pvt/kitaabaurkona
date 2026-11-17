@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'motion/react';
+import { m } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
 import { useCart } from '../../hooks/useCart';
 import { useWishlist } from '../../hooks/useWishlist';
@@ -41,7 +41,7 @@ function CartLine({ line, compact = false }) {
 
   if (line.pending) {
     return (
-      <motion.li className="line" data-compact={compact || undefined} {...collapse}>
+      <m.li className="line" data-compact={compact || undefined} {...collapse}>
         <p className="visually-hidden" role="status">
           Loading book…
         </p>
@@ -53,13 +53,13 @@ function CartLine({ line, compact = false }) {
             <span className="skeleton skeleton-text" style={{ width: '45%' }} />
           </div>
         </div>
-      </motion.li>
+      </m.li>
     );
   }
 
   if (!book) {
     return (
-      <motion.li className="line" data-compact={compact || undefined} {...collapse}>
+      <m.li className="line" data-compact={compact || undefined} {...collapse}>
         <div className="line-inner">
           <div className="line-cover">
             <BookCover src={null} title="Unavailable" />
@@ -73,7 +73,7 @@ function CartLine({ line, compact = false }) {
             </div>
           </div>
         </div>
-      </motion.li>
+      </m.li>
     );
   }
 
@@ -82,7 +82,7 @@ function CartLine({ line, compact = false }) {
   const TitleTag = compact ? 'h3' : 'h2';
   const display = bookDisplay(book);
   return (
-    <motion.li className="line" data-compact={compact || undefined} {...collapse}>
+    <m.li className="line" data-compact={compact || undefined} {...collapse}>
       <div className="line-inner">
         <Link to={`/books/${book.id}`} className="line-cover" tabIndex={-1} aria-hidden="true">
           <BookCover src={coverOf(book)} title={book.title} />
@@ -125,7 +125,7 @@ function CartLine({ line, compact = false }) {
           )}
         </div>
       </div>
-    </motion.li>
+    </m.li>
   );
 }
 

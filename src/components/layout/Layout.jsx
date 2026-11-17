@@ -1,6 +1,5 @@
 import { Suspense } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { motion } from 'motion/react';
 import SiteHeader from './SiteHeader';
 import SiteFooter from './SiteFooter';
 import FloatingCart from './FloatingCart';
@@ -28,8 +27,9 @@ function Layout() {
       </a>
       <SiteHeader />
       <main id="main" className="site-main" tabIndex={-1}>
-        {/* A short fade as each page comes in (none with Reduce animations). */}
-        <motion.div key={pathname} initial={reduce ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18, ease: 'linear' }}>
+        {/* A short fade as each page comes in (none with Reduce animations); .page-fade
+            in storefront-motion.css. */}
+        <div key={pathname} className={reduce ? undefined : 'page-fade'}>
           {/* A page that cannot be drawn or loaded shows a message here; the header,
               footer and every other page keep working. */}
           <ErrorBoundary>
@@ -37,7 +37,7 @@ function Layout() {
               <Outlet />
             </Suspense>
           </ErrorBoundary>
-        </motion.div>
+        </div>
       </main>
       {pathname === '/checkout' ? (
         <footer className="checkout-footer container">

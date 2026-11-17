@@ -1,4 +1,5 @@
-import { supabase } from '../clients/supabase';
+// Admin site only: the client is part of the admin panel's first download anyway.
+import { supabase } from '../clients/supabaseClient';
 
 // Book photos are stored on the owner's Hostinger hosting (hostinger/photos/upload.php),
 // not in Supabase. The upload file checks with Supabase that the caller is an admin.

@@ -291,3 +291,20 @@
   .mobile-purchase-bar{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;}
   .mobile-purchase-bar>.btn,.mobile-purchase-bar>.cart-stepper{width:100%;max-width:none;min-width:0;min-height:48px;}
 }
+
+/* ---------- Page and content entrances (plain CSS, no script needed to show them) ---------- */
+
+/* Each page fades in as it opens (Layout.jsx; left off with Reduce animations). */
+@keyframes kak-fade-in { from { opacity: 0; } }
+.page-fade { animation: kak-fade-in .18s linear; }
+
+/* Content that has just replaced its skeleton fades in once (components/motion/FadeIn). */
+.fade-in { animation: kak-fade-in .15s linear; }
+
+/* A block fades up into place the first time it scrolls into view
+   (components/motion/Reveal; Reduce animations leaves the attribute off). */
+[data-reveal] {
+  transition: opacity .4s cubic-bezier(.25, .8, .25, 1), transform .4s cubic-bezier(.25, .8, .25, 1);
+  transition-delay: var(--reveal-delay, 0s);
+}
+[data-reveal]:not([data-inview]) { opacity: 0; transform: translateY(16px); }

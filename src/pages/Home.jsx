@@ -31,7 +31,7 @@ export default function Home() {
   useDocumentTitle('Find your next favourite.');
   // Kept for the visit (useAsync keys), so coming back to the home page shows it at once.
   const featured = useAsync(() => getBooksByIds(homeIds), [], { key: 'home:books' });
-  const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4 }), [], { key: 'home:affordable' });
+  const affordable = useAsync(() => listBooks({ inStock:true, maxPrice:299, pageSize:4, withTotal:false }), [], { key: 'home:affordable' });
   return <div className="reading-home container">
     <section className="bento-hero" aria-labelledby="hero-title">
       <div className="bento-main">

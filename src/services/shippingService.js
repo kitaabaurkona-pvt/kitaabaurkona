@@ -1,9 +1,10 @@
-import { supabase } from '../clients/supabase';
+import { loadSupabase } from '../clients/supabase';
 import { isUuid, unwrap } from './request';
 
 // Every Xpressbees and Delhivery call goes through the `shipping` Edge Function. It holds
 // the courier logins and checks who is asking; the website never talks to a courier itself.
 async function invoke(action, payload = {}) {
+  const supabase = await loadSupabase();
   const { data, error } = await supabase.functions.invoke('shipping', { body: { action, ...payload } });
   if (error) {
     let message = 'The shipping service is not responding right now. Try again shortly.';
@@ -28,6 +29,7 @@ export const checkPincode = (pincode) => invoke('check_pincode', { pincode });
 
 // Parcel status from the database straight away (no courier call).
 export async function getMyShipments(orderId) {
+  const supabase = await loadSupabase();
   if (!isUuid(orderId)) return [];
   const { data } = unwrap(await supabase.rpc('get_my_shipments', { p_order: orderId }));
   return data ?? [];
@@ -91,6 +93,7 @@ export const actOnNdr = (items) => invoke('ndr_action', { items });
 export const bookReturnPickup = (orderId) => invoke('return_pickup', { order_id: orderId });
 
 export async function getShippingSettings() {
+  const supabase = await loadSupabase();
   const { data } = unwrap(await supabase.from('shipping_settings').select('*').limit(1));
   return data?.[0] ?? null;
 }
@@ -98,12 +101,14 @@ export async function getShippingSettings() {
 const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone', 'pickup_email'];
 
 export async function updateShippingSettings(patch) {
+  const supabase = await loadSupabase();
   const clean = Object.fromEntries(Object.entries(patch).filter(([key]) => SETTING_FIELDS.includes(key)));
   const { data } = unwrap(await supabase.from('shipping_settings').update(clean).eq('id', true).select('*'));
   return data?.[0] ?? null;
 }
 
 export async function listProblemShipments() {
+  const supabase = await loadSupabase();
   const { data } = unwrap(
     await supabase
       .from('shipments')
@@ -117,6 +122,7 @@ export async function listProblemShipments() {
 
 // Delhivery parcels booked and waiting to be collected (to fill in a pickup request).
 export async function countDelhiveryAwaitingPickup() {
+  const supabase = await loadSupabase();
   const { count } = unwrap(
     await supabase.from('shipments').select('id', { count: 'exact', head: true }).eq('carrier', 'delhivery').eq('kind', 'forward').eq('status', 'booked'),
   );

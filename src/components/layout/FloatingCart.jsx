@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { ShoppingCart } from '@phosphor-icons/react';
 import { useCartLines } from '../../hooks/useCartLines';
 import { useCartBadge } from '../../hooks/useCartBadge';
@@ -31,7 +31,7 @@ function FloatingCart() {
   return (
     <AnimatePresence>
       {show && (
-        <motion.button
+        <m.button
           type="button"
           className="floating-cart"
           aria-label={label}
@@ -42,7 +42,7 @@ function FloatingCart() {
           exit={reduce ? { opacity: 0 } : { opacity: 0, y: -12, scale: 0.92 }}
           transition={{ duration: 0.2, ease: [0.25, 0.8, 0.25, 1] }}
         >
-          <motion.span
+          <m.span
             key={badge}
             className="cart-icon-motion"
             initial={false}
@@ -50,13 +50,13 @@ function FloatingCart() {
             transition={{ duration: 0.32 }}
           >
             <ShoppingCart size={22} weight="regular" aria-hidden="true" />
-          </motion.span>
+          </m.span>
           {badge > 0 && (
             <span className="floating-cart-count" aria-hidden="true">
               {badge > 99 ? '99+' : badge}
             </span>
           )}
-        </motion.button>
+        </m.button>
       )}
     </AnimatePresence>
   );

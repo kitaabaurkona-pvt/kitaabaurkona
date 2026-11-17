@@ -5,6 +5,7 @@
 // with a 1x1 picture and counted).
 // Run: node e2e/speed.mjs
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -116,13 +117,22 @@ try {
 
   const vercel = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
   const cacheOf = (source) => vercel.headers.find((h) => h.source === source)?.headers.find((x) => x.key === 'Cache-Control')?.value ?? '';
-  check('script, style, font and picture files are kept by the browser', ['/assets/(.*)', '/images/(.*)', '/banners/(.*)'].every((s) => /max-age=86400/.test(cacheOf(s)) && /stale-while-revalidate/.test(cacheOf(s))));
+  // Script, style and font files have the content's fingerprint in their names (a release
+  // gives them new names), so they are kept for a year without asking again.
+  check('script, style and font files are kept for a year', /max-age=31536000/.test(cacheOf('/assets/(.*)')) && /immutable/.test(cacheOf('/assets/(.*)')));
+  check('picture files are kept by the browser', ['/images/(.*)', '/banners/(.*)'].every((s) => /max-age=86400/.test(cacheOf(s)) && /stale-while-revalidate/.test(cacheOf(s))));
   check('the page itself is never kept (a release shows at once)', !vercel.headers.some((h) => h.source === '/(.*)' && h.headers.some((x) => x.key === 'Cache-Control')));
   check('a missing script file answers "not found", not the web page', vercel.rewrites.length === 1 && vercel.rewrites[0].source === '/((?!assets/).*)' && new RegExp(`^${vercel.rewrites[0].source}$`).test('/books/x') && !new RegExp(`^${vercel.rewrites[0].source}$`).test('/assets/Books-old.js'));
   check('security headers are still the first rule, for every address', vercel.headers[0].source === '/(.*)' && vercel.headers[0].headers.some((h) => h.key === 'Content-Security-Policy'));
   const html = fs.readFileSync(path.join(BUILD, 'index.html'), 'utf8');
   check('the two main fonts are fetched with the page', (html.match(/rel="preload" as="font"/g) ?? []).length === 2 && /dm-sans-latin-wght-normal/.test(html) && /bricolage-grotesque-latin-wght-normal/.test(html));
   check('the database connection is opened early', /rel="preconnect" href="https:\/\/[a-z0-9]+\.supabase\.co" crossorigin/.test(html));
+  // The page's one inline script (theme, hero covers) may only run if the security policy
+  // names its exact fingerprint: any edit to it needs a new hash in vercel.json.
+  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const csp = vercel.headers[0].headers.find((h) => h.key === 'Content-Security-Policy').value;
+  const hashes = inline.map((s) => `sha256-${crypto.createHash('sha256').update(s).digest('base64')}`);
+  check("the security policy allows the page's inline script (update its sha256 in vercel.json after editing it)", inline.length === 1 && hashes.every((h) => csp.includes(`'${h}'`)), hashes.join(' '));
 
   // ---------- Home ----------
   {

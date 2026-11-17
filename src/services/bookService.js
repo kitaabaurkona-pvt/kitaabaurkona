@@ -1,15 +1,23 @@
 import { previewMode } from '../preview/mode';
-import { supabase } from '../clients/supabase';
 import { escapeLike } from '../utils/storeForm';
-import { isUuid, unwrap } from './request';
+import { isUuid } from './request';
+import { inList, readPublic } from './publicRead';
 import { COLLECTIONS } from '../utils/categories';
-import { buildIndex, rankBooks } from '../utils/bookSearch';
 
 export const LIST_FIELDS = 'id, title, price, mrp, discount_percent, stock_quantity, image_urls';
 const DETAIL_FIELDS =
   'id, title, sku, description, price, mrp, discount_percent, stock_quantity, image_urls, video_url, length_cm, breadth_cm, height_cm, weight_kg, attributes, category';
 
 export const PAGE_SIZE = 24;
+
+// PostgREST wants column lists without spaces.
+const columns = (fields) => fields.replace(/\s+/g, '');
+const VISIBLE = ['is_visible', 'eq.true'];
+// Rows `from`..`from + size - 1`, as supabase-js .range() sends them.
+const rangeOf = (from, size) => [
+  ['offset', String(from)],
+  ['limit', String(size)],
+];
 
 export const SORTS = {
   title: { label: 'Title: A to Z', column: 'title', ascending: true },
@@ -20,6 +28,8 @@ export const SORTS = {
 // The default order while searching: best match first.
 export const RELEVANCE = 'relevance';
 
+// `withTotal: false` skips counting every matching book (total is then 0), which makes
+// the read cheaper and quicker (see publicRead.js); for shelves that never show a count.
 export async function listBooks({
   search = '',
   sort = 'title',
@@ -29,26 +39,22 @@ export async function listBooks({
   collection = '',
   page = 0,
   pageSize = PAGE_SIZE,
+  withTotal = true,
 } = {}) {
   if (previewMode) return (await import('../preview/catalogue')).previewList({ search, sort, inStock, category, maxPrice, collection, page, pageSize });
   const order = SORTS[sort] ?? SORTS.title;
-  let query = supabase.from('books').select(LIST_FIELDS, { count: 'exact' }).eq('is_visible', true);
+  const params = [['select', columns(LIST_FIELDS)], VISIBLE];
   const term = search.trim().slice(0, 100);
-  if (term) query = query.ilike('title', `%${escapeLike(term)}%`);
-  if (inStock) query = query.gt('stock_quantity', 0);
-  if (category) query = query.eq('category', category);
-  if (Number.isFinite(maxPrice) && maxPrice > 0) query = query.lte('price', maxPrice);
+  if (term) params.push(['title', `ilike.%${escapeLike(term)}%`]);
+  if (inStock) params.push(['stock_quantity', 'gt.0']);
+  if (category) params.push(['category', `eq.${category}`]);
+  if (Number.isFinite(maxPrice) && maxPrice > 0) params.push(['price', `lte.${maxPrice}`]);
   // Fixed, code-defined title patterns only; nothing from the URL reaches the filter text.
   const languages = COLLECTIONS[collection]?.languages;
-  if (languages) query = query.or(languages.map((word) => `title.ilike.%${word}%`).join(','));
-  const from = page * pageSize;
-  const { data, count } = unwrap(
-    await query
-      .order(order.column, { ascending: order.ascending })
-      .order('id', { ascending: true })
-      .range(from, from + pageSize - 1),
-  );
-  return { books: data ?? [], total: count ?? 0 };
+  if (languages) params.push(['or', `(${languages.map((word) => `title.ilike.%${word}%`).join(',')})`]);
+  params.push(['order', `${order.column}.${order.ascending ? 'asc' : 'desc'},id.asc`], ...rangeOf(page * pageSize, pageSize));
+  const { data, count } = await readPublic('books', params, { count: withTotal });
+  return { books: data, total: count ?? 0 };
 }
 
 // ---------------------------------------------------------------------------------
@@ -69,18 +75,17 @@ let searchIndex = null;
 async function readIndexRows() {
   const rows = [];
   for (let from = 0; from < 20 * INDEX_CHUNK; from += INDEX_CHUNK) {
-    const { data } = unwrap(
-      await supabase.from('books').select(INDEX_FIELDS).eq('is_visible', true).order('id', { ascending: true }).range(from, from + INDEX_CHUNK - 1),
-    );
-    rows.push(...(data ?? []));
-    if (!data || data.length < INDEX_CHUNK) break;
+    const { data } = await readPublic('books', [['select', columns(INDEX_FIELDS)], VISIBLE, ['order', 'id.asc'], ...rangeOf(from, INDEX_CHUNK)]);
+    rows.push(...data);
+    if (data.length < INDEX_CHUNK) break;
   }
   return rows;
 }
 
 function loadSearchIndex() {
   if (searchIndex && Date.now() - searchIndex.at < INDEX_TTL) return searchIndex.promise;
-  const promise = readIndexRows().then(buildIndex);
+  // The ranking code is only needed once someone searches, so it is loaded then.
+  const promise = Promise.all([readIndexRows(), import('../utils/bookSearch')]).then(([rows, search]) => ({ index: search.buildIndex(rows), rankBooks: search.rankBooks }));
   searchIndex = { at: Date.now(), promise };
   promise.catch(() => {
     if (searchIndex?.promise === promise) searchIndex = null;
@@ -118,7 +123,7 @@ export async function searchBooks({
   pageSize = PAGE_SIZE,
 } = {}) {
   if (previewMode) return (await import('../preview/catalogue')).previewList({ search, sort: SORTS[sort] ? sort : 'title', inStock, category, maxPrice, collection, page, pageSize });
-  const index = await loadSearchIndex();
+  const { index, rankBooks } = await loadSearchIndex();
   const ranked = rankBooks(index, search.trim().slice(0, 100));
   const languages = COLLECTIONS[collection]?.languages?.map((word) => word.toLowerCase());
   const passes = (book) =>
@@ -146,8 +151,8 @@ export async function searchBooks({
   const ids = rows.slice(page * pageSize, (page + 1) * pageSize).map((book) => book.id);
   let books = [];
   if (ids.length > 0) {
-    const { data } = unwrap(await supabase.from('books').select(LIST_FIELDS).in('id', ids).eq('is_visible', true));
-    const byId = new Map((data ?? []).map((book) => [book.id, book]));
+    const { data } = await readPublic('books', [['select', columns(LIST_FIELDS)], ['id', inList(ids)], VISIBLE]);
+    const byId = new Map(data.map((book) => [book.id, book]));
     books = ids.map((id) => byId.get(id)).filter(Boolean);
   }
   return { books, total, note, relaxed, missing: ranked.missing };
@@ -156,8 +161,8 @@ export async function searchBooks({
 export async function getBook(id) {
   if (previewMode) return (await import('../preview/catalogue')).previewBooks.find(b => b.id === id) ?? null;
   if (!isUuid(id)) return null;
-  const { data } = unwrap(await supabase.from('books').select(DETAIL_FIELDS).eq('id', id).eq('is_visible', true).maybeSingle());
-  return data;
+  const { data } = await readPublic('books', [['select', columns(DETAIL_FIELDS)], ['id', `eq.${id}`], VISIBLE]);
+  return data[0] ?? null;
 }
 
 // Used by the cart: hidden or deleted books simply do not come back.
@@ -165,26 +170,23 @@ export async function getBooksByIds(ids) {
   if (previewMode) return (await import('../preview/catalogue')).previewBooks.filter(b => ids.includes(b.id));
   const valid = ids.filter(isUuid);
   if (valid.length === 0) return [];
-  const { data } = unwrap(await supabase.from('books').select(`${LIST_FIELDS}, is_visible`).in('id', valid));
-  return (data ?? []).filter((book) => book.is_visible);
+  const { data } = await readPublic('books', [['select', columns(`${LIST_FIELDS}, is_visible`)], ['id', inList(valid)]]);
+  return data.filter((book) => book.is_visible);
 }
 
 // Per category: how many visible books it has and a cover to show for it (the biggest
 // in-stock discount, or any book if none is in stock), e.g.
 // { 'Self-Help': { count: 61, cover: 'https://…', bookTitle: '…' } }.
 export async function listCategorySummary() {
-  const { data } = unwrap(
-    await supabase
-      .from('books')
-      .select('category, title, image_urls, stock_quantity')
-      .eq('is_visible', true)
-      .not('category', 'is', null)
-      .order('discount_percent', { ascending: false })
-      .order('title', { ascending: true })
-      .limit(1000),
-  );
+  const { data } = await readPublic('books', [
+    ['select', 'category,title,image_urls,stock_quantity'],
+    VISIBLE,
+    ['category', 'not.is.null'],
+    ['order', 'discount_percent.desc,title.asc'],
+    ['limit', '1000'],
+  ]);
   const summary = {};
-  for (const row of data ?? []) {
+  for (const row of data) {
     const entry = (summary[row.category] ??= { count: 0, cover: null, bookTitle: '', inStock: false });
     entry.count += 1;
     const cover = Array.isArray(row.image_urls) ? row.image_urls[0] : null;
@@ -200,8 +202,6 @@ export async function listCategorySummary() {
 
 export async function listCategories() {
   if (previewMode) return [...new Set((await import('../preview/catalogue')).previewBooks.map(b => b.category))].filter(Boolean).sort();
-  const { data } = unwrap(
-    await supabase.from('books').select('category').eq('is_visible', true).not('category', 'is', null).limit(1000),
-  );
-  return [...new Set((data ?? []).map((row) => row.category))].sort((a, b) => a.localeCompare(b));
+  const { data } = await readPublic('books', [['select', 'category'], VISIBLE, ['category', 'not.is.null'], ['limit', '1000']]);
+  return [...new Set(data.map((row) => row.category))].sort((a, b) => a.localeCompare(b));
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { useCart } from '../../hooks/useCart';
 import { useReduceMotion } from '../../hooks/useReduceMotion';
 import { MAX_QUANTITY } from '../../utils/storeForm';
@@ -73,7 +73,7 @@ function AddToCartButton({ book, className = 'btn btn-primary', label = 'Add to 
       </button>
       <span className="cart-stepper-count" aria-live="polite" aria-atomic="true">
         <AnimatePresence mode="popLayout" initial={false} custom={direction}>
-          <motion.span
+          <m.span
             key={inCart}
             className="cart-stepper-number"
             custom={direction}
@@ -88,7 +88,7 @@ function AddToCartButton({ book, className = 'btn btn-primary', label = 'Add to 
             transition={{ duration: 0.2, ease: [0.25, 0.8, 0.25, 1] }}
           >
             {inCart}
-          </motion.span>
+          </m.span>
         </AnimatePresence>
         <span className="visually-hidden"> in cart</span>
       </span>

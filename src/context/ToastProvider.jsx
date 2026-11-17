@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { ToastContext } from './toastContextObject';
 import { takeAuthRedirectError } from '../utils/authRedirect';
 import { CloseIcon } from '../components/icons';
@@ -47,7 +47,7 @@ export function ToastProvider({ children }) {
       <div className="toasts" role="region" aria-label="Notifications">
         <AnimatePresence initial={false}>
           {toasts.map((toast) => (
-            <motion.div
+            <m.div
               key={toast.id}
               layout
               className="toast"
@@ -79,7 +79,7 @@ export function ToastProvider({ children }) {
               <button type="button" className="toast-close" aria-label="Dismiss notification" onClick={() => dismiss(toast.id)}>
                 <CloseIcon size={18} />
               </button>
-            </motion.div>
+            </m.div>
           ))}
         </AnimatePresence>
       </div>

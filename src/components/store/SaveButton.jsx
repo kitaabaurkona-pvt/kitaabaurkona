@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence, m } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
 import { useWishlist } from '../../hooks/useWishlist';
 import { useToast } from '../../hooks/useToast';
@@ -44,7 +44,7 @@ function SaveButton({ bookId, title, className = 'save-button', withLabel = fals
       title={failed ? 'Could not update your wishlist. Try again.' : undefined}
       onClick={handleClick}
     >
-      <motion.span
+      <m.span
         key={saved ? 'saved' : 'not-saved'}
         className="save-icon"
         initial={touched ? { scale: saved ? 0.5 : 0.85 } : false}
@@ -52,11 +52,11 @@ function SaveButton({ bookId, title, className = 'save-button', withLabel = fals
         transition={saved ? { type: 'spring', stiffness: 520, damping: 14 } : { duration: 0.18, ease: 'easeOut' }}
       >
         <BookmarkIcon size={20} filled={saved} />
-      </motion.span>
+      </m.span>
       {withLabel && (
         <span className="save-label">
           <AnimatePresence mode="popLayout" initial={false}>
-            <motion.span
+            <m.span
               key={saved ? 'saved' : 'save'}
               initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
@@ -64,7 +64,7 @@ function SaveButton({ bookId, title, className = 'save-button', withLabel = fals
               transition={{ duration: 0.18, ease: 'easeOut' }}
             >
               {saved ? 'Saved' : 'Save'}
-            </motion.span>
+            </m.span>
           </AnimatePresence>
         </span>
       )}

@@ -1,4 +1,5 @@
-import { supabase } from '../clients/supabase';
+// Admin site only: the client is part of the admin panel's first download anyway.
+import { supabase } from '../clients/supabaseClient';
 
 export const MAX_BOOKS_PER_UPLOAD = 5000;
 

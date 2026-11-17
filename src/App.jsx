@@ -1,13 +1,15 @@
+import { Suspense } from 'react';
 import { lazyPage } from './utils/lazyPage';
 import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import TestShopBar from './components/layout/TestShopBar';
 import ProtectedRoute from './components/ProtectedRoute';
-import SignIn from './pages/SignIn';
-import SignUp from './pages/SignUp';
-import ForgotPassword from './pages/ForgotPassword';
-import ResetPassword from './pages/ResetPassword';
 import Home from './pages/Home';
+// The sign-in pages have their own look and style sheet, so they are loaded only when opened.
+const SignIn = lazyPage(() => import('./pages/SignIn'));
+const SignUp = lazyPage(() => import('./pages/SignUp'));
+const ForgotPassword = lazyPage(() => import('./pages/ForgotPassword'));
+const ResetPassword = lazyPage(() => import('./pages/ResetPassword'));
 const Books = lazyPage(() => import('./pages/Books'));
 const BookDetail = lazyPage(() => import('./pages/BookDetail'));
 const Offers = lazyPage(() => import('./pages/Offers'));
@@ -35,6 +37,8 @@ function App() {
   return (
     <>
       <TestShopBar />
+      {/* While a sign-in page loads, the page being left stays on screen. */}
+      <Suspense fallback={null}>
       <Routes>
         {/* Auth pages render their own shell instead of the store layout */}
         <Route path="/sign-in" element={<SignIn />} />
@@ -74,6 +78,7 @@ function App() {
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
+      </Suspense>
     </>
   );
 }
