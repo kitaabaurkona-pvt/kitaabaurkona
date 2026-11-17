@@ -41,3 +41,6 @@ e2e/shots/
 
 # Hostinger photo upload settings (filled-in copy of config.example.php)
 /hostinger/photos/config.php
+
+# Postman collection for GoKwik (made by scripts/make-gokwik-postman.mjs)
+/gokwik-postman-collection.json

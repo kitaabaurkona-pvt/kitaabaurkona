@@ -79,9 +79,13 @@ function loadSdk() {
 
 // Opens GoKwik's checkout for a checkout cart. Rejects when GoKwik's script cannot be
 // loaded, so the caller can fall back to the site's own checkout.
-//   phone      the customer's mobile, to prefill GoKwik's sign-in
-//   nativeUrl  where GoKwik sends the customer if its checkout cannot start
-export async function openGokwikCheckout({ cartId, phone, nativeUrl, onComplete, onClose, onFailure }) {
+//   phone        the customer's mobile, to prefill GoKwik's sign-in
+//   customerId   the customer's account id, passed as GoKwik's customerToken so GoKwik
+//                can map the cart to the customer (GoKwik's mail of 17 Nov). It is the
+//                same id the cart id starts with, never the customer's sign-in token.
+//   nativeUrl    where GoKwik sends the customer if its checkout cannot start
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export async function openGokwikCheckout({ cartId, customerId, phone, nativeUrl, onComplete, onClose, onFailure }) {
   const sdk = await loadSdk();
   handlers = { onComplete, onClose, onFailure };
   sdk.initCheckout({
@@ -89,7 +93,7 @@ export async function openGokwikCheckout({ cartId, phone, nativeUrl, onComplete,
     type: 'merchantInfo',
     mid: MID,
     ...(/^[6-9][0-9]{9}$/.test(phone ?? '') ? { phoneNumber: phone } : {}),
-    merchantParams: { merchantCheckoutId: cartId },
+    merchantParams: { merchantCheckoutId: cartId, ...(UUID.test(customerId ?? '') ? { customerToken: customerId } : {}) },
     nativeCheckoutUrl: nativeUrl,
   });
 }

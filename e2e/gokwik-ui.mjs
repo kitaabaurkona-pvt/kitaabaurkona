@@ -165,7 +165,8 @@ try {
     const init = await page.evaluate(() => window.__gk.inits[0]);
     const cartId = init.merchantParams?.merchantCheckoutId ?? '';
     check('checkout: GoKwik gets the merchant id, sandbox mode and a cart id', init.mid === MID && init.environment === 'sandbox' && init.type === 'merchantInfo' && /^[0-9a-f-]{36}-[1-9][0-9]*$/.test(cartId), JSON.stringify(init));
-    check("checkout: the customer's mobile is prefilled and no sign-in token is handed over", init.phoneNumber === '9876543210' && init.merchantParams.customerToken === undefined && !JSON.stringify(init).includes('eyJ'));
+    check("checkout: the customer's mobile is prefilled and no sign-in token is handed over", init.phoneNumber === '9876543210' && !JSON.stringify(init).includes('eyJ'));
+    check("checkout: GoKwik gets the customer's account id as customerToken, matching the cart id", init.merchantParams.customerToken === USERS['reader@example.com'].id && cartId.startsWith(`${init.merchantParams.customerToken}-`), JSON.stringify(init.merchantParams));
     check('checkout: the fallback address is the site checkout', init.nativeCheckoutUrl === `${BASE}/checkout?native=1`);
     check('checkout: the script came from the GoKwik sandbox host', sdkRequests.length === 1 && sdkRequests[0] === 'https://sandbox.pdp.gokwik.co/v4/build/gokwik.js');
     const cart = await one(`select user_id, item_count, site from public.checkout_carts where id = $1`, [cartId]);

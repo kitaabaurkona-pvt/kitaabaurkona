@@ -96,7 +96,7 @@ function OtherBooks({ others, onInclude }) {
 // GoKwik's servers then place the order with our backend; this page only learns that it
 // happened and moves on to the order. `onUnavailable` switches to the site's own
 // checkout when GoKwik cannot be opened.
-function GokwikCheckout({ phone, lines, totals, others = [], removable = [], onInclude, onExclude, wholeCart, nativeUrl, onUnavailable }) {
+function GokwikCheckout({ phone, customerId, lines, totals, others = [], removable = [], onInclude, onExclude, wholeCart, nativeUrl, onUnavailable }) {
   const navigate = useNavigate();
   const { clear, remove } = useCart();
   const [error, setError] = useState(null);
@@ -132,6 +132,7 @@ function GokwikCheckout({ phone, lines, totals, others = [], removable = [], onI
     try {
       await openGokwikCheckout({
         cartId,
+        customerId,
         phone,
         nativeUrl,
         onComplete: async () => finish(await orderOf(cartId)),
@@ -428,6 +429,7 @@ function Checkout() {
       <GokwikCheckout
         {...order}
         phone={p.phone ?? ''}
+        customerId={user.id}
         nativeUrl={`${window.location.origin}/checkout?native=1${buyId ? `&buy=${encodeURIComponent(buyId)}` : ''}`}
         onUnavailable={() => setGokwikDown(true)}
       />
