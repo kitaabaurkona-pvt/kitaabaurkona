@@ -111,6 +111,7 @@ async function newPage({ width = 1280, height = 900, sdk = 'ok' } = {}) {
     const url = new URL(req.url());
     if (url.hostname.endsWith('gokwik.co')) {
       sdkRequests.push(url.href);
+      if (sdk === 'real') return req.continue();
       if (sdk === 'blocked') return req.abort('failed');
       return req.respond({ status: 200, headers: { 'content-type': 'application/javascript' }, body: FAKE_SDK });
     }
@@ -151,6 +152,35 @@ try {
   const headers = (await fetch(`${BASE}/`)).headers;
   const csp = headers.get('content-security-policy') ?? '';
   check("the security policy lets GoKwik's script, popup and calls through, and nothing else new", /script-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && /frame-src https:\/\/\*\.gokwik\.co;/.test(csp) && /connect-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp) && /frame-ancestors 'none'/.test(csp), csp);
+
+  // ---------- GoKwik's REAL script under our security policy (needs the internet) ----------
+  // The stand-in above cannot show this: GoKwik's script creates window.gokwikSdk by
+  // writing a small inline <script> into the page, which our policy allows only by its
+  // exact sha256 (script-src in vercel.json). If GoKwik changes that code, checkout stops
+  // opening: this fails and prints the new hash to put in vercel.json.
+  for (const [label, url] of [['sandbox', 'https://sandbox.pdp.gokwik.co/v4/build/gokwik.js'], ['production', 'https://pdp.gokwik.co/v4/build/gokwik.js']]) {
+    const { page, ctx } = await newPage({ sdk: 'real' });
+    await page.evaluateOnNewDocument(() => {
+      window.__csp = [];
+      document.addEventListener('securitypolicyviolation', (e) => window.__csp.push({ directive: e.violatedDirective, blocked: e.blockedURI || 'inline' }));
+    });
+    await goto(page, '/');
+    const result = await page.evaluate(async (src) => {
+      const loaded = await new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => resolve(true);
+        script.onerror = () => resolve(false);
+        document.head.appendChild(script);
+      });
+      await new Promise((r) => setTimeout(r, 1000));
+      const inline = document.getElementById('gokwik-sdk-script')?.textContent ?? '';
+      const digest = inline ? btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(inline))))) : '';
+      return { loaded, ready: typeof window.gokwikSdk?.initCheckout === 'function', hash: digest ? `sha256-${digest}` : '', csp: window.__csp };
+    }, url);
+    check(`GoKwik's real ${label} script starts under our security policy`, result.loaded && result.ready && result.csp.length === 0, JSON.stringify({ ...result, fix: result.hash && !csp.includes(result.hash) ? `add '${result.hash}' to script-src in vercel.json` : undefined }));
+    await ctx.close();
+  }
 
   // ---------- Paying online ----------
   {
