@@ -274,9 +274,19 @@ try {
 
   // ---------- Sandbox orders and part payment ----------
   const cartTest = await newCart([{ book_id: books[4].id, quantity: 1 }]);
+  const stockSandbox = async () => (await one(`select stock_quantity from public.books where id = $1`, [books[4].id])).stock_quantity;
+  const beforeTest = await stockSandbox();
   const test = await call('/place-order', placeBody(cartTest, 'prepaid', Number(books[4].price)), { token: SANDBOX_TOKEN });
   const o3 = await orderByNumber(test.json.order_id);
   check('a sandbox order is marked as a test and gets no parcel', o3.is_test === true && (await one(`select count(*)::int as n from public.shipments where order_id = $1`, [o3.id])).n === 0);
+  check('a sandbox order takes no books from the live stock', (await stockSandbox()) === beforeTest);
+  await asRole(db, ADMIN, (tx) => tx.query(`select public.admin_set_order_status($1, 'cancelled')`, [o3.id]));
+  check('cancelling a sandbox order puts no books back either', (await stockSandbox()) === beforeTest);
+  const cartTestCod = await newCart([{ book_id: books[4].id, quantity: 1 }]);
+  const testCod = await call('/place-order', placeBody(cartTestCod, 'cod', Number(books[4].price)), { token: SANDBOX_TOKEN });
+  const o3c = await orderByNumber(testCod.json.order_id);
+  await asRole(db, READER, (tx) => tx.query(`select public.cancel_order($1)`, [o3c.id]));
+  check('a customer cancelling a sandbox cash-on-delivery order changes no stock', o3c.is_test === true && (await stockSandbox()) === beforeTest);
   const cartPart = await newCart([{ book_id: books[5].id, quantity: 1 }]);
   const priceE = Number(books[5].price);
   const part = await call('/place-order', placeBody(cartPart, 'pp-cod', priceE, { ppcod: { prepaid_amount: 49, payable_on_delivery: priceE - 49 } }));

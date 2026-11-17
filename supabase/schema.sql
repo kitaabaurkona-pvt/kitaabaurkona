@@ -951,8 +951,9 @@ set search_path = ''
 as $$
 declare
   v_status text;
+  v_test boolean;
 begin
-  select status into v_status
+  select status, is_test into v_status, v_test
   from public.orders
   where id = p_order and user_id = auth.uid()
   for update;
@@ -961,7 +962,8 @@ begin
     raise exception 'This order can no longer be cancelled' using errcode = 'P0001';
   end if;
 
-  if v_status = 'confirmed' then
+  -- A GoKwik sandbox test order never took books from stock, so none go back.
+  if v_status = 'confirmed' and not v_test then
     update public.books b
     set stock_quantity = b.stock_quantity + i.quantity
     from public.order_items i
@@ -987,6 +989,7 @@ set search_path = ''
 as $$
 declare
   v_current text;
+  v_test boolean;
   v_short integer;
   v_returned boolean;
 begin
@@ -994,7 +997,7 @@ begin
     raise exception 'Only admins can change orders' using errcode = '42501';
   end if;
 
-  select status into v_current from public.orders where id = p_order for update;
+  select status, is_test into v_current, v_test from public.orders where id = p_order for update;
   if v_current is null then
     raise exception 'Order not found' using errcode = 'P0002';
   end if;
@@ -1017,7 +1020,10 @@ begin
     raise exception 'This parcel has left the warehouse' using errcode = 'P0001', hint = 'shipped';
   end if;
 
-  if p_status = 'paid' then
+  -- A GoKwik sandbox test order never touches stock (it shares the live database).
+  if v_test then
+    null;
+  elsif p_status = 'paid' then
     select count(*) into v_short
     from public.order_items i
     join public.books b on b.id = i.book_id
@@ -2038,11 +2044,14 @@ begin
     (e ->> 'unit_price')::numeric, (e ->> 'unit_mrp')::numeric, (e ->> 'quantity')::integer
   from jsonb_array_elements(v_cart.items) as e;
 
-  -- Paid or confirmed straight away, so the books leave stock now.
-  update public.books b
-  set stock_quantity = b.stock_quantity - i.quantity
-  from public.order_items i
-  where i.order_id = v_order and b.id = i.book_id;
+  -- Paid or confirmed straight away, so the books leave stock now. A sandbox test order
+  -- takes nothing: the test shop shares the live database and its stock.
+  if v_environment <> 'sandbox' then
+    update public.books b
+    set stock_quantity = b.stock_quantity - i.quantity
+    from public.order_items i
+    where i.order_id = v_order and b.id = i.book_id;
+  end if;
 
   insert into public.order_payments (
     order_id, environment, cart_id, method, payment_id, gateway_payment_id, instrument,
@@ -2101,6 +2110,7 @@ declare
   v_amount numeric := coalesce((p ->> 'amount')::numeric, 0);
   v_order uuid;
   v_status text;
+  v_test boolean;
   v_cancelled boolean := false;
 begin
   insert into public.payment_events (event, payment_id, reference_id, cart_id, amount, detail)
@@ -2128,12 +2138,15 @@ begin
   if v_event = 'transaction.auto_refund' then
     -- Noted first, so cancelling below does not ask GoKwik for a second refund.
     update public.order_payments set refund_status = 'auto_refund' where order_id = v_order;
-    select status into v_status from public.orders where id = v_order for update;
+    select status, is_test into v_status, v_test from public.orders where id = v_order for update;
     if v_status in ('paid', 'confirmed') and not public.order_has_left(v_order) then
-      update public.books b
-      set stock_quantity = b.stock_quantity + i.quantity
-      from public.order_items i
-      where i.order_id = v_order and b.id = i.book_id;
+      -- A sandbox test order took no books, so none go back.
+      if not v_test then
+        update public.books b
+        set stock_quantity = b.stock_quantity + i.quantity
+        from public.order_items i
+        where i.order_id = v_order and b.id = i.book_id;
+      end if;
       update public.orders set status = 'cancelled' where id = v_order;
       v_cancelled := true;
     end if;
