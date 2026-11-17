@@ -8,7 +8,7 @@ return [
     'supabase_anon_key' => 'YOUR-ANON-KEY',
 
     // The web address of this folder on Hostinger, without a slash at the end.
-    'public_base_url' => 'https://photos.kitaabaurkona.com',
+    'public_base_url' => 'https://kitaabaurkonaphotos.bizwitheet.com',
 
     // Websites allowed to upload: the admin panel. Add http://localhost:5198 only while
     // testing the admin panel on your own computer.

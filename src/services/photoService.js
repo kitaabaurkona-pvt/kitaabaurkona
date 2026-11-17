@@ -3,7 +3,7 @@ import { supabase } from '../clients/supabase';
 // Book photos are stored on the owner's Hostinger hosting (hostinger/photos/upload.php),
 // not in Supabase. The upload file checks with Supabase that the caller is an admin.
 // VITE_PHOTO_UPLOAD_URL overrides the address (used by the browser tests).
-export const PHOTO_UPLOAD_URL = import.meta.env.VITE_PHOTO_UPLOAD_URL || 'https://photos.kitaabaurkona.com/upload.php';
+export const PHOTO_UPLOAD_URL = import.meta.env.VITE_PHOTO_UPLOAD_URL || 'https://kitaabaurkonaphotos.bizwitheet.com/upload.php';
 const PHOTO_BASE = `${new URL(PHOTO_UPLOAD_URL).origin}/files/`;
 
 export const MAX_PHOTOS = 10;

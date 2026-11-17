@@ -131,7 +131,7 @@ const shippingFunction = createHandler({
 
 // A stand-in for the Hostinger photo storage (hostinger/photos/upload.php): it asks the
 // fake Supabase whether the caller is an admin, like the real file does.
-const PHOTO_ORIGIN = 'https://photos.kitaabaurkona.com';
+const PHOTO_ORIGIN = 'https://kitaabaurkonaphotos.bizwitheet.com';
 const photoLog = { uploads: 0, refused: 0, deleted: [] };
 const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 async function photoHost(req, url) {
