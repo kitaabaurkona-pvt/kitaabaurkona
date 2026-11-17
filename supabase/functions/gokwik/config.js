@@ -8,7 +8,7 @@ export const SITE_ORIGINS = [
   'https://kitaabaurkona.com',
   'https://kitaabaurkona-kitaabaurkona.vercel.app',
   'https://kitaabaurkona.vercel.app',
-  'https://staging.kitaabaurkona.com',
+  'https://kitaabaurkonastaging.bizwitheet.com',
   'http://localhost:5199',
   'http://localhost:5200',
   'http://localhost:5173',

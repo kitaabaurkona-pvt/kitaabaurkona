@@ -45,7 +45,7 @@ function preloadFonts() {
 //   store    the shop customers use (branch main, www.kitaabaurkona.com)
 //   admin    the admin panel, sign-in only (branch test, kitaabaurkona.vercel.app)
 //   staging  the shop again, as a test shop for GoKwik's sandbox checkout (branch
-//            staging, staging.kitaabaurkona.com): same pages as the store, plus a
+//            staging, kitaabaurkonastaging.bizwitheet.com): same pages as the store, plus a
 //            "Test shop" bar, hidden from search engines, and no cash-on-delivery checkout
 // Vercel's branch decides; locally, add --mode admin or --mode staging.
 // The admin site starts from its own entry file, so neither site ships the other's pages.
