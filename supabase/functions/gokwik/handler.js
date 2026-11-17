@@ -3,8 +3,9 @@
 //
 // Who calls what (nothing here is called by the website's browser code):
 //   GoKwik's servers   POST /get-cart, /set-shipping-address, /set-shipping-option,
-//                      /place-order, /check-order-exists
-//                      with "Authorization: Bearer <our access token>". There is one
+//                      /place-order, /check-order-exists (the first and last also GET)
+//                      with "Authorization: Bearer <our access token>" (or the token in
+//                      an X-API-Key header, see sentTokens). There is one
 //                      token for GoKwik's production and one for its sandbox; an order
 //                      placed with the sandbox token is a test order and is never shipped.
 //   GoKwik's webhooks  POST /webhooks/payments, /webhooks/abandoned-cart
@@ -60,6 +61,35 @@ export function callerAddress(req) {
 
 const IP_CHECKS = ['off', 'log', 'enforce'];
 
+// Where GoKwik's tools put our access token. Their checkout and their API validator can
+// be set to "Authorization: Bearer <token>" or to an "X-API-Key" header, and people
+// testing by hand send it in other ways too: with "Bearer" pasted into Postman's token
+// box (Postman then sends "Bearer Bearer <token>"), without "Bearer", or in quotes. All
+// of these carry the same secret, so all are accepted; only the secret itself counts.
+const TOKEN_HEADERS = ['authorization', 'x-api-key', 'api-key', 'apikey', 'x-access-token', 'access-token', 'token'];
+export function sentTokens(req) {
+  const found = [];
+  for (const header of TOKEN_HEADERS) {
+    let value = (req.headers.get(header) || '').trim();
+    for (let i = 0; i < 3; i++) value = value.replace(/^(bearer|token)(\s*[:=]\s*|\s+)/i, '').trim();
+    value = value.replace(/^(["'])(.*)\1$/, '$2').trim();
+    if (value) found.push({ header, value: value.slice(0, 512) });
+  }
+  return found;
+}
+
+// First 8 hex characters of a value's SHA-256: enough to tell two tokens apart in the
+// logs, useless for guessing one.
+async function fingerprint(value) {
+  if (typeof value !== 'string' || !value) return '';
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
+  return [...digest.slice(0, 4)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Shown to a caller whose token was not accepted (GoKwik's team reads this in Postman or
+// in their validator).
+const TOKEN_HELP = 'not authorized: send the access token we gave you as "Authorization: Bearer <token>" (or in an "X-API-Key" header). The sandbox and production tokens are different.';
+
 // environments: { production: { token, merchantId, api }, sandbox: { ... } } where api is
 // createGokwikApi()'s result (null when GoKwik's keys are not set).
 // checkPincode(pincode) -> { deliverable, cod } (the shipping function's PIN check).
@@ -96,13 +126,24 @@ export function createHandler({ db, environments, webhookKey, cronSecret, checkP
 
   // Which of GoKwik's environments is calling, by the access token it sent.
   async function environmentOf(req) {
-    const sent = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
-    if (!sent) return null;
     let found = null;
-    for (const name of ENVIRONMENTS) {
-      if (await sameSecret(sent, tokenOf(name))) found = name;
+    for (const { value } of sentTokens(req)) {
+      for (const name of ENVIRONMENTS) {
+        if (await sameSecret(value, tokenOf(name))) found = name;
+      }
     }
     return found;
+  }
+
+  // A refused token, logged so the cause can be seen without the secret: which headers
+  // came, which ones carried something, its length and fingerprint, and the fingerprints
+  // of the tokens we expect (compare with the SHA-256 of the token given to GoKwik).
+  async function logRefusedToken(req, route, ref) {
+    const sent = await Promise.all(sentTokens(req).map(async ({ header, value }) => ({ header, length: value.length, fingerprint: await fingerprint(value) })));
+    const expected = {};
+    for (const name of ENVIRONMENTS) expected[name] = await fingerprint(tokenOf(name));
+    const headers = [...req.headers.keys()].filter((name) => name !== 'cookie').slice(0, 40);
+    log.warn(JSON.stringify({ event: 'token_refused', ref, route, method: req.method, sent, expected, headers, ip: callerAddress(req).ip, agent: (req.headers.get('user-agent') || '').slice(0, 80) }));
   }
 
   // A cart GoKwik may still work on: it exists, is not ordered yet and has not expired.
@@ -315,13 +356,19 @@ export function createHandler({ db, environments, webhookKey, cronSecret, checkP
     const kind = MERCHANT_ROUTES.includes(route) ? 'merchant' : WEBHOOK_ROUTES.includes(route) ? 'webhook' : JOB_ROUTES.includes(route) ? 'job' : null;
     if (!kind) return fail(404, 'Not found');
     // No browser ever calls this function, so there is no CORS: preflights are refused.
-    if (req.method !== 'POST') return fail(405, 'Method not allowed');
+    // The two read-only GoKwik routes also take GET (GoKwik's API validator defaults to
+    // it), with the cart id in the address.
+    const readOnly = route === '/get-cart' || route === '/check-order-exists';
+    if (req.method !== 'POST' && !(readOnly && req.method === 'GET')) return fail(405, 'Method not allowed: use POST');
 
     let environment = null;
     try {
       if (kind === 'merchant') {
         environment = await environmentOf(req);
-        if (!environment) return fail(401, 'not authorized');
+        if (!environment) {
+          await logRefusedToken(req, route, ref);
+          return fail(401, TOKEN_HELP);
+        }
         if (!addressAllowed(req, route, environment)) return fail(403, 'not authorized');
       } else if (kind === 'webhook') {
         const expected = typeof webhookKey === 'string' && webhookKey.length >= MIN_SECRET ? webhookKey : '';
@@ -347,8 +394,16 @@ export function createHandler({ db, environments, webhookKey, cronSecret, checkP
         try {
           body = JSON.parse(raw);
         } catch {
-          return fail(400, 'Invalid JSON');
+          // A form post (cart_id=...) from a hand-made test is read too.
+          if (!/application\/x-www-form-urlencoded/i.test(req.headers.get('content-type') || '')) return fail(400, 'Invalid JSON');
+          body = Object.fromEntries(new URLSearchParams(raw));
         }
+      }
+      // For GoKwik's routes, values in the address (?cart_id=...) fill in what the body
+      // does not give. (Webhooks keep their own ?key=, which is not data.)
+      if (kind === 'merchant') {
+        const query = Object.fromEntries([...url.searchParams].filter(([name]) => /^[a-z_]{1,40}$/i.test(name)));
+        if (Object.keys(query).length && (body === null || (typeof body === 'object' && !Array.isArray(body)))) body = { ...query, ...(body ?? {}) };
       }
 
       const table = kind === 'merchant' ? merchant : kind === 'webhook' ? webhooks : jobs;

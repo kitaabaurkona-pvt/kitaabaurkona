@@ -158,7 +158,32 @@ try {
   check('without the access token GoKwik is refused', (await call('/get-cart', { cart_id: cartA }, { token: null })).status === 401);
   check('a wrong access token is refused', (await call('/get-cart', { cart_id: cartA }, { token: 'x'.repeat(40) })).status === 401);
   check("a customer's own sign-in token is refused", (await call('/get-cart', { cart_id: cartA }, { token: SERVICE_TOKEN })).status === 401);
-  check('GET is not allowed', (await call('/get-cart', null, { method: 'GET' })).status === 405);
+  // The token in each form GoKwik's checkout, its validator or a hand-made Postman test sends.
+  const tokenForms = {
+    'Authorization: Bearer Bearer <token> (Bearer pasted into Postman)': { authorization: `Bearer Bearer ${SANDBOX_TOKEN}` },
+    'Authorization: <token> (no Bearer)': { authorization: SANDBOX_TOKEN },
+    'Authorization: Bearer "<token>" (in quotes)': { authorization: `Bearer "${SANDBOX_TOKEN}"` },
+    'authorization: bearer <token> (lower case)': { authorization: `bearer ${SANDBOX_TOKEN}` },
+    'X-API-Key: <token> (validator "API key" setting)': { 'x-api-key': SANDBOX_TOKEN },
+  };
+  for (const [form, headers] of Object.entries(tokenForms)) {
+    check(`the token is accepted as ${form}`, (await call('/get-cart', { cart_id: cartA }, { token: null, headers })).status === 200);
+  }
+  check('a token merely starting like ours is refused', (await call('/get-cart', { cart_id: cartA }, { token: null, headers: { 'x-api-key': `${SANDBOX_TOKEN}x` } })).status === 401);
+  {
+    logs.length = 0;
+    const refused = await call('/get-cart', { cart_id: cartA }, { token: 'y'.repeat(36), headers: { 'user-agent': 'PostmanRuntime/2.11.0' } });
+    const line = logs.find((l) => l.includes('token_refused')) ?? '';
+    check('a refused token answers how to send it', refused.status === 401 && /Authorization: Bearer <token>/.test(refused.json?.error ?? '') && /X-API-Key/.test(refused.json?.error ?? ''), JSON.stringify(refused.json));
+    check('a refused token is logged with length and fingerprint, never the token', /"length":36/.test(line) && /"fingerprint":"[0-9a-f]{8}"/.test(line) && /"sandbox":"[0-9a-f]{8}"/.test(line) && /PostmanRuntime/.test(line) && !line.includes('y'.repeat(36)) && !line.includes(SANDBOX_TOKEN) && !line.includes(PROD_TOKEN), line);
+  }
+  {
+    const viaGet = await call('/get-cart', null, { method: 'GET', query: `?cart_id=${cartA}` });
+    check('GET works for Get Cart, with the cart id in the address', viaGet.status === 200 && Boolean(viaGet.json?.data?.cart), JSON.stringify(viaGet.json).slice(0, 300));
+  }
+  check('GET is not allowed for routes that change things', (await call('/place-order', null, { method: 'GET' })).status === 405 && (await call('/set-shipping-address', null, { method: 'GET' })).status === 405);
+  check('POST with the cart id in the address works', (await call('/get-cart', null, { raw: '', query: `?cart_id=${cartA}` })).status === 200);
+  check('a form post (cart_id=...) works', (await call('/get-cart', null, { raw: `cart_id=${cartA}`, headers: { 'content-type': 'application/x-www-form-urlencoded' } })).status === 200);
   check('browser preflights are refused', (await call('/get-cart', null, { method: 'OPTIONS' })).status === 405);
   check('unknown routes are not found', (await call('/drop-tables', {})).status === 404);
   check('a body over 64 KB is refused', (await call('/get-cart', null, { raw: JSON.stringify({ cart_id: cartA, pad: 'x'.repeat(70000) }) })).status === 413);

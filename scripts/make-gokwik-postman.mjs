@@ -98,10 +98,12 @@ function request(route, body, { auth = true, webhook = false } = {}) {
     path: pathParts,
     ...(webhook ? { query: [{ key: 'key', value: '{{webhook_key}}' }] } : {}),
   };
+  // The token is a plain header on each request rather than Postman's collection-level
+  // auth, which older Postman versions (PostmanRuntime 2.x) do not send at all.
   return {
     method: 'POST',
-    header: [{ key: 'Content-Type', value: 'application/json' }],
-    ...(auth ? {} : { auth: { type: 'noauth' } }),
+    header: [{ key: 'Content-Type', value: 'application/json' }, ...(auth ? [{ key: 'Authorization', value: 'Bearer {{sandbox_token}}' }] : [])],
+    auth: { type: 'noauth' },
     body: { mode: 'raw', raw: vars(json(body)), options: { raw: { language: 'json' } } },
     url,
   };
@@ -188,15 +190,14 @@ const collection = {
     description: [
       'Merchant APIs of Kitaab Aur Kona for GoKwik Custom Checkout, with example requests and real example answers.',
       '',
-      'Base URL: `{{base_url}}`. Every merchant API takes `Authorization: Bearer {{sandbox_token}}` (set at collection level). Sandbox orders are test orders: never shipped, no effect on live stock.',
+      'Base URL: `{{base_url}}`. Every merchant API takes the header `Authorization: Bearer {{sandbox_token}}` (already on each request: put the sandbox access token we gave you into the `sandbox_token` variable, without the word Bearer). `X-API-Key: <token>` is accepted too. Sandbox orders are test orders: never shipped, no effect on live stock.',
       '',
       `Staging storefront: ${STAGING} (sandbox merchant id). A real \`cart_id\` comes from there: sign in, add a book, open checkout and press "Continue to payment"; the id is passed to the SDK as \`merchantParams.merchantCheckoutId\`, and the customer's account id as \`merchantParams.customerToken\`.`,
       '',
-      'All APIs are POST with a JSON body. Errors answer HTTP 400/401 with `{ "error": "..." }`; address errors also name the field in `invalid_address_field`.',
+      'All APIs are POST with a JSON body (Get Cart and Check Order Exists also take GET with `?cart_id=`). Errors answer HTTP 400/401 with `{ "error": "..." }`; address errors also name the field in `invalid_address_field`.',
     ].join('\n'),
     schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json',
   },
-  auth: { type: 'bearer', bearer: [{ key: 'token', value: '{{sandbox_token}}', type: 'string' }] },
   variable: [
     { key: 'base_url', value: BASE_URL, type: 'string' },
     { key: 'sandbox_token', value: 'PASTE_THE_SANDBOX_ACCESS_TOKEN', type: 'string' },
