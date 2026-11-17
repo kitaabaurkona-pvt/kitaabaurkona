@@ -160,6 +160,12 @@ const ACTIONS = {
     only(b, ['action', 'order_id']);
     return { order_id: uuid(b.order_id, 'order') };
   },
+  // The PIN check for the `gokwik` Edge Function (GoKwik asks whether an address can be
+  // served). Called with the jobs' secret, not by a signed-in user.
+  service_pincode: (b) => {
+    only(b, ['action', 'pincode']);
+    return { pincode: pincode(b.pincode) };
+  },
   run_job: (b) => {
     only(b, ['action', 'job']);
     if (!['book_due', 'cancel_requested', 'track_active', 'health'].includes(b.job)) throw new InputError('Unknown job');
@@ -169,7 +175,7 @@ const ACTIONS = {
 
 export const CUSTOMER_ACTIONS = ['check_pincode', 'track'];
 export const ADMIN_ACTIONS = ['rates', 'set_courier', 'set_carrier', 'label', 'register_warehouse', 'pickup_request', 'book_now', 'link_awb', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
-export const CRON_ACTIONS = ['run_job'];
+export const CRON_ACTIONS = ['run_job', 'service_pincode'];
 
 export function parseRequest(body, now = new Date()) {
   if (!isPlainObject(body) || typeof body.action !== 'string' || !Object.hasOwn(ACTIONS, body.action)) {

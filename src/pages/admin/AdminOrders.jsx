@@ -159,7 +159,10 @@ function AdminOrders() {
           <div className="order-card-head">
             <div>
               <h2 className="order-number">{formatOrderNumber(order.order_number)}</h2>
-              <p className="page-meta">Placed {formatDate(order.created_at)}</p>
+              <p className="page-meta">
+                Placed {formatDate(order.created_at)}
+                {order.is_test && ' · GoKwik sandbox test order (not shipped)'}
+              </p>
             </div>
             <div className="inline-actions">
               {bookedForward(order) && (
@@ -182,7 +185,7 @@ function AdminOrders() {
             </ul>
             <div className="order-total-row">
               <span className="page-meta">{plural(order.item_count, 'item')}</span>
-              <span className="price">{formatPrice(order.subtotal)}</span>
+              <span className="price">{formatPrice(order.total ?? order.subtotal)}</span>
             </div>
             <address className="address">
               {order.shipping_name}, {order.shipping_phone}

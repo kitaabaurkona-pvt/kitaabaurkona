@@ -40,6 +40,7 @@ export function validateShipping(s) {
 export function orderErrorMessage(error) {
   const hint = error?.details?.hint ?? error?.hint;
   if (hint === 'unavailable') return 'Some books in your cart are no longer available in that quantity. Review your cart and try again.';
+  if (hint === 'cart_limit') return 'Too many checkouts were started in the last hour. Try again a little later.';
   if (hint === 'pending_limit') return 'You have 5 orders awaiting payment. Pay for or cancel one before placing another.';
   if (error?.code === 'PGRST202') return 'Ordering is being updated. Try again in a few minutes.';
   if (error?.code === '23514') return 'Check your delivery details and try again.';

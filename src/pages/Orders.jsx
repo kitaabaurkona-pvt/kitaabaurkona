@@ -68,7 +68,7 @@ function Orders() {
                 </ul>
                 <div className="order-total-row">
                   <span className="page-meta">{plural(order.item_count, 'item')}</span>
-                  <span className="price">{formatPrice(order.subtotal)}</span>
+                  <span className="price">{formatPrice(order.total ?? order.subtotal)}</span>
                 </div>
                 <div className="inline-actions">
                   <Link to={`/orders/${order.id}`} className="btn btn-outline btn-sm">

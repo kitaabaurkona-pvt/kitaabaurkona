@@ -8,6 +8,7 @@
 //                       register_warehouse, pickup_request, ndr_list, ndr_action,
 //                       return_pickup
 //   scheduler (cron)    run_job, with the cron secret header (no user)
+//   gokwik function     service_pincode, with the same secret header (no user)
 //
 // Two carriers, two separate workflows. Every parcel says which carrier it goes with
 // (shipments.carrier): new orders take the default from Admin > Shipping, and an admin
@@ -441,10 +442,9 @@ export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSe
 
   // ---------- Actions ----------
 
-  const actions = {
-    async check_pincode({ pincode }, { user, ip }) {
-      await limit(`pin:user:${user.id}`, LIMITS.pinChecksPerUserPerHour, 3600);
-      if (ip) await limit(`pin:ip:${ip}`, LIMITS.pinChecksPerIpPerHour, 3600);
+  // Whether a PIN code can be delivered to, and with cash on delivery. Answers are kept
+  // for a day, so each PIN code costs at most one round of courier calls.
+  async function pincodeAnswer(pincode) {
       const cached = {};
       for (const type of ['prepaid', 'cod']) {
         cached[type] = await rpc('get_pincode_check', { p_pincode: pincode, p_payment_type: type, p_max_age_minutes: LIMITS.pinCacheMinutes });
@@ -484,7 +484,17 @@ export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSe
         }
       }
       return { pincode, deliverable: Boolean(cached.prepaid || cached.cod), cod: Boolean(cached.cod) };
+  }
+
+  const actions = {
+    async check_pincode({ pincode }, { user, ip }) {
+      await limit(`pin:user:${user.id}`, LIMITS.pinChecksPerUserPerHour, 3600);
+      if (ip) await limit(`pin:ip:${ip}`, LIMITS.pinChecksPerIpPerHour, 3600);
+      return pincodeAnswer(pincode);
     },
+
+    // The same check for the `gokwik` Edge Function (called with the jobs' secret).
+    service_pincode: ({ pincode }) => pincodeAnswer(pincode),
 
     async track({ order_id }, { user, isAdmin }) {
       await limit(`track:${user.id}`, 120, 3600);

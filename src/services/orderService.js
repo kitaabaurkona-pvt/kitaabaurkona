@@ -18,7 +18,7 @@ export async function listOrders() {
   const { data } = unwrap(
     await supabase
       .from('orders')
-      .select('id, order_number, status, payment_method, item_count, subtotal, mrp_total, created_at, order_items(sku, title, image_url, quantity)')
+      .select('id, order_number, status, payment_method, item_count, subtotal, total, mrp_total, created_at, order_items(sku, title, image_url, quantity)')
       .order('created_at', { ascending: false })
       .limit(100),
   );

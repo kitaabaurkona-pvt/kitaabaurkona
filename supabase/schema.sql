@@ -30,6 +30,9 @@
 --   7. Shipping (Xpressbees or Delhivery, per parcel): shipping_settings, shipments, shipment_events and
 --                           service-role-only helper tables, used by the
 --                           `shipping` Edge Function. See section 8b.
+--   8. GoKwik checkout (online payment): checkout_carts, order_payments,
+--                           payment_events, gokwik_order_updates, used by the
+--                           `gokwik` Edge Function. See section 9c.
 --   Plus Row Level Security on every table, and public.is_admin(), the single
 --   check every admin-only rule uses.
 --
@@ -525,6 +528,26 @@ alter table public.orders add constraint orders_payment_method_check check (paym
 alter table public.orders drop constraint if exists orders_status_check;
 alter table public.orders add constraint orders_status_check
   check (status in ('pending_payment', 'confirmed', 'paid', 'shipped', 'delivered', 'cancelled'));
+
+-- Money for orders placed through GoKwik's checkout (section 9c). discount_total is what
+-- GoKwik's coupons and offers took off, other_charges what it added (for example a cash
+-- on delivery fee), amount_paid what the customer already paid online. total is what the
+-- order is worth; total - amount_paid is collected in cash on delivery. Orders placed on
+-- the site's own checkout keep all three at 0, so their total is the books subtotal.
+alter table public.orders add column if not exists discount_total numeric(12, 2) not null default 0;
+alter table public.orders add column if not exists other_charges numeric(12, 2) not null default 0;
+alter table public.orders add column if not exists amount_paid numeric(12, 2) not null default 0;
+alter table public.orders add column if not exists total numeric(12, 2)
+  generated always as (subtotal - discount_total + other_charges) stored;
+-- A test order placed through GoKwik's sandbox (no real money moved): it never gets a
+-- parcel, so nothing is shipped for it.
+alter table public.orders add column if not exists is_test boolean not null default false;
+alter table public.orders drop constraint if exists orders_money_check;
+alter table public.orders add constraint orders_money_check check (
+  discount_total >= 0 and other_charges >= 0 and amount_paid >= 0
+  and discount_total <= subtotal + other_charges
+  and amount_paid <= subtotal - discount_total + other_charges
+);
 
 create index if not exists orders_user_created_idx on public.orders (user_id, created_at desc);
 create index if not exists orders_status_idx on public.orders (status);
@@ -1056,6 +1079,7 @@ declare
   v_carrier text;
 begin
   if new.status in ('confirmed', 'paid')
+     and not new.is_test
      and (tg_op = 'INSERT' or old.status is distinct from new.status)
      and not exists (
        select 1 from public.shipments
@@ -1178,6 +1202,9 @@ as $$
     'order', jsonb_build_object(
       'id', o.id, 'order_number', o.order_number, 'status', o.status,
       'payment_method', o.payment_method, 'subtotal', o.subtotal,
+      -- What the parcel is worth, and the cash the courier collects (0 once paid online).
+      'total', o.total,
+      'cod_amount', case when o.payment_method = 'cod' then o.total - o.amount_paid else 0 end,
       'name', o.shipping_name, 'phone', o.shipping_phone, 'address', o.shipping_address,
       'city', o.shipping_city, 'state', o.shipping_state, 'pincode', o.shipping_pincode
     ),
@@ -1585,6 +1612,692 @@ revoke execute on function public.get_my_shipments(uuid) from public, anon;
 grant execute on function public.get_my_shipments(uuid) to authenticated;
 
 
+-- -----------------------------------------------------------------------------
+-- 9c. GOKWIK CHECKOUT (online payment and cash on delivery through GoKwik)
+-- -----------------------------------------------------------------------------
+-- How it fits together:
+--   1. The website saves the books being bought as a checkout cart
+--      (create_checkout_cart) and opens GoKwik's checkout with the cart's id.
+--   2. GoKwik's servers read that cart, send the delivery address and finally place the
+--      order, all through the `gokwik` Edge Function (service role), which calls the
+--      gokwik_* functions below. The website itself can never mark an order paid.
+--   3. Order and parcel changes that GoKwik must hear about (AWB, cancellation, refund)
+--      are queued in gokwik_order_updates and sent by the same Edge Function.
+-- Prices are fixed when the cart is made, from the books table, so the customer pays
+-- exactly what GoKwik showed. Stock is checked again, with the rows locked, when the
+-- order is placed.
+-- A customer has one open cart at a time, and its id stays the same until it becomes an
+-- order: "<user id>-<n>", n counting that customer's carts from 1. GoKwik matches its
+-- abandoned-cart reminders to the customer by it.
+
+create table if not exists public.checkout_carts (
+  id text primary key check (id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[1-9][0-9]{0,6}$'),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  seq integer not null check (seq >= 1),
+  -- How often checkout was started on this cart since starts_since (at most 30 an hour).
+  starts integer not null default 1 check (starts >= 0),
+  starts_since timestamptz not null default now(),
+  -- [{ book_id, sku, title, image_url, author, unit_price, unit_mrp, quantity }]
+  items jsonb not null check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) between 1 and 50),
+  item_count integer not null check (item_count between 1 and 500),
+  subtotal numeric(12, 2) not null check (subtotal >= 0),
+  mrp_total numeric(12, 2) not null check (mrp_total >= subtotal),
+  -- The site the checkout was started from (live or test), for the link back to the order.
+  site text check (site is null or site ~ '^https?://[a-z0-9.-]+(:[0-9]{1,5})?$'),
+  -- The delivery address GoKwik sent last, with whether the PIN code can be served.
+  shipping jsonb check (shipping is null or jsonb_typeof(shipping) = 'object'),
+  order_id uuid unique references public.orders (id) on delete set null,
+  ordered_at timestamptz,
+  abandoned_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '24 hours',
+  unique (user_id, seq),
+  check (id = user_id::text || '-' || seq::text)
+);
+
+-- At most one cart per customer that is not an order yet. ordered_at (not order_id, which
+-- empties if the order row is ever removed) is what closes a cart for good.
+create unique index if not exists checkout_carts_one_open_idx on public.checkout_carts (user_id) where ordered_at is null;
+
+drop trigger if exists checkout_carts_set_updated_at on public.checkout_carts;
+create trigger checkout_carts_set_updated_at
+  before update on public.checkout_carts
+  for each row execute function public.set_updated_at();
+
+-- How each GoKwik order was paid. Admins can read it; only the Edge Function writes it.
+create table if not exists public.order_payments (
+  order_id uuid primary key references public.orders (id) on delete cascade,
+  provider text not null default 'gokwik' check (provider in ('gokwik')),
+  environment text not null default 'production' check (environment in ('production', 'sandbox')),
+  cart_id text check (char_length(cart_id) <= 100),
+  method text not null check (method in ('prepaid', 'cod', 'pp-cod')),
+  payment_id text check (char_length(payment_id) <= 100),
+  gateway_payment_id text check (char_length(gateway_payment_id) <= 100),
+  instrument text check (char_length(instrument) <= 40),
+  gokwik_order_id text check (char_length(gokwik_order_id) <= 100),
+  rto_risk text check (char_length(rto_risk) <= 40),
+  discounts jsonb not null default '[]'::jsonb check (jsonb_typeof(discounts) = 'array' and octet_length(discounts::text) <= 4000),
+  charges jsonb not null default '[]'::jsonb check (jsonb_typeof(charges) = 'array' and octet_length(charges::text) <= 4000),
+  refund_status text check (refund_status in ('requested', 'initiated', 'pending', 'successful', 'failed', 'auto_refund')),
+  refunded_amount numeric(12, 2) not null default 0 check (refunded_amount >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- One payment can pay for one order only.
+create unique index if not exists order_payments_payment_id_key
+  on public.order_payments (payment_id) where payment_id is not null and payment_id <> '';
+create index if not exists order_payments_gokwik_order_idx on public.order_payments (gokwik_order_id);
+
+drop trigger if exists order_payments_set_updated_at on public.order_payments;
+create trigger order_payments_set_updated_at
+  before update on public.order_payments
+  for each row execute function public.set_updated_at();
+
+-- Payment and refund notices from GoKwik (webhooks), each kept once.
+create table if not exists public.payment_events (
+  id bigint generated always as identity primary key,
+  provider text not null default 'gokwik' check (provider in ('gokwik')),
+  event text not null check (char_length(event) between 1 and 40),
+  payment_id text not null check (char_length(payment_id) between 1 and 100),
+  reference_id text check (char_length(reference_id) <= 100),
+  cart_id text check (char_length(cart_id) <= 100),
+  order_id uuid references public.orders (id) on delete set null,
+  amount numeric(12, 2) not null default 0,
+  detail jsonb not null default '{}'::jsonb check (jsonb_typeof(detail) = 'object' and octet_length(detail::text) <= 2000),
+  received_at timestamptz not null default now(),
+  unique (event, payment_id)
+);
+
+-- What GoKwik must be told about an order (its Update Order API): the parcel's AWB and
+-- status, a cancellation, and with refund_amount a refund of money paid online.
+create table if not exists public.gokwik_order_updates (
+  id bigint generated always as identity primary key,
+  order_id uuid not null references public.orders (id) on delete cascade,
+  environment text not null default 'production' check (environment in ('production', 'sandbox')),
+  order_status text not null check (order_status in ('Confirmed', 'Pending', 'Failed', 'Cancelled')),
+  awb_number text check (char_length(awb_number) <= 30),
+  awb_status text check (char_length(awb_status) <= 40),
+  shipping_provider text check (char_length(shipping_provider) <= 100),
+  order_note text check (char_length(order_note) <= 200),
+  refund_amount numeric(12, 2) check (refund_amount is null or refund_amount > 0),
+  state text not null default 'pending' check (state in ('pending', 'sent', 'failed')),
+  attempts integer not null default 0 check (attempts between 0 and 100),
+  last_error text check (char_length(last_error) <= 300),
+  next_try_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  sent_at timestamptz
+);
+
+create index if not exists gokwik_order_updates_due_idx on public.gokwik_order_updates (state, next_try_at);
+
+alter table public.checkout_carts enable row level security;
+alter table public.order_payments enable row level security;
+alter table public.payment_events enable row level security;
+alter table public.gokwik_order_updates enable row level security;
+
+drop policy if exists "Admins view order payments" on public.order_payments;
+create policy "Admins view order payments" on public.order_payments
+  for select to authenticated using ((select public.is_admin()));
+
+drop policy if exists "Admins view payment events" on public.payment_events;
+create policy "Admins view payment events" on public.payment_events
+  for select to authenticated using ((select public.is_admin()));
+
+drop policy if exists "Admins view GoKwik updates" on public.gokwik_order_updates;
+create policy "Admins view GoKwik updates" on public.gokwik_order_updates
+  for select to authenticated using ((select public.is_admin()));
+
+-- checkout_carts has no policy on purpose: the website uses the two functions below.
+revoke all on public.checkout_carts, public.order_payments, public.payment_events, public.gokwik_order_updates
+  from public, anon, authenticated;
+grant select on public.order_payments, public.payment_events, public.gokwik_order_updates to authenticated;
+grant all on public.checkout_carts, public.order_payments, public.payment_events, public.gokwik_order_updates to service_role;
+
+-- Puts the books being bought into the signed-in customer's open checkout cart and
+-- returns its id, which the website hands to GoKwik. The id stays the same on every
+-- start until the cart becomes an order; the next start then opens "<user id>-<n+1>".
+-- p_items: [{ "book_id": uuid, "quantity": 1-10 }] (1 to 50 different books). Prices,
+-- titles and stock come from the books table.
+create or replace function public.create_checkout_cart(p_items jsonb, p_site text default null)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_open public.checkout_carts%rowtype;
+  v_seq integer;
+  v_id text;
+  v_lines integer;
+  v_distinct integer;
+  v_unavailable integer;
+  v_items jsonb;
+  v_count integer;
+  v_subtotal numeric;
+  v_mrp numeric;
+  v_site text := case when p_site ~ '^https?://[a-z0-9.-]+(:[0-9]{1,5})?$' then p_site end;
+begin
+  if v_user is null then
+    raise exception 'Sign in to check out' using errcode = '42501';
+  end if;
+  if jsonb_typeof(p_items) is distinct from 'array'
+     or jsonb_array_length(p_items) not between 1 and 50 then
+    raise exception 'A checkout needs between 1 and 50 different books' using errcode = '22023';
+  end if;
+
+  -- One start at a time per customer, so two tabs cannot open two carts.
+  perform pg_advisory_xact_lock(hashtextextended('checkout_cart:' || v_user::text, 0));
+
+  if (select coalesce(sum(starts), 0) from public.checkout_carts
+      where user_id = v_user and starts_since > now() - interval '1 hour') >= 30 then
+    raise exception 'Too many checkouts were started' using errcode = 'P0001', hint = 'cart_limit';
+  end if;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity
+    from jsonb_array_elements(p_items) as e
+  )
+  select
+    count(*),
+    count(distinct r.book_id),
+    count(*) filter (
+      where b.id is null or not b.is_visible or r.quantity is null
+         or r.quantity not between 1 and 10 or b.stock_quantity < r.quantity
+    )
+  into v_lines, v_distinct, v_unavailable
+  from req r
+  left join public.books b on b.id = r.book_id;
+
+  if v_distinct <> v_lines then
+    raise exception 'The same book appears twice' using errcode = '22023';
+  end if;
+  if v_unavailable > 0 then
+    raise exception 'Some books are no longer available in that quantity'
+      using errcode = 'P0001', hint = 'unavailable';
+  end if;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity
+    from jsonb_array_elements(p_items) as e
+  )
+  select
+    jsonb_agg(jsonb_build_object(
+      'book_id', b.id, 'sku', b.sku, 'title', b.title, 'image_url', b.image_urls[1],
+      'author', nullif(left(btrim(b.attributes ->> 'author'), 120), ''),
+      'unit_price', b.price, 'unit_mrp', b.mrp, 'quantity', r.quantity
+    ) order by b.title),
+    sum(r.quantity), sum(b.price * r.quantity), sum(b.mrp * r.quantity)
+  into v_items, v_count, v_subtotal, v_mrp
+  from req r
+  join public.books b on b.id = r.book_id;
+
+  select * into v_open from public.checkout_carts
+  where user_id = v_user and ordered_at is null
+  for update;
+
+  if found then
+    -- Same cart, same id: its books, prices and expiry are brought up to date. The
+    -- delivery address GoKwik saved stays.
+    update public.checkout_carts
+    set items = v_items, item_count = v_count, subtotal = v_subtotal, mrp_total = v_mrp,
+        site = v_site, abandoned_at = null,
+        expires_at = now() + interval '24 hours',
+        starts = case when starts_since > now() - interval '1 hour' then starts + 1 else 1 end,
+        starts_since = case when starts_since > now() - interval '1 hour' then starts_since else now() end
+    where id = v_open.id;
+    return v_open.id;
+  end if;
+
+  select coalesce(max(seq), 0) + 1 into v_seq from public.checkout_carts where user_id = v_user;
+  v_id := v_user::text || '-' || v_seq::text;
+  insert into public.checkout_carts (id, user_id, seq, items, item_count, subtotal, mrp_total, site)
+  values (v_id, v_user, v_seq, v_items, v_count, v_subtotal, v_mrp, v_site);
+
+  return v_id;
+end;
+$$;
+
+revoke execute on function public.create_checkout_cart(jsonb, text) from public, anon;
+grant execute on function public.create_checkout_cart(jsonb, text) to authenticated;
+
+-- The order made from one of the caller's own checkout carts (null until it is placed).
+create or replace function public.checkout_cart_order(p_cart text)
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select order_id from public.checkout_carts where id = p_cart and user_id = auth.uid();
+$$;
+
+revoke execute on function public.checkout_cart_order(text) from public, anon;
+grant execute on function public.checkout_cart_order(text) to authenticated;
+
+-- Everything below may only be called by the `gokwik` Edge Function (service role).
+
+-- A checkout cart with today's stock beside each book, and its order once placed.
+create or replace function public.gokwik_cart(p_cart text)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'id', c.id, 'user_id', c.user_id, 'site', c.site, 'shipping', c.shipping,
+    'expired', c.expires_at < now(), 'ordered', c.ordered_at is not null,
+    'item_count', c.item_count, 'subtotal', c.subtotal, 'mrp_total', c.mrp_total,
+    'items', (
+      select jsonb_agg(i.item || jsonb_build_object('salable_qty', coalesce((
+        select case when b.is_visible then b.stock_quantity else 0 end
+        from public.books b where b.id = (i.item ->> 'book_id')::uuid
+      ), 0)) order by i.ord)
+      from jsonb_array_elements(c.items) with ordinality as i(item, ord)
+    ),
+    'order', (
+      select jsonb_build_object('id', o.id, 'order_number', o.order_number, 'status', o.status)
+      from public.orders o where o.id = c.order_id
+    )
+  )
+  from public.checkout_carts c
+  where c.id = p_cart;
+$$;
+
+create or replace function public.gokwik_set_address(p_cart text, p_shipping jsonb)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.checkout_carts set shipping = p_shipping
+  where id = p_cart and ordered_at is null;
+  return found;
+end;
+$$;
+
+-- Turns a checkout cart into an order once GoKwik says how it is paid. p:
+--   method           'prepaid' (paid in full online), 'cod', or 'pp-cod' (part paid online,
+--                    the rest in cash on delivery)
+--   payment_amount   what the order comes to after GoKwik's discounts and charges
+--   discount_total, other_charges, prepaid_amount (pp-cod only)
+--   shipping         { name, phone, address, city, state, pincode }
+--   environment      'production' or 'sandbox' (a sandbox order is a test: no parcel)
+--   payment_id, gateway_payment_id, instrument, gokwik_order_id, rto_risk, discounts, charges
+-- Answers { status }: placed / exists (with order_id and order_number), or why not:
+-- invalid_cart, expired, invalid_method, amount_mismatch, unavailable, invalid_address,
+-- duplicate_payment. Calling it again for the same cart returns the same order, so a
+-- retry can never make a second one.
+create or replace function public.gokwik_place_order(p_cart text, p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_cart public.checkout_carts%rowtype;
+  v_order uuid;
+  v_number bigint;
+  v_method text := p ->> 'method';
+  v_amount numeric := (p ->> 'payment_amount')::numeric;
+  v_discount numeric := coalesce((p ->> 'discount_total')::numeric, 0);
+  v_charges numeric := coalesce((p ->> 'other_charges')::numeric, 0);
+  v_paid numeric;
+  v_diff numeric;
+  v_ship jsonb := coalesce(p -> 'shipping', '{}'::jsonb);
+  v_environment text := case when p ->> 'environment' = 'sandbox' then 'sandbox' else 'production' end;
+  v_unavailable integer;
+begin
+  if v_method is null or v_method not in ('prepaid', 'cod', 'pp-cod') then
+    return jsonb_build_object('status', 'invalid_method');
+  end if;
+
+  select * into v_cart from public.checkout_carts where id = p_cart for update;
+  if not found then
+    return jsonb_build_object('status', 'invalid_cart');
+  end if;
+  if v_cart.order_id is not null then
+    select order_number into v_number from public.orders where id = v_cart.order_id;
+    return jsonb_build_object('status', 'exists', 'order_id', v_cart.order_id, 'order_number', v_number);
+  end if;
+  if v_cart.ordered_at is not null then
+    return jsonb_build_object('status', 'invalid_cart');
+  end if;
+  if v_cart.expires_at + interval '1 hour' < now() then
+    return jsonb_build_object('status', 'expired');
+  end if;
+
+  -- The amount must be explained by the cart: never less than the books minus the
+  -- discounts GoKwik lists, never more than the books plus the charges it lists (one
+  -- rupee of rounding either way).
+  if v_amount is null or v_amount < 0 or v_discount < 0 or v_charges < 0
+     or v_amount < v_cart.subtotal - v_discount - 1
+     or v_amount > v_cart.subtotal + v_charges + 1 then
+    return jsonb_build_object('status', 'amount_mismatch');
+  end if;
+  -- Discount and charges are then settled so the order total is exactly that amount.
+  v_diff := v_amount - (v_cart.subtotal - v_discount);
+  if v_diff >= 0 then
+    v_charges := v_diff;
+  else
+    v_discount := v_discount - v_diff;
+    v_charges := 0;
+  end if;
+
+  v_paid := case v_method
+    when 'prepaid' then v_amount
+    when 'cod' then 0
+    else coalesce((p ->> 'prepaid_amount')::numeric, -1)
+  end;
+  if v_paid < 0 or v_paid > v_amount then
+    return jsonb_build_object('status', 'amount_mismatch');
+  end if;
+
+  -- Lock the books so two orders cannot take the same last copy.
+  perform 1
+  from public.books b
+  where b.id in (select (e ->> 'book_id')::uuid from jsonb_array_elements(v_cart.items) as e)
+  for update;
+
+  select count(*) into v_unavailable
+  from jsonb_array_elements(v_cart.items) as e
+  left join public.books b on b.id = (e ->> 'book_id')::uuid
+  where b.id is null or not b.is_visible or b.stock_quantity < (e ->> 'quantity')::integer;
+  if v_unavailable > 0 then
+    return jsonb_build_object('status', 'unavailable');
+  end if;
+
+  begin
+    insert into public.orders (
+      user_id, status, payment_method, item_count, subtotal, mrp_total,
+      discount_total, other_charges, amount_paid, is_test,
+      shipping_name, shipping_phone, shipping_address,
+      shipping_city, shipping_state, shipping_pincode
+    )
+    values (
+      v_cart.user_id,
+      case when v_method = 'prepaid' then 'paid' else 'confirmed' end,
+      case when v_method = 'prepaid' then 'online' else 'cod' end,
+      v_cart.item_count, v_cart.subtotal, v_cart.mrp_total,
+      v_discount, v_charges, v_paid, v_environment = 'sandbox',
+      btrim(v_ship ->> 'name'), btrim(v_ship ->> 'phone'), btrim(v_ship ->> 'address'),
+      btrim(v_ship ->> 'city'), btrim(v_ship ->> 'state'), btrim(v_ship ->> 'pincode')
+    )
+    returning id, order_number into v_order, v_number;
+  exception when check_violation or not_null_violation then
+    return jsonb_build_object('status', 'invalid_address');
+  end;
+
+  insert into public.order_items (order_id, book_id, sku, title, image_url, unit_price, unit_mrp, quantity)
+  select
+    v_order, (e ->> 'book_id')::uuid, e ->> 'sku', e ->> 'title', e ->> 'image_url',
+    (e ->> 'unit_price')::numeric, (e ->> 'unit_mrp')::numeric, (e ->> 'quantity')::integer
+  from jsonb_array_elements(v_cart.items) as e;
+
+  -- Paid or confirmed straight away, so the books leave stock now.
+  update public.books b
+  set stock_quantity = b.stock_quantity - i.quantity
+  from public.order_items i
+  where i.order_id = v_order and b.id = i.book_id;
+
+  insert into public.order_payments (
+    order_id, environment, cart_id, method, payment_id, gateway_payment_id, instrument,
+    gokwik_order_id, rto_risk, discounts, charges
+  )
+  values (
+    v_order, v_environment, p_cart, v_method,
+    nullif(left(p ->> 'payment_id', 100), ''), nullif(left(p ->> 'gateway_payment_id', 100), ''),
+    nullif(left(p ->> 'instrument', 40), ''), nullif(left(p ->> 'gokwik_order_id', 100), ''),
+    nullif(left(p ->> 'rto_risk', 40), ''),
+    case when jsonb_typeof(p -> 'discounts') = 'array' then p -> 'discounts' else '[]'::jsonb end,
+    case when jsonb_typeof(p -> 'charges') = 'array' then p -> 'charges' else '[]'::jsonb end
+  );
+
+  update public.checkout_carts set order_id = v_order, ordered_at = now(), shipping = v_ship where id = p_cart;
+
+  return jsonb_build_object('status', 'placed', 'order_id', v_order, 'order_number', v_number);
+exception when unique_violation then
+  -- The same payment was already used for another order: nothing above is kept.
+  return jsonb_build_object('status', 'duplicate_payment');
+end;
+$$;
+
+-- Wakes the worker that sends queued updates to GoKwik, where the job is set up
+-- (gokwik_cron.sql). Its 5-minute round sends anything this misses.
+create or replace function public.gokwik_wake()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if to_regprocedure('public.gokwik_run_job(text)') is not null then
+    execute 'select public.gokwik_run_job($1)' using 'push_updates';
+  end if;
+exception when others then
+  null;
+end;
+$$;
+
+-- Records a payment or refund notice once and applies it to the order it belongs to:
+--   transaction.auto_refund  GoKwik is returning the money by itself, so an order that
+--                            has not left the warehouse is cancelled and its books go
+--                            back into stock
+--   refund.*                 the refund's progress is noted on the order's payment
+-- p: { event, payment_id, transaction_payment_id, reference_id, cart_id, amount, detail }
+create or replace function public.gokwik_record_event(p jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_event text := left(p ->> 'event', 40);
+  v_payment text := left(p ->> 'payment_id', 100);
+  v_amount numeric := coalesce((p ->> 'amount')::numeric, 0);
+  v_order uuid;
+  v_status text;
+  v_cancelled boolean := false;
+begin
+  insert into public.payment_events (event, payment_id, reference_id, cart_id, amount, detail)
+  values (
+    v_event, v_payment, left(p ->> 'reference_id', 100), left(p ->> 'cart_id', 100), v_amount,
+    case when jsonb_typeof(p -> 'detail') = 'object' then p -> 'detail' else '{}'::jsonb end
+  )
+  on conflict (event, payment_id) do nothing;
+  if not found then
+    return jsonb_build_object('duplicate', true);
+  end if;
+
+  select op.order_id into v_order
+  from public.order_payments op
+  where op.payment_id = coalesce(nullif(p ->> 'transaction_payment_id', ''), v_payment)
+     or op.gokwik_order_id = nullif(p ->> 'reference_id', '')
+     or op.cart_id = nullif(p ->> 'cart_id', '')
+  order by op.created_at desc
+  limit 1;
+  if v_order is null then
+    return jsonb_build_object('matched', false);
+  end if;
+  update public.payment_events set order_id = v_order where event = v_event and payment_id = v_payment;
+
+  if v_event = 'transaction.auto_refund' then
+    -- Noted first, so cancelling below does not ask GoKwik for a second refund.
+    update public.order_payments set refund_status = 'auto_refund' where order_id = v_order;
+    select status into v_status from public.orders where id = v_order for update;
+    if v_status in ('paid', 'confirmed') and not public.order_has_left(v_order) then
+      update public.books b
+      set stock_quantity = b.stock_quantity + i.quantity
+      from public.order_items i
+      where i.order_id = v_order and b.id = i.book_id;
+      update public.orders set status = 'cancelled' where id = v_order;
+      v_cancelled := true;
+    end if;
+  elsif v_event like 'refund.%' then
+    update public.order_payments
+    set refund_status = case v_event
+          when 'refund.successful' then 'successful'
+          when 'refund.failure' then 'failed'
+          when 'refund.pending' then 'pending'
+          else 'initiated'
+        end,
+        refunded_amount = refunded_amount + case when v_event = 'refund.successful' then v_amount else 0 end
+    where order_id = v_order
+      and (refund_status is distinct from 'successful' or v_event = 'refund.successful');
+  end if;
+
+  return jsonb_build_object('matched', true, 'order_id', v_order, 'cancelled', v_cancelled);
+end;
+$$;
+
+-- Marks carts GoKwik reports as abandoned (started but never ordered). p_carts: ["id", ...]
+create or replace function public.gokwik_mark_abandoned(p_carts jsonb)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_count integer;
+begin
+  update public.checkout_carts set abandoned_at = now()
+  where id in (select jsonb_array_elements_text(p_carts)) and ordered_at is null and abandoned_at is null;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- A cancelled GoKwik order is reported to GoKwik, and money paid online for it is
+-- refunded through GoKwik (once: never when a refund is already under way).
+create or replace function public.gokwik_order_changed()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_pay public.order_payments%rowtype;
+  v_refund numeric;
+begin
+  if new.status = 'cancelled' and old.status <> 'cancelled' then
+    select * into v_pay from public.order_payments where order_id = new.id;
+    if found then
+      v_refund := case when new.amount_paid > 0 and v_pay.refund_status is null then new.amount_paid end;
+      insert into public.gokwik_order_updates (order_id, environment, order_status, order_note, refund_amount)
+      values (new.id, v_pay.environment, 'Cancelled', 'Order cancelled', v_refund);
+      if v_refund is not null then
+        update public.order_payments set refund_status = 'requested' where order_id = new.id;
+      end if;
+      perform public.gokwik_wake();
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists orders_gokwik_sync on public.orders;
+create trigger orders_gokwik_sync
+  after update of status on public.orders
+  for each row execute function public.gokwik_order_changed();
+
+-- A GoKwik order's parcel: its AWB and every change of status are reported to GoKwik.
+create or replace function public.gokwik_shipment_changed()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.kind = 'forward' and new.awb_number is not null
+     and new.status in ('booked', 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto')
+     and (tg_op = 'INSERT' or old.status is distinct from new.status
+          or old.awb_number is distinct from new.awb_number) then
+    insert into public.gokwik_order_updates (order_id, environment, order_status, awb_number, awb_status, shipping_provider)
+    select new.order_id, op.environment, 'Confirmed', new.awb_number, new.status,
+      left(coalesce(nullif(new.courier_name, ''), initcap(new.carrier)), 100)
+    from public.order_payments op
+    where op.order_id = new.order_id;
+    if found then
+      perform public.gokwik_wake();
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists shipments_gokwik_sync on public.shipments;
+create trigger shipments_gokwik_sync
+  after insert or update of status, awb_number on public.shipments
+  for each row execute function public.gokwik_shipment_changed();
+
+-- The worker takes updates that are due for the given environments (["production",
+-- "sandbox"]), oldest first, at most p_limit at a time. A
+-- taken update is tried again after 10 minutes if the worker never reports back.
+create or replace function public.gokwik_claim_updates(p_environments jsonb, p_limit integer default 20)
+returns table (
+  id bigint, order_id uuid, order_number bigint, environment text, order_status text,
+  awb_number text, awb_status text, shipping_provider text, order_note text,
+  refund_amount numeric, attempts integer
+)
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.gokwik_order_updates u
+  set attempts = u.attempts + 1, next_try_at = now() + interval '10 minutes'
+  from public.orders o
+  where o.id = u.order_id
+    and u.id in (
+      select q.id from public.gokwik_order_updates q
+      where q.state = 'pending' and q.next_try_at <= now() and q.environment in (select jsonb_array_elements_text(p_environments))
+      order by q.id
+      limit greatest(1, least(coalesce(p_limit, 20), 50))
+      for update skip locked
+    )
+  returning u.id, u.order_id, o.order_number, u.environment, u.order_status,
+    u.awb_number, u.awb_status, u.shipping_provider, u.order_note, u.refund_amount, u.attempts;
+$$;
+
+-- Sent, or to be tried again later (given up after 8 tries and left as failed). p_final
+-- stops further tries at once: a refund request that got no clear answer may have gone
+-- through, so it is never sent again automatically.
+create or replace function public.gokwik_update_done(p_id bigint, p_ok boolean, p_error text default null, p_final boolean default false)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.gokwik_order_updates
+  set state = case when p_ok then 'sent' when p_final or attempts >= 8 then 'failed' else 'pending' end,
+      sent_at = case when p_ok then now() else sent_at end,
+      last_error = case when p_ok then null else left(p_error, 300) end,
+      next_try_at = case when p_ok then next_try_at else now() + least(attempts, 6) * interval '10 minutes' end
+  where id = p_id;
+$$;
+
+revoke execute on function public.gokwik_cart(text) from public, anon, authenticated;
+revoke execute on function public.gokwik_set_address(text, jsonb) from public, anon, authenticated;
+revoke execute on function public.gokwik_place_order(text, jsonb) from public, anon, authenticated;
+revoke execute on function public.gokwik_wake() from public, anon, authenticated;
+revoke execute on function public.gokwik_record_event(jsonb) from public, anon, authenticated;
+revoke execute on function public.gokwik_mark_abandoned(jsonb) from public, anon, authenticated;
+revoke execute on function public.gokwik_order_changed() from public, anon, authenticated;
+revoke execute on function public.gokwik_shipment_changed() from public, anon, authenticated;
+revoke execute on function public.gokwik_claim_updates(jsonb, integer) from public, anon, authenticated;
+revoke execute on function public.gokwik_update_done(bigint, boolean, text, boolean) from public, anon, authenticated;
+grant execute on function public.gokwik_cart(text) to service_role;
+grant execute on function public.gokwik_set_address(text, jsonb) to service_role;
+grant execute on function public.gokwik_place_order(text, jsonb) to service_role;
+grant execute on function public.gokwik_record_event(jsonb) to service_role;
+grant execute on function public.gokwik_mark_abandoned(jsonb) to service_role;
+grant execute on function public.gokwik_claim_updates(jsonb, integer) to service_role;
+grant execute on function public.gokwik_update_done(bigint, boolean, text, boolean) to service_role;
+
+
 
 
 -- Make the website's API see the new tables immediately.
@@ -1596,9 +2309,9 @@ commit;
 -- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: twelve rows, all with
--- rls_enabled = true (integration_tokens, pincode_checks and rate_limits have 0
--- policies on purpose: only the shipping Edge Function may touch them).
+-- The SQL Editor shows this table after the run. Expected: sixteen rows, all with
+-- rls_enabled = true (integration_tokens, pincode_checks, rate_limits and
+-- checkout_carts have 0 policies on purpose: only the Edge Functions may touch them).
 select
   t.tablename as table_name,
   t.rowsecurity as rls_enabled,
@@ -1606,7 +2319,8 @@ select
 from pg_tables t
 where t.schemaname = 'public'
   and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items',
-    'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits')
+    'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits',
+    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates')
 order by t.tablename;
 
 

@@ -103,7 +103,17 @@ function OrderDetail() {
     );
   }
 
-  const totals = { count: order.item_count, subtotal: Number(order.subtotal), mrp: Number(order.mrp_total) };
+  // Orders placed through GoKwik can carry a discount, a charge and money paid online.
+  const total = Number(order.total ?? order.subtotal);
+  const paidOnline = Number(order.amount_paid ?? 0);
+  const totals = {
+    count: order.item_count,
+    subtotal: Number(order.subtotal),
+    mrp: Number(order.mrp_total),
+    offer: Number(order.discount_total ?? 0),
+    charges: Number(order.other_charges ?? 0),
+    total,
+  };
   const pending = order.status === 'pending_payment';
   const cod = order.payment_method === 'cod';
   // The database refuses once the parcel has left with the courier.
@@ -136,6 +146,11 @@ function OrderDetail() {
       {location.state?.placed && cod && order.status === 'confirmed' && (
         <p className="notice notice-gap" data-tone="ok" role="status">
           Order placed. Pay in cash when it arrives.
+        </p>
+      )}
+      {location.state?.placed && order.status === 'paid' && (
+        <p className="notice notice-gap" data-tone="ok" role="status">
+          Order placed. Payment received.
         </p>
       )}
 
@@ -194,8 +209,15 @@ function OrderDetail() {
               <div className="payment-option">
                 <p className="payment-option-title">Cash on delivery</p>
                 <p>
-                  {order.status === 'delivered' ? 'Paid in cash on delivery.' : `Pay ${formatPrice(order.subtotal)} in cash when your order arrives.`}
+                  {order.status === 'delivered' ? 'Paid in cash on delivery.' : `Pay ${formatPrice(total - paidOnline)} in cash when your order arrives.`}
                 </p>
+                {paidOnline > 0 && <p>{formatPrice(paidOnline)} paid online.</p>}
+              </div>
+            )}
+            {!cod && paidOnline > 0 && order.status !== 'cancelled' && (
+              <div className="payment-option">
+                <p className="payment-option-title">Paid online</p>
+                <p>{formatPrice(paidOnline)} received.</p>
               </div>
             )}
             {cancellable && (

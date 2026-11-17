@@ -96,7 +96,7 @@ export function bookingPayload({ order, items, settings }, pkg, courier) {
     discount: 0,
     cod_charges: 0,
     payment_type: cod ? 'cod' : 'prepaid',
-    order_amount: money(order.subtotal),
+    order_amount: money(order.total ?? order.subtotal),
     package_weight: pkg.weight,
     package_length: pkg.length,
     package_breadth: pkg.breadth,
@@ -120,7 +120,7 @@ export function bookingPayload({ order, items, settings }, pkg, courier) {
       sku: clean(i.sku, 60),
     })),
     courier_id: courier.id,
-    collectable_amount: cod ? String(money(order.subtotal)) : '0',
+    collectable_amount: cod ? String(money(order.cod_amount ?? order.subtotal)) : '0',
   };
 }
 

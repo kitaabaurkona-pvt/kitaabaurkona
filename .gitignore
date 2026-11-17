@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-admin
+dist-staging
 dist-ssr
 *.local
 .env
@@ -33,6 +34,7 @@ dist-ssr
 # Local-only project notes
 /readmeforhelp.md
 /master.md
+/gokwik-next-steps.md
 
 # Browser test screenshots
 e2e/shots/

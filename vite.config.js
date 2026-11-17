@@ -41,17 +41,25 @@ function preloadFonts() {
   }
 }
 
-// One codebase builds two separate sites:
-//   store  the shop customers use (branch main, www.kitaabaurkona.com)
-//   admin  the admin panel, sign-in only (branch test, kitaabaurkona.vercel.app)
-// Vercel's branch decides; locally, add --mode admin (npm run dev:admin / build:admin).
+// One codebase builds separate sites:
+//   store    the shop customers use (branch main, www.kitaabaurkona.com)
+//   admin    the admin panel, sign-in only (branch test, kitaabaurkona.vercel.app)
+//   staging  the shop again, as a test shop for GoKwik's sandbox checkout (branch
+//            staging, staging.kitaabaurkona.com): same pages as the store, plus a
+//            "Test shop" bar, hidden from search engines, and no cash-on-delivery checkout
+// Vercel's branch decides; locally, add --mode admin or --mode staging.
 // The admin site starts from its own entry file, so neither site ships the other's pages.
-function siteEntry(site) {
+function siteEntry(site, staging) {
   return {
     name: 'site-entry',
     transformIndexHtml: {
       order: 'pre',
       handler(html) {
+        if (staging) {
+          return html
+            .replace('<title>Kitaab Aur Kona</title>', '<title>Kitaab Aur Kona (test shop)</title>')
+            .replace(/<meta name="description"[^>]*>/, '<meta name="robots" content="noindex, nofollow" />')
+        }
         if (site !== 'admin') return html
         return html
           .replace('<html lang="en"', '<html lang="en" data-site="admin"')
@@ -65,10 +73,16 @@ function siteEntry(site) {
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const site = mode === 'admin' || process.env.VERCEL_GIT_COMMIT_REF === 'test' ? 'admin' : 'store'
+  const branch = process.env.VERCEL_GIT_COMMIT_REF
+  const site = mode === 'admin' || branch === 'test' ? 'admin' : 'store'
+  const staging = site === 'store' && (mode === 'staging' || branch === 'staging')
   return {
-    plugins: [react(), preloadFonts(), siteEntry(site)],
-    define: { ...release, 'import.meta.env.VITE_SITE': JSON.stringify(site) },
+    plugins: [react(), preloadFonts(), siteEntry(site, staging)],
+    define: {
+      ...release,
+      'import.meta.env.VITE_SITE': JSON.stringify(site),
+      'import.meta.env.VITE_STAGING': JSON.stringify(staging ? 'true' : ''),
+    },
     preview: { headers: vercelHeaders() },
   }
 })

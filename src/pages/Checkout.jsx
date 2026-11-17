@@ -10,9 +10,12 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { getProfile } from '../services/profileService';
 import { createOrder } from '../services/orderService';
 import { checkPincode } from '../services/shippingService';
-import { formatPrice } from '../utils/format';
+import { createCheckoutCart, getCheckoutCartOrder, gokwikEnabled, openGokwikCheckout } from '../services/gokwikService';
+import { coverOf, formatPrice } from '../utils/format';
+import { STAGING } from '../utils/release';
 import { INDIAN_STATES, normalizeShipping, orderErrorMessage, validateShipping } from '../utils/storeForm';
 import CartSummary from '../components/store/CartSummary';
+import BookCover from '../components/store/BookCover';
 import { LoadError, StateBlock } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 import { BagIcon } from '../components/icons';
@@ -64,6 +67,137 @@ const PIN_MESSAGES = {
   nocod: "Cash on delivery isn't available for this PIN code yet.",
   unknown: "Couldn't check delivery right now. You can still place the order.",
 };
+
+// Books in the cart that are not part of this order, each with "Add to this order".
+function OtherBooks({ others, onInclude }) {
+  if (others.length === 0) return null;
+  return (
+    <div className="checkout-more">
+      <h3 className="checkout-more-title">Also in your cart</h3>
+      <ul>
+        {others.map((line) => (
+          <li key={line.id}>
+            <span className="checkout-more-name">
+              {line.book.title} × {line.quantity}
+            </span>
+            <span className="checkout-more-price">{formatPrice(Number(line.book.price) * line.quantity)}</span>
+            <button type="button" className="btn-link checkout-line-action" onClick={() => onInclude(line.id)} aria-label={`Add ${line.book.title} to this order`}>
+              Add to this order
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// Checkout through GoKwik: the order's books and one button that opens GoKwik's popup,
+// where the customer gives the address and pays online or chooses cash on delivery.
+// GoKwik's servers then place the order with our backend; this page only learns that it
+// happened and moves on to the order. `onUnavailable` switches to the site's own
+// checkout when GoKwik cannot be opened.
+function GokwikCheckout({ phone, lines, totals, others = [], removable = [], onInclude, onExclude, wholeCart, nativeUrl, onUnavailable }) {
+  const navigate = useNavigate();
+  const { clear, remove } = useCart();
+  const [error, setError] = useState(null);
+  const [opening, setOpening] = useState(false);
+  const busy = useRef(false);
+  const done = useRef(false);
+
+  // The order exists: only what was ordered leaves the cart, then on to the order page.
+  function finish(orderId) {
+    if (done.current) return;
+    done.current = true;
+    if (wholeCart) clear();
+    else lines.forEach((line) => remove(line.id));
+    navigate(orderId ? `/orders/${orderId}` : '/orders', { replace: true, state: { placed: true } });
+  }
+
+  const orderOf = (cartId) => getCheckoutCartOrder(cartId).catch(() => null);
+
+  async function handleOpen() {
+    if (busy.current) return;
+    busy.current = true;
+    setOpening(true);
+    setError(null);
+    let cartId;
+    try {
+      cartId = await createCheckoutCart(lines.map((line) => ({ bookId: line.id, quantity: line.quantity })));
+    } catch (err) {
+      busy.current = false;
+      setOpening(false);
+      setError(orderErrorMessage(err));
+      return;
+    }
+    try {
+      await openGokwikCheckout({
+        cartId,
+        phone,
+        nativeUrl,
+        onComplete: async () => finish(await orderOf(cartId)),
+        // Closed: if the order went through anyway, carry on to it.
+        onClose: async () => {
+          const orderId = await orderOf(cartId);
+          if (orderId) finish(orderId);
+        },
+        onFailure: onUnavailable,
+      });
+    } catch {
+      onUnavailable();
+    } finally {
+      busy.current = false;
+      setOpening(false);
+    }
+  }
+
+  return (
+    <div className="two-col">
+      <ul className="line-list">
+        {lines.map((line) => (
+          <li key={line.id} className="line">
+            <div className="line-inner">
+              <div className="line-cover">
+                <BookCover src={coverOf(line.book)} title={line.book.title} />
+              </div>
+              <div className="line-body">
+                <h2 className="line-title">{line.book.title}</h2>
+                <div className="order-total-row">
+                  <span className="page-meta">
+                    {formatPrice(line.book.price)} × {line.quantity}
+                  </span>
+                  <span className="line-total">{formatPrice(Number(line.book.price) * line.quantity)}</span>
+                </div>
+                {removable.includes(line.id) && (
+                  <button type="button" className="btn-link checkout-line-action" onClick={() => onExclude(line.id)} aria-label={`Remove ${line.book.title} from this order`}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <aside>
+        <CartSummary totals={totals}>
+          <OtherBooks others={others} onInclude={onInclude} />
+          {error && (
+            <p className="notice" data-tone="error" role="alert">
+              {error}
+            </p>
+          )}
+          <button type="button" className="btn btn-primary btn-block" onClick={handleOpen} aria-busy={opening} aria-disabled={opening || undefined}>
+            {opening && <span className="spinner" aria-hidden="true" />}
+            {opening ? 'Opening payment…' : 'Continue to payment'}
+          </button>
+          <Link to="/cart" className="btn btn-outline btn-block">
+            Back to cart
+          </Link>
+        </CartSummary>
+      </aside>
+    </div>
+  );
+}
 
 // `others` are books in the cart that are not part of this order (an "Order now"
 // checkout starts with one book); `onInclude` / `onExclude` move them in and out.
@@ -188,24 +322,7 @@ function CheckoutForm({ initial, lines, totals, others = [], removable = [], onI
               </div>
             ))}
           </dl>
-          {others.length > 0 && (
-            <div className="checkout-more">
-              <h3 className="checkout-more-title">Also in your cart</h3>
-              <ul>
-                {others.map((line) => (
-                  <li key={line.id}>
-                    <span className="checkout-more-name">
-                      {line.book.title} × {line.quantity}
-                    </span>
-                    <span className="checkout-more-price">{formatPrice(Number(line.book.price) * line.quantity)}</span>
-                    <button type="button" className="btn-link checkout-line-action" onClick={() => onInclude(line.id)} aria-label={`Add ${line.book.title} to this order`}>
-                      Add to this order
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <OtherBooks others={others} onInclude={onInclude} />
           {error && !error.field && (
             <p className="notice" data-tone="error" role="alert">
               {error.message}
@@ -238,6 +355,11 @@ function Checkout() {
   const buyParam = params.get('buy');
   const buyId = buyParam && ids.includes(buyParam) ? buyParam : null;
   const [included, setIncluded] = useState([]);
+  // GoKwik's checkout where the site is set up for it. The site's own checkout (cash on
+  // delivery) takes over if GoKwik cannot be opened, or when GoKwik sends the customer
+  // back here with ?native=1.
+  const [gokwikDown, setGokwikDown] = useState(false);
+  const useGokwik = gokwikEnabled && !gokwikDown && params.get('native') !== '1';
   const inOrder = (line) => !buyId || line.id === buyId || included.includes(line.id);
   const lines = cart.lines.filter(inOrder);
   const others = cart.lines.filter((line) => !inOrder(line) && line.available);
@@ -283,17 +405,41 @@ function Checkout() {
     );
   } else {
     const p = profile.data ?? {};
-    content = (
-      <CheckoutForm
-        initial={{ name: p.full_name ?? '', phone: p.phone ?? '', address: p.address ?? '', city: '', state: '', pincode: '' }}
-        lines={lines}
-        totals={totals}
-        others={others}
-        removable={buyId ? included : []}
-        onInclude={(id) => setIncluded((current) => [...current, id])}
-        onExclude={(id) => setIncluded((current) => current.filter((other) => other !== id))}
-        wholeCart={!buyId}
+    const order = {
+      lines,
+      totals,
+      others,
+      removable: buyId ? included : [],
+      onInclude: (id) => setIncluded((current) => [...current, id]),
+      onExclude: (id) => setIncluded((current) => current.filter((other) => other !== id)),
+      wholeCart: !buyId,
+    };
+    // The test shop shares the live database, so its own checkout would make real
+    // cash-on-delivery orders: there, only GoKwik's sandbox may take an order.
+    content = STAGING && !useGokwik ? (
+      <StateBlock title={gokwikEnabled ? 'GoKwik sandbox checkout could not be opened.' : 'The test shop takes orders only through GoKwik sandbox, which is not set up yet.'}>
+        {gokwikEnabled && (
+          <button type="button" className="btn btn-dark" onClick={() => window.location.assign(`/checkout${buyId ? `?buy=${encodeURIComponent(buyId)}` : ''}`)}>
+            Try again
+          </button>
+        )}
+      </StateBlock>
+    ) : useGokwik ? (
+      <GokwikCheckout
+        {...order}
+        phone={p.phone ?? ''}
+        nativeUrl={`${window.location.origin}/checkout?native=1${buyId ? `&buy=${encodeURIComponent(buyId)}` : ''}`}
+        onUnavailable={() => setGokwikDown(true)}
       />
+    ) : (
+      <>
+        {gokwikDown && (
+          <p className="notice notice-gap" data-tone="error" role="alert">
+            Online payment could not be opened. You can still order with cash on delivery.
+          </p>
+        )}
+        <CheckoutForm initial={{ name: p.full_name ?? '', phone: p.phone ?? '', address: p.address ?? '', city: '', state: '', pincode: '' }} {...order} />
+      </>
     );
   }
 
