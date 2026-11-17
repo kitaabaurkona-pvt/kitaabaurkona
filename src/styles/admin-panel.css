@@ -1230,6 +1230,45 @@ html[data-site='admin'] body {
   opacity: 0;
 }
 
+/* "Replace" under each photo: picks a new file for the same place */
+.ap-photo-replace {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  border-top: 1px solid var(--ap-line);
+  color: var(--ap-ink);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ap-photo-replace:focus-within {
+  background: var(--ap-hover);
+  outline: 2px solid var(--ap-ink);
+  outline-offset: -2px;
+}
+
+.ap-photo-replace[data-disabled='true'] {
+  color: #b9bec5;
+  cursor: not-allowed;
+}
+
+@media (hover: hover) {
+  .ap-photo-replace:not([data-disabled='true']):hover {
+    background: var(--ap-hover);
+  }
+}
+
+.ap-photo-replace input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
 /* Sticky save bar under the editor */
 .ap-editor-actions {
   display: flex;

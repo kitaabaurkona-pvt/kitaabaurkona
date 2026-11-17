@@ -1063,6 +1063,29 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     const removedOk = await page.waitForFunction(() => /All changes saved/.test(document.querySelector('.ap-savebar p')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false);
     await new Promise((r) => setTimeout(r, 800));
     check('admin editor: a removed photo is deleted from the photo storage', removedOk && photoLog.deleted.includes(newPhoto) && JSON.stringify((await one(`select image_urls from public.books where id = $1`, [target.id])).image_urls) === JSON.stringify(target.image_urls));
+
+    // Replace the cover in one step: the new photo takes the old one's place.
+    const saveEditor = async () => {
+      await page.$$eval('.ap-savebar button', (bs) => bs.find((b) => /Save changes/.test(b.textContent))?.click());
+      const ok = await page.waitForFunction(() => /All changes saved/.test(document.querySelector('.ap-savebar p')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false);
+      await new Promise((r) => setTimeout(r, 800));
+      return ok;
+    };
+    const replaceCover = async () => {
+      const before = photoLog.uploads;
+      await (await page.$('.ap-photo .ap-photo-replace input[type=file]')).uploadFile(photoA);
+      return page.waitForFunction(() => !/Uploading/.test(document.querySelector('.ap-photos').innerText), { timeout: 10000 }).then(() => photoLog.uploads === before + 1).catch(() => false);
+    };
+    check('admin editor: every photo has a Replace button', (await page.$$('.ap-photo .ap-photo-replace input[type=file]')).length === target.image_urls.length);
+    const replacedUpload = await replaceCover();
+    const replacedSaved = await saveEditor();
+    const replaced = (await one(`select image_urls from public.books where id = $1`, [target.id])).image_urls;
+    check('admin editor: Replace swaps the cover in place and keeps the other photos', replacedUpload && replacedSaved && replaced.length === target.image_urls.length && replaced[0].startsWith(`${PHOTO_ORIGIN}/files/`) && JSON.stringify(replaced.slice(1)) === JSON.stringify(target.image_urls.slice(1)) && (await page.$eval('.ap-photo .ap-photo-cover', (e) => e.textContent).catch(() => '')) === 'Cover', JSON.stringify(replaced));
+    await replaceCover();
+    await saveEditor();
+    const replacedAgain = (await one(`select image_urls from public.books where id = $1`, [target.id])).image_urls;
+    check('admin editor: replacing a stored photo deletes the old file from the photo storage', replacedAgain[0] !== replaced[0] && replacedAgain[0].startsWith(`${PHOTO_ORIGIN}/files/`) && photoLog.deleted.includes(replaced[0]) && !photoLog.deleted.includes(target.image_urls[0]));
+    await db.query(`update public.books set image_urls = $2 where id = $1`, [target.id, target.image_urls]);
     await db.query(`update public.books set description = $2 where id = $1`, [target.id, target.description]);
 
     // ---- Add a book ----

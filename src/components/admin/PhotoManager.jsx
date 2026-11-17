@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, ImageSquare, Star, Trash } from '@phosphor-icons/react';
+import { ArrowLeft, ArrowRight, ArrowsClockwise, ImageSquare, Star, Trash } from '@phosphor-icons/react';
 import { isPhotoFile, MAX_PHOTOS, PHOTO_ACCEPT, photoErrorMessage, uploadPhoto } from '../../services/photoService';
 import { photoEntry } from '../../utils/photoEntry';
 
 // The photos of one book: add from the computer (or drag in), change the order, choose
-// the cover (the first photo) and remove. New photos are shrunk and uploaded right
+// the cover (the first photo), replace one with a new file in the same place, and remove. New photos are shrunk and uploaded right
 // away; the book itself only changes when the editor is saved.
 //   photos     [{ key, url, uploading, preview }]
 //   onChange   receives an updater function (photos => photos)
@@ -55,6 +55,29 @@ function PhotoManager({ photos, onChange, onUploaded, onBusyChange }) {
   });
   const remove = (key) => onChange((list) => list.filter((p) => p.key !== key));
 
+  // Swaps one photo for a new file in the same place (so a new cover stays the cover).
+  // The old photo stays until the new one is uploaded, and comes back if that fails.
+  function replace(key, file) {
+    if (!file) return;
+    if (!isPhotoFile(file)) {
+      setError('Only JPG, PNG and WebP photos can be added.');
+      return;
+    }
+    setError(null);
+    const preview = URL.createObjectURL(file);
+    previews.current.add(preview);
+    onChange((list) => list.map((p) => (p.key === key ? { ...p, uploading: true, preview } : p)));
+    uploadPhoto(file)
+      .then((url) => {
+        onUploaded?.(url);
+        onChange((list) => list.map((p) => (p.key === key ? { ...p, url, uploading: false } : p)));
+      })
+      .catch((err) => {
+        setError(photoErrorMessage(err));
+        onChange((list) => list.map((p) => (p.key === key ? { ...p, uploading: false } : p)));
+      });
+  }
+
   return (
     <div className="stack-sm">
       <ul className="ap-photos" aria-label="Photos">
@@ -88,6 +111,20 @@ function PhotoManager({ photos, onChange, onUploaded, onBusyChange }) {
                 <Trash size={18} aria-hidden="true" />
               </button>
             </div>
+            <label className="ap-photo-replace" data-disabled={photo.uploading || undefined}>
+              <ArrowsClockwise size={16} aria-hidden="true" />
+              Replace
+              <input
+                type="file"
+                accept={PHOTO_ACCEPT}
+                aria-label={`Replace photo ${index + 1}`}
+                disabled={photo.uploading}
+                onChange={(event) => {
+                  replace(photo.key, event.target.files?.[0]);
+                  event.target.value = '';
+                }}
+              />
+            </label>
           </li>
         ))}
         {photos.length < MAX_PHOTOS && (
