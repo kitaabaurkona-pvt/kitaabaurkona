@@ -144,7 +144,7 @@ async function toCheckout(page, query = '') {
   await goto(page, '/');
   await waitSel(page, '.book-card .btn-card:not([aria-disabled])');
   await page.$$eval('.book-card .btn-card:not([aria-disabled])', (bs) => bs[0].click());
-  await waitFor(page, () => [...document.querySelectorAll('.cart-button, .bottom-nav-cart')].some((b) => /^Cart, 1 item/.test(b.getAttribute('aria-label') ?? '')), 5000);
+  await waitFor(page, () => [...document.querySelectorAll('.cart-button, .floating-cart')].some((b) => /^Cart, 1 item/.test(b.getAttribute('aria-label') ?? '')), 5000);
   await goto(page, `/checkout${query}`);
 }
 

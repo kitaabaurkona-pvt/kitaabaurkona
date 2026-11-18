@@ -8,7 +8,8 @@ import { whenIdle } from '../../utils/whenIdle';
 const loadPanel = () => import('./MobileMenuPanel');
 const MobileMenuPanel = lazyPage(loadPanel);
 
-function MobileMenu({ bottomNav = false }) {
+// Phone navigation: this menu button stays in the header; it opens MobileMenuPanel.
+function MobileMenu() {
   const [open, setOpen] = useState(false);
   // Once opened, the panel stays mounted so it can slide out when closed.
   const [used, setUsed] = useState(false);
@@ -22,8 +23,8 @@ function MobileMenu({ bottomNav = false }) {
       <button
         ref={button}
         type="button"
-        className={bottomNav ? "bottom-nav-item" : "icon-button menu-button"}
-        aria-label={bottomNav ? undefined : "Open menu"}
+        className="icon-button menu-button"
+        aria-label="Open menu"
         aria-haspopup="dialog"
         aria-expanded={open}
         onPointerDown={() => {
@@ -38,8 +39,7 @@ function MobileMenu({ bottomNav = false }) {
           setOpen(true);
         }}
       >
-        <List size={bottomNav ? 23 : 20} weight="regular" aria-hidden="true" />
-        {bottomNav && <span>Menu</span>}
+        <List size={22} weight="regular" aria-hidden="true" />
       </button>
       {used && (
         <Suspense fallback={null}>

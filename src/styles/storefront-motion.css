@@ -158,16 +158,6 @@
 .site-header .header-search button:hover { background:#404040; color:var(--header-icon); }
 .site-header .header-search:focus-within { border-color:var(--c-gold); box-shadow:0 0 0 1px var(--c-gold); }
 .site-header .header-search input:focus-visible { outline:none; }
-@media (max-width:767px) {
- .site-header .header-left .menu-button,
- .site-header .header-right :is(.header-wishlist, .cart-button) {
-  width:44px;
-  min-width:44px;
-  height:44px;
-  min-height:44px;
-  justify-content:center;
- }
-}
 /* Glass: a small number of frosted surfaces; controls use a cheap static sheen. */
 .bento-main { background-color:color-mix(in srgb,var(--c-surface) 88%,transparent); background-image:linear-gradient(135deg,#ffffff0e,transparent 55%); border-color:color-mix(in srgb,var(--c-ink) 14%,transparent); box-shadow:inset 0 1px 0 #ffffff13,0 12px 28px #0000000c; }
 .bento-small { background-image:linear-gradient(135deg,#ffffff33,transparent 55%,#ffffff0a); border:1px solid #ffffff26; box-shadow:inset 0 1px 0 #ffffff55,0 10px 24px #0000000b; }
@@ -251,6 +241,14 @@
 .header-search input::placeholder{color:currentColor;opacity:.55;transition:opacity .26s ease;}
 .header-search input.search-hint-fading::placeholder{opacity:0;}
 :root[data-motion='reduce'] .header-search input::placeholder{transition:none;}
+
+/* ---------- Floating cart (wide screens, once the header has scrolled away) ---------- */
+.floating-cart{position:fixed;top:16px;right:max(24px,env(safe-area-inset-right));z-index:45;display:inline-flex;align-items:center;justify-content:center;gap:8px;min-width:56px;height:52px;padding:0 18px;border:1px solid rgb(255 255 255 / .12);border-radius:999px;background:#101010;color:#fff;box-shadow:0 10px 28px rgb(0 0 0 / .22);cursor:pointer;}
+.floating-cart:hover{background:#1c1c1c;}
+.floating-cart:focus-visible{outline:2px solid var(--c-accent);outline-offset:3px;}
+.floating-cart-count{display:inline-grid;place-items:center;min-width:22px;height:22px;padding:0 6px;border-radius:999px;background:var(--c-accent);color:#101010;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;}
+/* Phones keep the header on screen, so they never need it. */
+@media (max-width:767px){.floating-cart{display:none;}}
 
 /* ---------- Genre row: a seamless loop (components/home/GenreSlider.jsx) ----------
    The real tiles are followed by copies and the track moves by one set per cycle.

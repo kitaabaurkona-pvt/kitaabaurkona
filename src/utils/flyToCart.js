@@ -46,18 +46,18 @@ function bounce(target) {
   );
 }
 
-// Pick the cart entry point currently visible in the viewport.
-export function visibleCartTrigger() {
-  const onScreen = (element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.bottom > 0 && rect.top < window.innerHeight
-      && getComputedStyle(element).visibility === 'visible';
+// The cart button the cover flies to: the header's, or the floating one that stands in
+// for it once the header has scrolled away.
+function cartTarget() {
+  const onScreen = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.bottom > 0 && r.top < window.innerHeight;
   };
-  return [...document.querySelectorAll('.cart-button, .bottom-nav-cart')].find(onScreen);
+  return [...document.querySelectorAll('.floating-cart, .cart-button')].find(onScreen) ?? null;
 }
 
 export function flyToCart(source) {
-  const target = visibleCartTrigger();
+  const target = cartTarget();
   if (!source || !target || typeof source.getBoundingClientRect !== 'function' || !document.body.animate) return;
   const from = source.getBoundingClientRect();
   const to = target.getBoundingClientRect();

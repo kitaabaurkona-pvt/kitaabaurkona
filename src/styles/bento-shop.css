@@ -52,13 +52,7 @@ h1,h2,h3,.page-title,.detail-title,.auth-page .auth-title{font-family:var(--font
 .feature-link{font-size:13px;font-weight:600;display:flex;gap:14px;align-items:center;z-index:1;}.feature-icon{position:absolute;right:22px;bottom:24px;opacity:.38;transform:rotate(-12deg);pointer-events:none;}
 .mood-section,.reading-feature,.affordable-section{margin-top:64px;padding:0;border:0;}
 .editorial-section-head{margin-bottom:24px;gap:20px;align-items:flex-end;}.editorial-section-head .eyebrow{margin:0 0 8px;}
-.editorial-section-head h2{font-family:var(--font-serif);font-size:32px;line-height:1.15;font-weight:650;letter-spacing:-1px;}
-@media (min-width: 1024px) {
- .reading-home :is(.reading-feature, .affordable-section) .book-grid {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
- }
-}
-.home-section-link.btn{display:flex;width:fit-content;min-height:44px;margin:20px auto 0;padding-inline:20px;border-radius:999px;}
+.editorial-section-head h2{font-family:var(--font-serif);font-size:32px;line-height:1.15;font-weight:650;letter-spacing:-1px;}.editorial-section-head a{font-size:14px;font-weight:500;gap:8px;}
 .mood-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;}.mood-tile{position:relative;display:flex;align-items:center;gap:14px;padding:24px 20px;background:var(--c-surface);border:1px solid var(--c-line);border-radius:24px;min-height:108px;color:var(--c-ink);text-decoration:none;transition:background .15s ease,border-color .15s ease;}
 .mood-tile>svg:first-child{box-sizing:border-box;width:40px;height:40px;padding:8px;flex:none;border-radius:12px;background:var(--c-accent);color:var(--c-on-accent);}
 .mood-tile strong{display:block;font-size:16px;font-weight:600;line-height:1.4;}.mood-tile small{display:block;font-size:12px;color:var(--c-muted);margin-top:4px;line-height:1.5;}.mood-arrow{display:none;}.mood-tile:hover{background:var(--c-surface-alt);border-color:var(--c-control);}
@@ -95,7 +89,7 @@ h1,h2,h3,.page-title,.detail-title,.auth-page .auth-title{font-family:var(--font
 @media(max-width:767px){
  :root{--margin:20px;--gutter:16px;}
  .header-top{grid-template-columns:minmax(0,1fr) auto;gap:12px 8px;min-height:0;padding:14px 0 16px;}.header-left .menu-button{display:inline-flex;width:36px;min-width:36px;margin:0 4px 0 -6px;}.brand-logo{gap:5px;min-width:0;}.brand-logo img{width:34px;height:34px;}.brand-word{font-size:18px;letter-spacing:-.6px;white-space:normal;max-width:145px;}
- .header-right{gap:2px;}.header-right .header-utility:not(.cart-button){display:none;}.header-wishlist{display:inline-flex;}.header-utility,.header-right .icon-button{min-width:40px;width:40px;height:44px;}.header-search{height:50px;min-height:50px;padding-left:16px;}.header-search input{font-size:16px;}.header-search button{min-width:40px;padding:0 12px;min-height:34px;font-size:12px;}
+ .header-right{gap:2px;}.header-right .header-utility:not(.cart-button){display:none;}.header-wishlist{display:inline-flex;}.header-utility,.header-right .icon-button{min-width:40px;width:40px;height:44px;}.header-utility svg{width:24px;}.header-search{height:50px;min-height:50px;padding-left:16px;}.header-search input{font-size:16px;}.header-search button{min-width:40px;padding:0 12px;min-height:34px;font-size:12px;}
  .header-nav-row{gap:26px;min-height:46px;}.nav-link{font-size:14px;}.nav-about{display:none;}.mobile-cart-count{top:1px;right:-1px;background:var(--c-accent);color:#101010;}.grouped-book-menu{border-radius:22px;max-height:65vh;}
  .reading-home{padding-top:20px;padding-bottom:40px;}.bento-hero{grid-template-columns:1fr;grid-template-rows:auto;gap:14px;}.bento-main{grid-row:auto;display:block;min-height:520px;padding:30px 26px;border-radius:28px;}.bento-main-copy{max-width:100%;}.bento-main-copy .eyebrow{font-size:12px;margin-bottom:22px;}.bento-main h1{font-size:46px;line-height:1.02;max-width:300px;}.hero-description{font-size:15px;line-height:1.6;margin:18px 0 22px;}.hero-cta{min-height:48px;}.hero-books{width:66%;height:216px;right:14px;bottom:-8px;}.hero-book{max-width:120px;width:44%;}.hero-book-1{top:24%;left:0;}.hero-book-2{top:4%;left:29%;}.hero-book-3{bottom:0;right:-2%;}
  .bento-small{min-height:205px;padding:26px;border-radius:26px;gap:16px;}.bento-small h2{font-size:32px;}.feature-kicker{font-size:12px;}.feature-icon{width:76px;height:76px;right:24px;bottom:26px;opacity:.45;}.feature-link{font-size:14px;gap:10px;}
