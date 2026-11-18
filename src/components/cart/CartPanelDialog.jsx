@@ -10,6 +10,7 @@ import { ShoppingCart } from '@phosphor-icons/react';
 import { LinesSkeleton } from '../store/Skeletons';
 import { CloseIcon } from '../icons';
 import CartLine from './CartLine';
+import { visibleCartTrigger } from '../../utils/flyToCart';
 
 
 // Slide-out cart opened from the header (loaded by CartPanel.jsx when first needed).
@@ -49,10 +50,10 @@ function CartPanelDialog() {
                 }
               }}
               onCloseAutoFocus={(event) => {
-                // Return focus to what opened the panel, or to the header cart button when
+                // Return focus to what opened the panel, or to the visible cart button when
                 // that element is gone (for example a toast that has closed).
                 event.preventDefault();
-                const target = returnTo.current?.isConnected ? returnTo.current : document.querySelector('.cart-button');
+                const target = returnTo.current?.isConnected ? returnTo.current : visibleCartTrigger();
                 target?.focus();
               }}
             >
