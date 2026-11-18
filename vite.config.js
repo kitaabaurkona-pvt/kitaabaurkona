@@ -47,14 +47,22 @@ function preloadFonts() {
 //   staging  the shop again, as a test shop for GoKwik's sandbox checkout (branch
 //            staging, kitaabaurkonastaging.bizwitheet.com): same pages as the store, plus a
 //            "Test shop" bar, hidden from search engines, and no cash-on-delivery checkout
-// Vercel's branch decides; locally, add --mode admin or --mode staging.
+//   test site  the shop again, for trying store changes before they go live (branch
+//            frontend_test): same pages as the store, plus a "Test site" bar, hidden
+//            from search engines. It uses the live database, so its orders are real.
+// Vercel's branch decides; locally, add --mode admin, --mode staging or --mode test-site.
 // The admin site starts from its own entry file, so neither site ships the other's pages.
-function siteEntry(site, staging) {
+function siteEntry(site, staging, testSite) {
   return {
     name: 'site-entry',
     transformIndexHtml: {
       order: 'pre',
       handler(html) {
+        if (testSite) {
+          return html
+            .replace('<title>Kitaab Aur Kona</title>', '<title>Kitaab Aur Kona (test site)</title>')
+            .replace(/<meta name="description"[^>]*>/, '<meta name="robots" content="noindex, nofollow" />')
+        }
         if (staging) {
           return html
             .replace('<title>Kitaab Aur Kona</title>', '<title>Kitaab Aur Kona (test shop)</title>')
@@ -76,12 +84,14 @@ export default defineConfig(({ mode }) => {
   const branch = process.env.VERCEL_GIT_COMMIT_REF
   const site = mode === 'admin' || branch === 'test' ? 'admin' : 'store'
   const staging = site === 'store' && (mode === 'staging' || branch === 'staging')
+  const testSite = site === 'store' && !staging && (mode === 'test-site' || branch === 'frontend_test')
   return {
-    plugins: [react(), preloadFonts(), siteEntry(site, staging)],
+    plugins: [react(), preloadFonts(), siteEntry(site, staging, testSite)],
     define: {
       ...release,
       'import.meta.env.VITE_SITE': JSON.stringify(site),
       'import.meta.env.VITE_STAGING': JSON.stringify(staging ? 'true' : ''),
+      'import.meta.env.VITE_TEST_SITE': JSON.stringify(testSite ? 'true' : ''),
     },
     preview: { headers: vercelHeaders() },
   }

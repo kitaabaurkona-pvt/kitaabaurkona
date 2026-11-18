@@ -560,7 +560,7 @@ button {
 }
 
 
-/* ---------- Test shop bar (only on the staging build) ---------- */
+/* ---------- Test bar (only on the staging and test-site builds) ---------- */
 
 .test-site-bar {
   display: flex;

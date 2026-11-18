@@ -5,9 +5,11 @@
 //   test → the admin panel, https://kitaabaurkona.vercel.app  (sign-in only, admins only)
 //
 //   staging → the test shop, https://kitaabaurkonastaging.bizwitheet.com  (GoKwik sandbox only)
+//   frontend_test → the test site, for trying store changes before they go live
 //
 // A local build or test run is the store unless it is started with --mode admin
-// (npm run dev:admin, npm run build:admin) or --mode staging (npm run build:staging).
+// (npm run dev:admin, npm run build:admin), --mode staging (npm run build:staging) or
+// --mode test-site (npm run dev:test-site, npm run build:test-site).
 
 export const LIVE_ORIGIN = 'https://www.kitaabaurkona.com';
 export const ADMIN_ORIGIN = 'https://kitaabaurkona.vercel.app';
@@ -16,6 +18,10 @@ export const STAGING_ORIGIN = 'https://kitaabaurkonastaging.bizwitheet.com';
 // The test shop: the store's pages for trying GoKwik's sandbox checkout. It shares the
 // live database, so it never offers the site's own cash-on-delivery checkout.
 export const STAGING = import.meta.env.VITE_STAGING === 'true';
+
+// The test site: the store with changes that have not gone live yet. It shares the live
+// database, so orders placed on it are real orders.
+export const TEST_SITE = import.meta.env.VITE_TEST_SITE === 'true';
 const ADMIN_HOST = new URL(ADMIN_ORIGIN).hostname;
 
 export const RELEASE = {
