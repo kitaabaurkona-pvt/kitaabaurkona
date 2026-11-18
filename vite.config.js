@@ -16,12 +16,39 @@ function vercelHeaders() {
   return headers
 }
 
-// Which version this build is: Vercel provides the git branch, environment and commit
-// while building. Local builds and test runs have none (see src/utils/release.js).
+// Which version this build is: the host provides the git branch and commit while
+// building. Vercel builds the store, admin panel and test shop; Cloudflare (Pages or
+// Workers Builds) builds the test site from frontend_test. Local builds and test runs
+// have none (see src/utils/release.js).
+const env = process.env
+const onCloudflare = Boolean(env.CF_PAGES || env.WORKERS_CI)
+const gitBranch = env.VERCEL_GIT_COMMIT_REF ?? env.CF_PAGES_BRANCH ?? env.WORKERS_CI_BRANCH
+const gitCommit = env.VERCEL_GIT_COMMIT_SHA ?? env.CF_PAGES_COMMIT_SHA ?? env.WORKERS_CI_COMMIT_SHA ?? ''
 const release = {
-  'import.meta.env.VITE_RELEASE_BRANCH': JSON.stringify(process.env.VERCEL_GIT_COMMIT_REF ?? ''),
-  'import.meta.env.VITE_RELEASE_ENV': JSON.stringify(process.env.VERCEL_ENV ?? 'local'),
-  'import.meta.env.VITE_RELEASE_COMMIT': JSON.stringify((process.env.VERCEL_GIT_COMMIT_SHA ?? '').slice(0, 7)),
+  'import.meta.env.VITE_RELEASE_BRANCH': JSON.stringify(gitBranch ?? ''),
+  'import.meta.env.VITE_RELEASE_ENV': JSON.stringify(env.VERCEL_ENV ?? (onCloudflare ? 'cloudflare' : 'local')),
+  'import.meta.env.VITE_RELEASE_COMMIT': JSON.stringify(gitCommit.slice(0, 7)),
+}
+
+// Cloudflare ignores vercel.json, so the test site gets the same security and cache
+// headers as a Cloudflare _headers file, written from vercel.json, plus noindex.
+function cloudflareHeaders(enabled) {
+  return {
+    name: 'cloudflare-headers',
+    apply: 'build',
+    generateBundle() {
+      if (!enabled) return
+      const config = JSON.parse(fs.readFileSync(new URL('./vercel.json', import.meta.url), 'utf8'))
+      const blocks = []
+      for (const rule of config.headers ?? []) {
+        if (rule.has) continue // rules for Vercel's own addresses only
+        const lines = rule.headers.map(({ key, value }) => `  ${key}: ${value}`)
+        if (rule.source === '/(.*)') lines.push('  X-Robots-Tag: noindex, nofollow')
+        blocks.push(`${rule.source.replace('(.*)', '*')}\n${lines.join('\n')}`)
+      }
+      this.emitFile({ type: 'asset', fileName: '_headers', source: `${blocks.join('\n\n')}\n` })
+    },
+  }
 }
 
 // The two fonts every page uses are fetched together with the page, instead of only
@@ -48,9 +75,10 @@ function preloadFonts() {
 //            staging, kitaabaurkonastaging.bizwitheet.com): same pages as the store, plus a
 //            "Test shop" bar, hidden from search engines, and no cash-on-delivery checkout
 //   test site  the shop again, for trying store changes before they go live (branch
-//            frontend_test): same pages as the store, plus a "Test site" bar, hidden
-//            from search engines. It uses the live database, so its orders are real.
-// Vercel's branch decides; locally, add --mode admin, --mode staging or --mode test-site.
+//            frontend_test, built on Cloudflare, not Vercel): same pages as the store,
+//            plus a "Test site" bar, hidden from search engines. It uses the live
+//            database, so its orders are real.
+// The git branch decides; locally, add --mode admin, --mode staging or --mode test-site.
 // The admin site starts from its own entry file, so neither site ships the other's pages.
 function siteEntry(site, staging, testSite) {
   return {
@@ -81,12 +109,12 @@ function siteEntry(site, staging, testSite) {
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
-  const branch = process.env.VERCEL_GIT_COMMIT_REF
+  const branch = gitBranch
   const site = mode === 'admin' || branch === 'test' ? 'admin' : 'store'
   const staging = site === 'store' && (mode === 'staging' || branch === 'staging')
   const testSite = site === 'store' && !staging && (mode === 'test-site' || branch === 'frontend_test')
   return {
-    plugins: [react(), preloadFonts(), siteEntry(site, staging, testSite)],
+    plugins: [react(), preloadFonts(), siteEntry(site, staging, testSite), cloudflareHeaders(testSite)],
     define: {
       ...release,
       'import.meta.env.VITE_SITE': JSON.stringify(site),

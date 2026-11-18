@@ -1,4 +1,9 @@
 {
+  "git": {
+    "deploymentEnabled": {
+      "frontend_test": false
+    }
+  },
   "redirects": [
     {
       "source": "/:path*",

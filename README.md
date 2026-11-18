@@ -1,14 +1,32 @@
 # kitaabaurkona
 our main website for kitaabaurkona
 
-## Two sites from one codebase
+## Branches and sites
 
-| Branch | Site | What it is |
-| --- | --- | --- |
-| `main` | https://www.kitaabaurkona.com | The store customers use. It has no admin pages. |
-| `test` | https://kitaabaurkona.vercel.app | The admin panel: a sign-in page and the panel, nothing else. Only admins get in. |
+| Branch | Site | Built by | What it is |
+| --- | --- | --- | --- |
+| `main` | https://www.kitaabaurkona.com | Vercel | The store customers use. It has no admin pages. |
+| `test` | https://kitaabaurkona.vercel.app | Vercel | The admin panel: a sign-in page and the panel, nothing else. Only admins get in. |
+| `staging` | https://kitaabaurkonastaging.bizwitheet.com | Vercel | The test shop for GoKwik's sandbox checkout ("Test shop" bar, no cash on delivery). |
+| `frontend_test` | Cloudflare domain | Cloudflare | The test site for store design work ("Test site" bar). |
 
-- Both branches hold the same code. Vercel builds each branch on its own, and the build
+Which branch gets what:
+
+- **Store design work goes to `frontend_test` only.** It reaches `main` only when the
+  owner ships it (merge `frontend_test` into `test`, then release as below).
+- `test` holds the admin panel and is the branch releases are made from; `main` and
+  `staging` get the same commit as `test` when the owner ships. Never push store-only
+  work straight to `test`, `staging` or `main`.
+- The build picks the site from its git branch (Vercel's or Cloudflare's), so the bars
+  and `noindex` switch on by themselves. A branch with any other name builds the plain
+  store, which looks exactly like the live one.
+- All sites use the same Supabase database: orders placed on the test site are real.
+- On Cloudflare the build writes a `_headers` file (security headers from `vercel.json`,
+  plus `noindex`). Vercel does not build `frontend_test` (`vercel.json`, `git`).
+
+### Store and admin panel
+
+- `main` and `test` hold the same code. Vercel builds each branch on its own, and the build
   decides which site it is from its branch (`vite.config.js`, `src/utils/release.js`):
   `main` starts from `src/main.jsx` (the store), `test` from `src/admin/main.jsx` (the admin
   panel). Neither site ships the other's pages.
@@ -29,6 +47,7 @@ our main website for kitaabaurkona
 | --- | --- | --- |
 | Store | `npm run dev` | http://localhost:5173 |
 | Admin panel | `npm run dev:admin` | http://localhost:5198 |
+| Test site (store with the "Test site" bar) | `npm run dev:test-site` | http://localhost:5173 |
 | Browser tests | `npm run build`, `npm run build:admin`, `npm run preview -- --port 5200`, `npm run preview:admin`, then `BASE=http://localhost:5200 ADMIN_BASE=http://localhost:5201 npm run e2e` | |
 
 ## Releasing
@@ -37,6 +56,6 @@ our main website for kitaabaurkona
 2. Commit, then push the same commit to both branches: `git push origin test` updates the
    admin panel, `git push origin test:main` (a fast-forward) updates the store. Only when
    the owner says to ship.
-3. There is no separate test site any more. To try store work before customers see it,
-   push it to another branch and open the preview address Vercel gives that branch.
+3. To try store work before customers see it, push it to `frontend_test` and open the
+   test site on its Cloudflare domain.
 4. Database changes (`supabase/schema.sql`)
