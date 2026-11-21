@@ -107,7 +107,7 @@ export async function getShippingSettings() {
   return data?.[0] ?? null;
 }
 
-const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone', 'pickup_email'];
+const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone', 'pickup_email', 'invoice_business_name', 'invoice_address', 'invoice_phone', 'invoice_gstin', 'invoice_pan', 'invoice_state'];
 
 export async function updateShippingSettings(patch) {
   const supabase = await loadSupabase();

@@ -32,6 +32,9 @@ const FIELDS = [
   ['pickup_email', 'Contact email', 120],
 ];
 
+// The invoice details have their own form (below), so this one never sends them.
+const withoutInvoice = (form) => Object.fromEntries(Object.entries(form).filter(([key]) => !key.startsWith('invoice_')));
+
 function SettingsForm({ initial }) {
   const [form, setForm] = useState(initial);
   const [saving, setSaving] = useState(false);
@@ -64,7 +67,7 @@ function SettingsForm({ initial }) {
     setSaving('save');
     setError(null);
     try {
-      const saved = await updateShippingSettings(form);
+      const saved = await updateShippingSettings(withoutInvoice(form));
       if (saved) setForm(saved);
       show({ message: 'Shipping settings saved' });
     } catch (err) {
@@ -85,7 +88,7 @@ function SettingsForm({ initial }) {
     setSaving('register');
     setError(null);
     try {
-      const saved = await updateShippingSettings(form);
+      const saved = await updateShippingSettings(withoutInvoice(form));
       if (saved) setForm(saved);
     } catch (err) {
       setError(adminErrorMessage(err));
@@ -204,6 +207,91 @@ function SettingsForm({ initial }) {
   );
 }
 
+const INVOICE_FIELDS = [
+  ['invoice_business_name', 'Business name (as on invoices)', 100, 'span-2'],
+  ['invoice_address', 'Business address', 200, 'span-2'],
+  ['invoice_phone', 'Phone number', 10],
+  ['invoice_gstin', 'GSTIN', 15],
+  ['invoice_pan', 'PAN', 10],
+];
+
+// The seller details printed on tax invoices ("Sold by").
+function InvoiceDetailsForm({ initial }) {
+  const [form, setForm] = useState(() => Object.fromEntries([...INVOICE_FIELDS.map(([key]) => [key, initial[key] ?? '']), ['invoice_state', initial.invoice_state || 'Rajasthan']]));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const { show } = useToast();
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+
+  async function save(event) {
+    event.preventDefault();
+    if (saving) return;
+    const clean = {
+      invoice_business_name: form.invoice_business_name.trim().replace(/\s+/g, ' '),
+      invoice_address: form.invoice_address.trim().replace(/\s+/g, ' '),
+      invoice_phone: form.invoice_phone.replace(/\D/g, ''),
+      invoice_gstin: form.invoice_gstin.trim().toUpperCase(),
+      invoice_pan: form.invoice_pan.trim().toUpperCase(),
+      invoice_state: form.invoice_state,
+    };
+    if (clean.invoice_phone && !/^[0-9]{10}$/.test(clean.invoice_phone)) return setError('Enter a 10-digit phone number.');
+    if (clean.invoice_gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(clean.invoice_gstin)) return setError('Enter the 15-character GSTIN exactly as registered.');
+    if (clean.invoice_pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(clean.invoice_pan)) return setError('Enter the 10-character PAN.');
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await updateShippingSettings(clean);
+      if (saved) setForm((f) => ({ ...f, ...Object.fromEntries(Object.keys(clean).map((k) => [k, saved[k] ?? ''])) }));
+      show({ message: 'Invoice details saved' });
+    } catch (err) {
+      setError(adminErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form className="panel stack-sm" onSubmit={save} noValidate aria-labelledby="invoice-details-heading">
+      <h2 id="invoice-details-heading" className="panel-title">
+        Invoice details
+      </h2>
+      <div className="form-grid form-grid-2">
+        {INVOICE_FIELDS.map(([key, label, max, span]) => (
+          <div key={key} className={span}>
+            <label className="label" htmlFor={`inv-${key}`}>
+              {label}
+            </label>
+            <input id={`inv-${key}`} className="input" maxLength={max} value={form[key]} onChange={(e) => set(key, e.target.value)} />
+          </div>
+        ))}
+        <div>
+          <label className="label" htmlFor="inv-invoice_state">
+            Business state
+          </label>
+          <select id="inv-invoice_state" className="select" value={form.invoice_state} onChange={(e) => set('invoice_state', e.target.value)}>
+            {INDIAN_STATES.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {error && (
+        <p className="notice" data-tone="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="inline-actions">
+        <button type="submit" className="btn btn-dark" aria-busy={saving}>
+          {saving && <span className="spinner" aria-hidden="true" />}
+          Save invoice details
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AdminShipping() {
   useDocumentTitle('Shipping');
   const settings = useAsync(() => getShippingSettings(), []);
@@ -216,6 +304,7 @@ function AdminShipping() {
       {settings.loading && !settings.data && <LinesSkeleton count={2} label="Loading shipping settings…" />}
       {settings.error && <LoadError onRetry={settings.retry} what="shipping settings" />}
       {settings.data && <SettingsForm initial={settings.data} />}
+      {settings.data && <InvoiceDetailsForm initial={settings.data} />}
       {settings.data?.delhivery_warehouse_name && waiting.data != null && <DelhiveryPickup key={waiting.data} waiting={waiting.data} />}
 
       <section className="panel stack-sm" aria-labelledby="problems-heading">

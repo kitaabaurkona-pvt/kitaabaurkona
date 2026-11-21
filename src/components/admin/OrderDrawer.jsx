@@ -304,7 +304,7 @@ function OrderActions({ order, onChanged }) {
 
 // Everything about one order, in a panel that slides in from the right: the books, the
 // money, the address, the parcel (carrier, courier, booking, label) and status changes.
-function OrderDrawer({ order, onClose, onChanged }) {
+function OrderDrawer({ order, onClose, onChanged, onPrint, printing = false }) {
   const total = Number(order?.total ?? order?.subtotal ?? 0);
   const toCollect = order?.payment_method === 'cod' ? Math.max(0, total - Number(order.amount_paid ?? 0)) : 0;
 
@@ -379,6 +379,26 @@ function OrderDrawer({ order, onClose, onChanged }) {
                 <section className="ap-sheet-section" aria-labelledby="sheet-stage">
                   <h3 id="sheet-stage">Packing step</h3>
                   <StageControl key={`${order.id}-${stageOf(order)}`} order={order} onChanged={onChanged} />
+                </section>
+              )}
+
+              {onPrint && !['pending_payment', 'cancelled'].includes(order.status) && (
+                <section className="ap-sheet-section" aria-labelledby="sheet-docs">
+                  <h3 id="sheet-docs">Print</h3>
+                  <div className="inline-actions">
+                    {(order.shipments ?? []).some((s) => s.kind === 'forward' && s.status !== 'cancelled' && s.awb_number) && (
+                      <button type="button" className="btn btn-outline btn-sm" aria-disabled={printing || undefined} onClick={() => !printing && onPrint('labels', order)}>
+                        Label
+                      </button>
+                    )}
+                    <button type="button" className="btn btn-outline btn-sm" aria-disabled={printing || undefined} onClick={() => !printing && onPrint('invoices', order)}>
+                      Invoice
+                    </button>
+                    <button type="button" className="btn btn-outline btn-sm" aria-disabled={printing || undefined} onClick={() => !printing && onPrint('slips', order)}>
+                      Packing slip
+                    </button>
+                    {printing && <span className="spinner" aria-label="Preparing the PDF" />}
+                  </div>
                 </section>
               )}
 

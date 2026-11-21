@@ -175,7 +175,7 @@ export function createDelhivery({ baseUrl, token, fetchImpl = fetch, timeoutMs =
       }
       const pkg = Array.isArray(r.json?.packages) ? r.json.packages[0] : null;
       if (pkg && /^success$/i.test(String(pkg.status)) && r.json?.error !== true) {
-        return { waybill: String(pkg.waybill ?? ''), refnum: pkg.refnum ?? null, status: 'Manifested' };
+        return { waybill: String(pkg.waybill ?? ''), refnum: pkg.refnum ?? null, sort_code: pkg.sort_code ?? null, status: 'Manifested' };
       }
       const reason = explain(r.json, r.text);
       note(path, r.status, reason);

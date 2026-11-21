@@ -1258,6 +1258,7 @@ begin
       package_length_cm = (p ->> 'package_length_cm')::numeric,
       package_breadth_cm = (p ->> 'package_breadth_cm')::numeric,
       package_height_cm = (p ->> 'package_height_cm')::numeric,
+      routing_code = left(p ->> 'routing_code', 60),
       last_error = null,
       next_attempt_at = null,
       needs_check = false
@@ -2604,9 +2605,148 @@ grant execute on function public.admin_phone_order_counts(jsonb) to authenticate
 
 
 -- -----------------------------------------------------------------------------
+-- 9e. ORDER DOCUMENTS (admin: tax invoices, label routing code)
+-- -----------------------------------------------------------------------------
+-- Each order gets one tax invoice number, the first time its label or invoice is
+-- printed: KAK/26-27/00001, a running number that starts again every 1 April (the
+-- Indian financial year). Numbers are never reused or changed.
+create table if not exists public.order_invoices (
+  order_id uuid primary key references public.orders (id) on delete restrict,
+  financial_year text not null check (financial_year ~ '^[0-9]{2}-[0-9]{2}$'),
+  serial integer not null check (serial > 0),
+  invoice_number text not null unique,
+  issued_at timestamptz not null default now(),
+  unique (financial_year, serial)
+);
+
+alter table public.order_invoices enable row level security;
+
+drop policy if exists "Admins view invoices" on public.order_invoices;
+create policy "Admins view invoices" on public.order_invoices
+  for select to authenticated
+  using ((select public.is_admin()));
+
+revoke all on public.order_invoices from anon, authenticated;
+grant select on public.order_invoices to authenticated;
+
+-- The courier's sorting code for the parcel (Delhivery's sort code), printed on our own
+-- label. Saved by the shipping function when it books.
+alter table public.shipments add column if not exists routing_code text check (char_length(routing_code) <= 60);
+
+-- The seller details printed on invoices ("Sold by"). Typed once by an admin in Admin >
+-- Shipping > Invoice details; empty until then. The state decides IGST (another state)
+-- or CGST + SGST (the same state).
+alter table public.shipping_settings add column if not exists invoice_business_name text not null default ''
+  check (char_length(invoice_business_name) <= 100);
+alter table public.shipping_settings add column if not exists invoice_address text not null default ''
+  check (char_length(invoice_address) <= 200);
+alter table public.shipping_settings add column if not exists invoice_phone text not null default ''
+  check (invoice_phone = '' or invoice_phone ~ '^[0-9]{10}$');
+alter table public.shipping_settings add column if not exists invoice_gstin text not null default ''
+  check (invoice_gstin = '' or invoice_gstin ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$');
+alter table public.shipping_settings add column if not exists invoice_pan text not null default ''
+  check (invoice_pan = '' or invoice_pan ~ '^[A-Z]{5}[0-9]{4}[A-Z]$');
+alter table public.shipping_settings add column if not exists invoice_state text not null default 'Rajasthan'
+  check (char_length(invoice_state) <= 60);
+
+-- Gives invoice numbers to the orders that have none yet and returns every order's
+-- number and date. Unpaid and cancelled orders get none.
+create or replace function public.admin_issue_invoices(p_orders jsonb)
+returns table (order_id uuid, invoice_number text, issued_at timestamptz)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_ids uuid[];
+  v_now timestamp := (now() at time zone 'Asia/Kolkata');
+  v_start integer;
+  v_fy text;
+  v_next integer;
+  v_order uuid;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can make invoices' using errcode = '42501';
+  end if;
+  v_ids := public.order_ids_from_json(p_orders);
+  v_start := extract(year from v_now)::integer - case when extract(month from v_now) < 4 then 1 else 0 end;
+  v_fy := lpad((v_start % 100)::text, 2, '0') || '-' || lpad(((v_start + 1) % 100)::text, 2, '0');
+
+  -- One numbering at a time, so two admins never get the same number.
+  perform pg_advisory_xact_lock(hashtext('public.order_invoices'));
+  select coalesce(max(i.serial), 0) into v_next from public.order_invoices i where i.financial_year = v_fy;
+
+  for v_order in
+    select o.id from public.orders o
+    where o.id = any(v_ids)
+      and o.status not in ('pending_payment', 'cancelled')
+      and not exists (select 1 from public.order_invoices i where i.order_id = o.id)
+    order by o.order_number
+  loop
+    v_next := v_next + 1;
+    insert into public.order_invoices (order_id, financial_year, serial, invoice_number)
+    values (v_order, v_fy, v_next, 'KAK/' || v_fy || '/' || lpad(v_next::text, 5, '0'));
+  end loop;
+
+  return query
+    select i.order_id, i.invoice_number, i.issued_at
+    from public.order_invoices i
+    where i.order_id = any(v_ids);
+end;
+$$;
+
+revoke execute on function public.admin_issue_invoices(jsonb) from public, anon;
+grant execute on function public.admin_issue_invoices(jsonb) to authenticated;
+
+-- A customer's return pickup that reached the shop: when it was checked in. Its books
+-- go back into stock once (the order itself stays Delivered).
+alter table public.order_fulfilment add column if not exists return_received_at timestamptz;
+
+create or replace function public.admin_receive_return(p_order uuid)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_test boolean;
+  v_at timestamptz;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  select is_test into v_test from public.orders where id = p_order for update;
+  if v_test is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  if not exists (select 1 from public.shipments where order_id = p_order and kind = 'reverse' and status <> 'cancelled') then
+    raise exception 'This order has no return pickup' using errcode = 'P0001', hint = 'no_return';
+  end if;
+  select return_received_at into v_at from public.order_fulfilment where order_id = p_order;
+  if v_at is not null then
+    return v_at;
+  end if;
+  insert into public.order_fulfilment (order_id, return_received_at) values (p_order, now())
+  on conflict (order_id) do update set return_received_at = now(), updated_at = now();
+  if not v_test then
+    update public.books b
+    set stock_quantity = b.stock_quantity + i.quantity
+    from public.order_items i
+    where i.order_id = p_order and b.id = i.book_id;
+  end if;
+  return now();
+end;
+$$;
+
+revoke execute on function public.admin_receive_return(uuid) from public, anon;
+grant execute on function public.admin_receive_return(uuid) to authenticated;
+
+
+-- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: seventeen rows, all with
+-- The SQL Editor shows this table after the run. Expected: eighteen rows, all with
 -- rls_enabled = true (integration_tokens, pincode_checks, rate_limits and
 -- checkout_carts have 0 policies on purpose: only the Edge Functions may touch them).
 select
@@ -2617,7 +2757,7 @@ from pg_tables t
 where t.schemaname = 'public'
   and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items',
     'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits',
-    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates', 'order_fulfilment')
+    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates', 'order_fulfilment', 'order_invoices')
 order by t.tablename;
 
 

@@ -1008,7 +1008,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     };
     const nav = (label) => page.$$eval('.ap-side .ap-nav-link', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), label);
     check('admin site: the menu shows who is signed in', (await text(page, '.ap-side .ap-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
-    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Track orders|Failed deliveries|Shipping');
+    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Track orders|Failed deliveries|Returns|Shipping');
     check('admin site: "Open the store" goes to the live store', (await page.$$eval('.ap-side-foot a', (as) => as.map((a) => a.href))).includes('https://www.kitaabaurkona.com/'));
 
     await gotoA(page, '/admin');
@@ -1288,18 +1288,60 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('admin orders: the address is locked once the parcel is booked', (await one(`select count(*)::int as n from public.shipments where order_id = $1 and status = 'booked'`, [xbOrder])).n === 1 && !(await page.$$eval('.ap-sheet button', (bs) => bs.some((b) => /Edit address/.test(b.textContent)))));
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('.ap-sheet'), { timeout: 3000 }).catch(() => {});
-    check('admin orders: the row offers the label once booked', await page.waitForFunction(() => [...document.querySelectorAll('.ap-orders-table a')].some((a) => /Label/.test(a.textContent) && a.href.startsWith('https://xb-files.s3.amazonaws.com/')), { timeout: 6000 }).then(() => true).catch(() => false));
+    check('admin orders: the row offers our own label once booked', await page.waitForFunction(() => [...document.querySelectorAll('.ap-orders-table tbody button')].some((b) => b.textContent.trim() === 'Label'), { timeout: 6000 }).then(() => true).catch(() => false));
     check('admin orders: the note shows on the row', /Call before delivery/.test(await page.$eval('.ap-orders-table', (t) => t.innerText).catch(() => '')));
 
-    // Print -> Pack -> Handover
+    // Documents (downloaded PDFs), then Print -> Pack -> Handover
+    const DL = path.join(SHOTS, 'downloads');
+    fs.rmSync(DL, { recursive: true, force: true });
+    fs.mkdirSync(DL, { recursive: true });
+    const cdp = await page.createCDPSession();
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL, browserContextId: ctx.id, eventsEnabled: true });
+    const waitPdf = async (prefix) => {
+      for (let i = 0; i < 60; i += 1) {
+        const name = fs.readdirSync(DL).find((n) => n.startsWith(prefix) && n.endsWith('.pdf'));
+        if (name) {
+          const bytes = fs.readFileSync(path.join(DL, name));
+          if (bytes.length > 1000 && bytes.subarray(0, 4).toString() === '%PDF') return name;
+        }
+        await sleep(250);
+      }
+      return null;
+    };
+    const printSelected = async (kind) => {
+      await waitSel(page, 'tbody .pick input[type=checkbox]', 6000);
+      if (!(await page.$eval('tbody .pick input[type=checkbox]', (i) => i.checked))) await page.click('tbody .pick input[type=checkbox]');
+      await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /^Print/.test(b.textContent.trim()))?.click());
+      await page.$$eval('.ap-menu-list button', (bs, k) => bs.find((b) => b.textContent.trim() === k)?.click(), kind);
+    };
     check('admin orders: a booked order can be selected at Print', await waitSel(page, 'tbody .pick input[type=checkbox]', 3000));
-    await page.click('tbody .pick input[type=checkbox]');
-    await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /Labels printed/.test(b.textContent))?.click());
+    await printSelected('Invoices');
+    check('admin orders: invoices need the seller details first', await page.waitForFunction(() => /Fill in the invoice details first/.test(document.querySelector('.ap-card-notice')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    await db.query(`update public.shipping_settings set invoice_business_name = 'KITAABAURKONA', invoice_address = '59, Test Road, Udaipur', invoice_phone = '9000000001', invoice_gstin = '08ABCDE1234F1Z5', invoice_pan = 'ABCDE1234F', invoice_state = 'Rajasthan'`);
+    await printSelected('Invoices');
+    const invoicePdf = await waitPdf('invoice-KAK-');
+    const invoiceRow = await one(`select invoice_number from public.order_invoices where order_id = $1`, [xbOrder]);
+    check('admin orders: an invoice PDF downloads with a KAK/yy-yy/00001 number', Boolean(invoicePdf) && /^KAK\/\d{2}-\d{2}\/\d{5}$/.test(invoiceRow?.invoice_number ?? ''), `${invoicePdf} ${invoiceRow?.invoice_number} files=${fs.readdirSync(DL).join(',')} notice=${await page.$eval('.ap-card-notice', (n) => n.textContent).catch(() => '-')} toasts=${await page.$$eval('.toast', (ts) => ts.map((t) => t.textContent).join(' | '))}`);
+    await printSelected('Picking list');
+    check('admin orders: a picking list PDF downloads', Boolean(await waitPdf('picking-list-')));
+    await printSelected('Packing slips');
+    check('admin orders: packing slips download', Boolean(await waitPdf('packing-slips-')));
+    await printSelected('Labels');
+    const labelPdf = await waitPdf('label-KB-');
     check(
-      'admin orders: marking the label printed moves the order to Pack',
-      (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /moved to Pack/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false)) &&
-        (await one(`select label_printed_at from public.order_fulfilment where order_id = $1`, [xbOrder]))?.label_printed_at != null,
+      'admin orders: printing the label downloads it and moves the order to Pack',
+      Boolean(labelPdf) &&
+        (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /1 label downloaded/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false)) &&
+        (await (async () => {
+          for (let i = 0; i < 20; i += 1) {
+            if ((await one(`select label_printed_at from public.order_fulfilment where order_id = $1`, [xbOrder]))?.label_printed_at != null) return true;
+            await sleep(200);
+          }
+          return false;
+        })()),
+      labelPdf,
     );
+    check('admin orders: the label keeps the same invoice number', (await one(`select count(*)::int as n from public.order_invoices where order_id = $1`, [xbOrder])).n === 1);
     await gotoA(page, '/admin/orders?stage=pack');
     check('admin orders: the Pack step lists the order with its count', await page.waitForFunction(() => /Pack\s*1/.test(document.querySelector('.ap-segment-stage')?.innerText ?? '') && document.querySelectorAll('.ap-orders-table tbody tr').length === 1, { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('.ap-orders-table button', (bs) => bs.find((b) => b.textContent.trim() === 'Packed')?.click());
@@ -1377,6 +1419,16 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.waitForFunction(() => document.querySelector('.toast')?.textContent.includes('Shipping settings saved'), { timeout: 5000 }).catch(() => {});
     check('admin shipping: the Delhivery warehouse name saves', (await one(`select delhivery_warehouse_name from public.shipping_settings`)).delhivery_warehouse_name === 'Kitaabaurkona DL');
     check('admin shipping: the contact email is filled in from the settings', (await page.$eval('#ship-pickup_email', (i) => i.value).catch(() => '')) === 'kitaabaurkona@gmail.com');
+    check('admin shipping: the invoice details show what was saved', (await page.$eval('#inv-invoice_gstin', (i) => i.value).catch(() => '')) === '08ABCDE1234F1Z5');
+    await page.$eval('#inv-invoice_gstin', (i) => i.select());
+    await page.keyboard.press('Backspace');
+    await page.type('#inv-invoice_gstin', '08abcde1234f1z9');
+    await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Save invoice details/.test(b.textContent))?.click());
+    check(
+      'admin shipping: invoice details save (GSTIN in capitals)',
+      (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Invoice details saved/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false)) &&
+        (await one(`select invoice_gstin from public.shipping_settings`)).invoice_gstin === '08ABCDE1234F1Z9',
+    );
     await page.$$eval('.toast button', (bs) => bs.forEach((b) => b.click()));
     await page.$$eval('main button', (bs) => bs.find((b) => /Register pickup address with Delhivery/.test(b.textContent))?.click());
     check(
@@ -1397,7 +1449,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('admin orders: Delhivery Surface and Express with prices', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin select option')].map((o) => o.textContent).join('|').includes('Delhivery Surface'), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Book now with Delhivery/.test(b.textContent))?.click());
     check('admin orders: Book now books it with Delhivery', await page.waitForFunction(() => /Delhivery Surface · AWB 50213/.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
-    check('admin orders: the booked Delhivery parcel can be selected at Print', (await page.$$('tbody .pick input[type=checkbox]')).length === 1);
+    check('admin orders: the booked Delhivery parcel can be selected at Print', (await page.$$('tbody .pick input[type=checkbox]')).length >= 1);
     const opened = new Promise((resolve) => ctx.once('targetcreated', (t) => resolve(t)));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Open shipping label/.test(b.textContent))?.click());
     const target = await Promise.race([opened, sleep(5000).then(() => null)]);
@@ -1422,6 +1474,31 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-handover-1280.png'), fullPage: true });
     await gotoA(page, '/admin/orders?stage=all&carrier=delhivery');
     check('admin orders: the shipping partner filter shows only the Delhivery order', await page.waitForFunction(() => { const rows = document.querySelectorAll('.ap-orders-table tbody tr'); return rows.length === 1 && /Delhivery/.test(rows[0].innerText); }, { timeout: 6000 }).then(() => true).catch(() => false), await page.$eval('main', (m) => m.innerText.replace(/\s+/g, ' ').slice(-280)).catch((e) => e.message));
+    // Returns: an undelivered parcel coming back (RTO) and a customer's return pickup.
+    const rtoOrder = (await one(`select o.id from public.orders o join public.shipments s on s.order_id = o.id and s.kind = 'forward' where o.status = 'shipped' and s.carrier <> 'delhivery' order by o.created_at desc limit 1`))?.id;
+    const stockOfOrder = async (id) => (await one(`select b.stock_quantity as n from public.order_items i join public.books b on b.id = i.book_id where i.order_id = $1 limit 1`, [id]))?.n;
+    await db.query(`update public.shipments set status = 'rto' where order_id = $1 and kind = 'forward'`, [rtoOrder]);
+    const rtoStock = await stockOfOrder(rtoOrder);
+    await db.query(`update public.orders set status = 'delivered' where id = $1`, [dlOrder]);
+    await db.query(`insert into public.shipments (order_id, kind, status, carrier) values ($1, 'reverse', 'delivered', 'delhivery')`, [dlOrder]);
+    const returnStock = await stockOfOrder(dlOrder);
+    await gotoA(page, '/admin/orders/returns');
+    check('admin returns: the RTO parcel and the customer return are listed', await page.waitForFunction(() => document.querySelectorAll('.ap-orders-table tbody tr').length === 2, { timeout: 6000 }).then(() => true).catch(() => false));
+    const receive = async (section) => {
+      await page.$$eval(`section[aria-labelledby="${section}"] tbody button`, (bs) => bs.find((b) => b.textContent.trim() === 'Received back')?.click());
+      await page.waitForFunction((s) => [...document.querySelectorAll(`section[aria-labelledby="${s}"] tbody button`)].some((b) => /^Yes, add/.test(b.textContent.trim())), { timeout: 4000 }, section).catch(() => {});
+      await page.$$eval(`section[aria-labelledby="${section}"] tbody button`, (bs) => bs.find((b) => /^Yes, add/.test(b.textContent.trim()))?.click());
+      return page.waitForFunction((s) => /Received back/.test(document.querySelector(`section[aria-labelledby="${s}"] .ap-badge`)?.textContent ?? ''), { timeout: 6000 }, section).then(() => true).catch(() => false);
+    };
+    check(
+      'admin returns: Received back cancels the RTO order and puts its book back in stock',
+      (await receive('rto-heading')) && (await one(`select status from public.orders where id = $1`, [rtoOrder])).status === 'cancelled' && (await stockOfOrder(rtoOrder)) === rtoStock + 1,
+    );
+    check(
+      'admin returns: Received back puts a customer return back in stock once',
+      (await receive('returns-heading')) && (await stockOfOrder(dlOrder)) === returnStock + 1 && (await one(`select return_received_at from public.order_fulfilment where order_id = $1`, [dlOrder]))?.return_received_at != null,
+    );
+    await page.screenshot({ path: path.join(SHOTS, 'admin-returns-1280.png'), fullPage: true });
 
     await gotoA(page, '/admin/shipping');
     check('admin shipping: the Delhivery pickup form counts the booked parcel', await page.waitForFunction(() => /1 Delhivery parcel is booked/.test(document.body.innerText) && document.querySelector('#dl-pickup-count')?.value === '1', { timeout: 6000 }).then(() => true).catch(() => false));

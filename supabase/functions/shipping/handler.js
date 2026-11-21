@@ -253,6 +253,8 @@ export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSe
       package_length_cm: pkg.length,
       package_breadth_cm: pkg.breadth,
       package_height_cm: pkg.height,
+      // Delhivery's sorting code, printed on our own label.
+      routing_code: clean(answer?.sort_code, 60) || null,
     };
   }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowDown, ArrowUp, MagnifyingGlass, NotePencil, X } from '@phosphor-icons/react';
+import { ArrowDown, ArrowUp, CaretDown, MagnifyingGlass, NotePencil, Printer, X } from '@phosphor-icons/react';
 import {
   ADMIN_PAGE_SIZE,
   adminErrorMessage,
@@ -14,7 +14,7 @@ import {
   stageOf,
   STAGES,
 } from '../../services/adminService';
-import { ADMIN_SHIPMENT_LABELS, CARRIER_NAMES, carrierOf, hasLabel, makeManifest } from '../../services/shippingService';
+import { ADMIN_SHIPMENT_LABELS, CARRIER_NAMES, carrierOf, makeManifest } from '../../services/shippingService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useToast } from '../../hooks/useToast';
@@ -24,7 +24,6 @@ import { LoadError, StateBlock } from '../../components/store/States';
 import { LinesSkeleton } from '../../components/store/Skeletons';
 import PageHead from '../../components/admin/PageHead';
 import OrderDrawer from '../../components/admin/OrderDrawer';
-import LabelButton from '../../components/admin/LabelButton';
 import DelhiveryPickup from '../../components/admin/DelhiveryPickup';
 
 const SEARCH_BY = [
@@ -48,6 +47,8 @@ const shortDate = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'sho
 const forwardOf = (order) => (order.shipments ?? []).find((s) => s.kind === 'forward' && s.status !== 'cancelled') ?? null;
 // Only Xpressbees parcels go on its pickup manifest; Delhivery parcels are collected
 // through a pickup request (Admin > Shipping).
+// A label can be printed once the parcel is booked (it has an AWB).
+const labelReady = (order) => Boolean(forwardOf(order)?.awb_number);
 const manifestable = (order) => (order.shipments ?? []).some((s) => s.kind === 'forward' && s.carrier !== 'delhivery' && ['booked', 'in_transit'].includes(s.status));
 
 function Summary({ data, onPick }) {
@@ -72,7 +73,7 @@ function Summary({ data, onPick }) {
   );
 }
 
-function OrderRow({ order, view, tab, now, selectable, picked, customerOrders, working, onPick, onOpen, onStage }) {
+function OrderRow({ order, view, tab, now, selectable, picked, customerOrders, working, onPick, onOpen, onStage, onLabel }) {
   const note = fulfilmentOf(order)?.note;
   const stage = tab === 'to_ship' ? stageOf(order) : null;
   const first = order.order_items[0];
@@ -195,8 +196,11 @@ function OrderRow({ order, view, tab, now, selectable, picked, customerOrders, w
       )}
       <td className="ap-col-actions">
         <div className="ap-row-actions ap-row-actions-stack">
-          {hasLabel(parcel) && (
-            <LabelButton order={order} shipment={parcel} primary={stage === 'print' || stage === null} onOpened={stage === 'print' ? () => onStage([order.id], 'pack', 'Label printed') : undefined} />
+          {labelReady(order) && (
+            <button type="button" className={`btn ${stage === 'print' || stage === null ? 'btn-dark' : 'btn-outline'} btn-sm`} aria-busy={working} onClick={() => onLabel(order)}>
+              {working ? <span className="spinner" aria-hidden="true" /> : <Printer size={16} aria-hidden="true" />}
+              Label
+            </button>
           )}
           {stage === 'pack' && (
             <button type="button" className="btn btn-dark btn-sm" aria-busy={working} onClick={() => onStage([order.id], 'handover', 'Packed')}>
@@ -254,6 +258,7 @@ function AdminOrders({ view = 'process' }) {
   const pages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
   const [picked, setPicked] = useState(() => new Set());
   const [bulk, setBulk] = useState({ working: null, error: null });
+  const [printOpen, setPrintOpen] = useState(false);
   const [rowWorking, setRowWorking] = useState(null);
   // Delhivery parcels just handed over: Delhivery collects only when asked.
   const [pickupFor, setPickupFor] = useState(0);
@@ -263,15 +268,13 @@ function AdminOrders({ view = 'process' }) {
   const now = result.data?.at ?? 0;
   const openOrder = orders.find((o) => o.id === openId) ?? null;
 
-  // What a selection is for depends on the step: printed labels, packed parcels, the
-  // hand-over (manifest), or elsewhere just the Xpressbees manifest.
+  // Orders can be selected to print their documents; at Handover only booked parcels
+  // (they go on the manifest). Unpaid and cancelled orders have nothing to print.
   const bulkStage = stage && stage !== 'all' ? stage : null;
   function selectable(order) {
     const parcel = forwardOf(order);
-    if (bulkStage === 'print') return hasLabel(parcel);
-    if (bulkStage === 'pack') return true;
     if (bulkStage === 'handover') return parcel?.status === 'booked' && Boolean(parcel.awb_number);
-    return manifestable(order);
+    return !['pending_payment', 'cancelled'].includes(order.status);
   }
   const pickable = orders.filter(selectable);
 
@@ -354,9 +357,45 @@ function AdminOrders({ view = 'process' }) {
 
   const markPrinted = () =>
     runBulk('printed', async () => {
-      const n = await adminSetStage(chosen().map((o) => o.id), 'pack');
+      const ids = chosen().filter(labelReady).map((o) => o.id);
+      if (ids.length === 0) throw new Error('None of the selected orders has a booked parcel yet.');
+      const n = await adminSetStage(ids, 'pack');
       show({ message: `${plural(n ?? 0, 'order')} moved to Pack` });
     });
+
+  // Labels, invoices, packing slips or a picking list for some orders, as one PDF.
+  // Printing labels at the Print step moves those orders to Pack (as on ShopDeck).
+  async function printFor(kind, list) {
+    const { printDocuments } = await import('../../admin/documents/print');
+    const { printed, skipped } = await printDocuments(kind, list);
+    const what = { labels: 'label', invoices: 'invoice', slips: 'packing slip', picklist: 'picking list' }[kind];
+    if (printed.length && kind !== 'picklist') show({ message: `${plural(printed.length, what)} downloaded` });
+    if (kind === 'picklist') show({ message: `Picking list for ${plural(printed.length, 'order')} downloaded` });
+    if (skipped.length) {
+      const why = kind === 'labels' ? 'no booked parcel yet' : 'not paid or cancelled';
+      show({ message: `${plural(skipped.length, 'order')} left out (${why}): ${skipped.map((o) => formatOrderNumber(o.order_number)).join(', ')}`, tone: 'error' });
+    }
+    const toPack = kind === 'labels' ? printed.filter((o) => stageOf(o) === 'print' && ['confirmed', 'paid'].includes(o.status)).map((o) => o.id) : [];
+    if (toPack.length) await adminSetStage(toPack, 'pack');
+    return printed.length;
+  }
+
+  const printSelected = (kind) => runBulk(`print-${kind}`, () => printFor(kind, chosen()));
+
+  // One order's document: the row's Label button, or the side panel's buttons.
+  async function printOne(kind, order) {
+    if (rowWorking) return;
+    setRowWorking(order.id);
+    try {
+      await printFor(kind, [order]);
+      changed();
+    } catch (err) {
+      show({ message: err.code || err.hint ? adminErrorMessage(err) : err.message, tone: 'error' });
+    } finally {
+      setRowWorking(null);
+    }
+  }
+  const printRowLabel = (order) => printOne('labels', order);
 
   // ShopDeck's "Move All to Handover": every order at Pack, not only this page.
   const moveAllToHandover = () =>
@@ -402,13 +441,14 @@ function AdminOrders({ view = 'process' }) {
 
   const openManifest = () =>
     runBulk('manifest', async () => {
-      const { url } = await makeManifest(chosen().map((o) => o.id));
+      const { url } = await makeManifest(chosen().filter(manifestable).map((o) => o.id));
       window.open(url, '_blank', 'noopener,noreferrer');
     });
 
   const anyFilter = FILTER_KEYS.some((name) => params.get(name));
   const allPicked = pickable.length > 0 && pickable.every((o) => picked.has(o.id));
   const pickedCount = chosen().length;
+  const manifestCount = chosen().filter(manifestable).length;
   const stageCounts = summary.data?.stages ?? {};
 
   return (
@@ -559,8 +599,42 @@ function AdminOrders({ view = 'process' }) {
           <div className="ap-bulkbar">
             <p>{plural(pickedCount, 'order')} selected</p>
             <div className="inline-actions">
+              <div className="ap-menu">
+                <button
+                  type="button"
+                  className="btn btn-dark btn-sm"
+                  aria-expanded={printOpen}
+                  aria-busy={String(bulk.working).startsWith('print-')}
+                  onClick={() => setPrintOpen((open) => !open)}
+                >
+                  {String(bulk.working).startsWith('print-') ? <span className="spinner" aria-hidden="true" /> : <Printer size={16} aria-hidden="true" />}
+                  Print
+                  <CaretDown size={14} aria-hidden="true" />
+                </button>
+                {printOpen && (
+                  <div className="ap-menu-list" role="group" aria-label="Print for the selected orders">
+                    {[
+                      ['labels', 'Labels'],
+                      ['invoices', 'Invoices'],
+                      ['slips', 'Packing slips'],
+                      ['picklist', 'Picking list'],
+                    ].map(([kind, label]) => (
+                      <button
+                        key={kind}
+                        type="button"
+                        onClick={() => {
+                          setPrintOpen(false);
+                          printSelected(kind);
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {bulkStage === 'print' && (
-                <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'printed'} onClick={markPrinted}>
+                <button type="button" className="btn btn-outline btn-sm" aria-busy={bulk.working === 'printed'} onClick={markPrinted}>
                   {bulk.working === 'printed' && <span className="spinner" aria-hidden="true" />}
                   Labels printed: move to Pack
                 </button>
@@ -577,10 +651,10 @@ function AdminOrders({ view = 'process' }) {
                   Hand over {plural(pickedCount, 'parcel')}
                 </button>
               )}
-              {(!bulkStage || bulkStage === 'handed_over') && (
-                <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'manifest'} onClick={openManifest}>
+              {(!bulkStage || bulkStage === 'handed_over') && manifestCount > 0 && (
+                <button type="button" className="btn btn-outline btn-sm" aria-busy={bulk.working === 'manifest'} onClick={openManifest}>
                   {bulk.working === 'manifest' && <span className="spinner" aria-hidden="true" />}
-                  Xpressbees manifest for {plural(pickedCount, 'order')}
+                  Xpressbees manifest for {plural(manifestCount, 'order')}
                 </button>
               )}
               <button type="button" className="btn btn-outline btn-sm" onClick={() => setPicked(new Set())}>
@@ -667,6 +741,7 @@ function AdminOrders({ view = 'process' }) {
                     onPick={togglePick}
                     onOpen={setOpenId}
                     onStage={moveRow}
+                    onLabel={printRowLabel}
                   />
                 ))}
               </tbody>
@@ -694,7 +769,7 @@ function AdminOrders({ view = 'process' }) {
         )}
       </section>
 
-      <OrderDrawer order={openOrder} onClose={() => setOpenId(null)} onChanged={changed} />
+      <OrderDrawer order={openOrder} onClose={() => setOpenId(null)} onChanged={changed} onPrint={printOne} printing={rowWorking === openId} />
     </div>
   );
 }

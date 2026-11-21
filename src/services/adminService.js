@@ -126,7 +126,7 @@ const PARCEL_STATES = {
 const OPEN_PARCEL_STATES = ['queued', 'booking', 'booked', 'failed', 'cancel_requested'];
 
 const ORDER_COLUMNS =
-  '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at), order_fulfilment(label_printed_at, packed_at, handed_over_at, note)';
+  '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at, package_weight_g, package_length_cm, package_breadth_cm, package_height_cm, routing_code), order_fulfilment(label_printed_at, packed_at, handed_over_at, note, return_received_at)';
 
 // The packing steps of orders to ship (Process orders > To ship).
 export const STAGES = [
@@ -239,6 +239,30 @@ export async function adminOrderSummary() {
 // Moves orders to a packing step ('print', 'pack', 'handover' or 'handed_over').
 export async function adminSetStage(orderIds, stage) {
   return unwrap(await supabase.rpc('admin_set_fulfilment_stage', { p_orders: orderIds, p_stage: stage })).data;
+}
+
+// Parcels coming back: undelivered parcels returning to the shop (RTO) and customers'
+// return pickups. Returns their orders, newest first.
+export async function adminListReturns() {
+  const [rto, reverse] = await Promise.all([
+    supabase.from('shipments').select('order_id').eq('kind', 'forward').eq('status', 'rto').limit(300),
+    supabase.from('shipments').select('order_id').eq('kind', 'reverse').neq('status', 'cancelled').limit(300),
+  ]);
+  const ids = [...new Set([...(unwrap(rto).data ?? []), ...(unwrap(reverse).data ?? [])].map((r) => r.order_id))];
+  if (ids.length === 0) return [];
+  const { data } = unwrap(await supabase.from('orders').select(ORDER_COLUMNS).in('id', ids).order('created_at', { ascending: false }));
+  return data ?? [];
+}
+
+// A customer's return reached the shop: its books go back into stock (once).
+export async function adminReceiveReturn(orderId) {
+  return unwrap(await supabase.rpc('admin_receive_return', { p_order: orderId })).data;
+}
+
+// Tax invoice numbers for orders (given the first time), by order id.
+export async function adminIssueInvoices(orderIds) {
+  const rows = unwrap(await supabase.rpc('admin_issue_invoices', { p_orders: orderIds })).data ?? [];
+  return Object.fromEntries(rows.map((r) => [r.order_id, r]));
 }
 
 // Every order to ship at one step (for "Move all to Handover").
