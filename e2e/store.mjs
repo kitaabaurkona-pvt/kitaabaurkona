@@ -1008,7 +1008,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     };
     const nav = (label) => page.$$eval('.ap-side .ap-nav-link', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), label);
     check('admin site: the menu shows who is signed in', (await text(page, '.ap-side .ap-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
-    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Orders|Shipping');
+    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Track orders|Failed deliveries|Shipping');
     check('admin site: "Open the store" goes to the live store', (await page.$$eval('.ap-side-foot a', (as) => as.map((a) => a.href))).includes('https://www.kitaabaurkona.com/'));
 
     await gotoA(page, '/admin');
@@ -1163,10 +1163,10 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await db.query(`delete from public.books where product_code in ('E2E-ADMIN-1', 'E2E-ADMIN-2')`);
     for (const f of [csv, template, photoA, ...photoPaths]) fs.rmSync(f, { force: true });
 
-    for (const [label, sel] of [['Orders', '.ap-tabs'], ['Shipping', '#ship-warehouse_name']]) {
+    for (const [label, sel] of [['Process orders', '.ap-underline-tabs'], ['Track orders', '.ap-underline-tabs'], ['Failed deliveries', 'main .panel'], ['Shipping', '#ship-warehouse_name']]) {
       await nav(label);
       check(`admin site: ${label} opens`, await waitSel(page, sel, 8000));
-      await page.screenshot({ path: path.join(SHOTS, `admin-site-${label.toLowerCase()}-1280.png`), fullPage: true });
+      await page.screenshot({ path: path.join(SHOTS, `admin-site-${label.toLowerCase().replace(/ /g, '-')}-1280.png`), fullPage: true });
     }
 
     // ---- Phone width: slide-out menu, no sideways scrolling ----
@@ -1237,18 +1237,37 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       .then(() => true)
       .catch(() => false);
     check('admin shipping: settings save', savedWarehouse && (await one(`select warehouse_name from public.shipping_settings`)).warehouse_name === 'Kitaabaurkona Udaipur');
-    check('admin shipping: failed deliveries list loads from the courier', await page.waitForFunction(() => /No failed delivery attempts/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
+    await gotoA(page, '/admin/orders/failed-deliveries');
+    check('admin failed deliveries: the list loads from the courier', await page.waitForFunction(() => /No failed delivery attempts/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
+    await gotoA(page, '/admin/shipping');
+    await waitSel(page, '#ship-warehouse_name');
     await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-light-1280.png'), fullPage: true });
 
-    await gotoA(page, '/admin/orders?status=confirmed');
+    await gotoA(page, '/admin/orders?pay=cod');
+    check('admin orders: summary numbers show orders to ship', await page.waitForFunction(() => [...document.querySelectorAll('.ap-stat')].some((c) => /Orders to ship/.test(c.textContent) && /[1-9]/.test(c.querySelector('.ap-stat-value')?.textContent ?? '')), { timeout: 6000 }).then(() => true).catch(() => false));
+    check('admin orders: the order is listed as on time with a ship-by date', await page.waitForFunction(() => /On time/.test(document.querySelector('.ap-orders-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.type('#orders-q', '0000000');
+    check('admin orders: a search with no match says so', await page.waitForFunction(() => /No orders match these filters/.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.select('#orders-by', 'phone');
+    await page.$eval('#orders-q', (i) => { i.select(); });
+    await page.keyboard.press('Backspace');
+    await page.type('#orders-q', '9876543210');
+    check('admin orders: search by phone finds the order', await page.waitForFunction(() => document.querySelectorAll('.ap-orders-table tbody tr').length >= 1 && /phone/.test(location.search), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.click('.ap-order-link');
+    check('admin orders: the order opens in a side panel', await waitSel(page, '.ap-sheet', 4000));
+    await page.waitForFunction(() => /Parcel: Queued/i.test(document.querySelector('.ap-sheet')?.innerText ?? ''), { timeout: 6000 }).catch(() => {});
+    await page.screenshot({ path: path.join(SHOTS, 'admin-orders-sheet-1280.png') });
     check('admin orders: the COD order shows its queued parcel', await page.waitForFunction(() => /Parcel: Queued/i.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Change courier/.test(b.textContent))?.click());
     check('admin orders: courier prices load for the parcel', await waitSel(page, '.parcel-admin select', 6000));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Book now/.test(b.textContent))?.click());
     check('admin orders: Book now books it with an AWB', await page.waitForFunction(() => /Pickup scheduled/i.test(document.body.innerText) && /AWB \d+/.test(document.body.innerText), { timeout: 8000 }).then(() => true).catch(() => false));
     check('admin orders: the label link points to the courier file host', /^https:\/\/xb-files\.s3\.amazonaws\.com\//.test(await page.$eval('.parcel-admin a[href*="labels"]', (a) => a.href).catch(() => '')));
-    check('admin orders: booked parcels can be picked for a manifest', await waitSel(page, '.pick input[type=checkbox]', 3000));
-    await page.click('.pick input[type=checkbox]');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.ap-sheet'), { timeout: 3000 }).catch(() => {});
+    check('admin orders: the row offers the label once booked', await page.waitForFunction(() => [...document.querySelectorAll('.ap-orders-table a')].some((a) => /Label/.test(a.textContent) && a.href.startsWith('https://xb-files.s3.amazonaws.com/')), { timeout: 6000 }).then(() => true).catch(() => false));
+    check('admin orders: booked parcels can be picked for a manifest', await waitSel(page, 'tbody .pick input[type=checkbox]', 3000));
+    await page.click('tbody .pick input[type=checkbox]');
     check('admin orders: manifest button appears', /Xpressbees manifest for 1 order/i.test(await page.$eval('main', (m) => m.innerText)));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-parcel-light-1280.png'), fullPage: true });
     check('admin shipping flow: no console errors', errors.length === 0, errors.join(' | '));
@@ -1304,7 +1323,9 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     );
     check('admin shipping: buttons are not left busy after registering', await page.$$eval('main button[aria-busy="true"]', (bs) => bs.length === 0));
 
-    await gotoA(page, '/admin/orders?status=confirmed');
+    await gotoA(page, '/admin/orders?pay=cod');
+    await waitSel(page, '.ap-order-link', 6000);
+    await page.click('.ap-order-link');
     check('admin orders: a new order waits with Xpressbees selected', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Ship with Delhivery instead/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.$$eval('.parcel-admin button', (bs) => bs.find((b) => /Ship with Delhivery instead/.test(b.textContent))?.click());
     check('admin orders: the admin moves it to Delhivery', await page.waitForFunction(() => [...document.querySelectorAll('.parcel-admin button')].some((b) => /Book now with Delhivery/.test(b.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
@@ -1321,7 +1342,12 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     if (labelPage) await labelPage.waitForFunction(() => location.href !== 'about:blank', { timeout: 5000 }).catch(() => {});
     check('admin orders: Open shipping label opens the Delhivery label', Boolean(labelPage) && /s3-ap-southeast-1\.amazonaws\.com\/pdfs\/e2e-label\.pdf/.test(labelPage.url()), labelPage?.url());
     if (labelPage) await labelPage.close();
+    await page.keyboard.press('Escape');
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-light-1280.png'), fullPage: true });
+    await gotoA(page, '/admin/orders/track?tab=shipped');
+    check('admin track orders: the shipped Xpressbees order is listed', await page.waitForFunction(() => document.querySelectorAll('.ap-orders-table tbody tr').length >= 1 && /Shipped/.test(document.querySelector('.ap-orders-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    await gotoA(page, '/admin/orders?carrier=delhivery');
+    check('admin orders: the shipping partner filter shows only the Delhivery order', await page.waitForFunction(() => { const rows = document.querySelectorAll('.ap-orders-table tbody tr'); return rows.length === 1 && /Delhivery/.test(rows[0].innerText); }, { timeout: 6000 }).then(() => true).catch(() => false), await page.$eval('main', (m) => m.innerText.replace(/\s+/g, ' ').slice(-280)).catch((e) => e.message));
 
     await gotoA(page, '/admin/shipping');
     check('admin shipping: the Delhivery pickup form counts the booked parcel', await page.waitForFunction(() => /1 Delhivery parcel is booked/.test(document.body.innerText) && document.querySelector('#dl-pickup-count')?.value === '1', { timeout: 6000 }).then(() => true).catch(() => false));
@@ -1332,9 +1358,9 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await sleep(150);
     check('admin shipping at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-delhivery-375.png'), fullPage: true });
-    await gotoA(page, '/admin/orders?status=confirmed');
+    await gotoA(page, '/admin/orders?pay=cod');
     await page.waitForFunction(() => /AWB/.test(document.body.innerText), { timeout: 6000 }).catch(() => {});
-    check('admin orders at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    check('admin orders at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), await page.evaluate(() => [...document.querySelectorAll('main *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1 && ![...e.children].some((c) => c.getBoundingClientRect().right > window.innerWidth + 1)).slice(0, 8).map((e) => e.tagName + '.' + e.className + ':' + Math.round(e.getBoundingClientRect().right)).join(' ')));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-375.png'), fullPage: true });
     check('Delhivery admin flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();

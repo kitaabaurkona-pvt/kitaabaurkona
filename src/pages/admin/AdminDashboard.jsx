@@ -58,13 +58,13 @@ function AdminDashboard() {
       {error && <LoadError onRetry={retry} what="the dashboard" />}
       {s && (
         <>
-          <Section id="orders-heading" title="Orders" link="/admin/orders" linkLabel="See all orders">
+          <Section id="orders-heading" title="Orders" link="/admin/orders/track" linkLabel="See all orders">
             <div className="ap-stats">
-              <Stat to="/admin/orders?status=confirmed" value={s.confirmed} label="Cash on delivery, to ship" attention />
-              <Stat to="/admin/orders?status=paid" value={s.paid} label="Paid, to ship" attention />
-              <Stat to="/admin/orders?status=pending_payment" value={s.pending} label="Awaiting payment" />
-              <Stat to="/admin/orders?status=shipped" value={s.shipped} label="Shipped" />
-              <Stat to="/admin/orders?status=delivered" value={s.delivered} label="Delivered" />
+              <Stat to="/admin/orders?pay=cod" value={s.confirmed} label="Cash on delivery, to ship" attention />
+              <Stat to="/admin/orders?pay=online" value={s.paid} label="Paid, to ship" attention />
+              <Stat to="/admin/orders?tab=pending" value={s.pending} label="Awaiting payment" />
+              <Stat to="/admin/orders/track?tab=shipped" value={s.shipped} label="Shipped" />
+              <Stat to="/admin/orders/track?tab=delivered" value={s.delivered} label="Delivered" />
               <Stat to="/admin/shipping" value={s.problems} label="Parcels needing attention" attention />
             </div>
           </Section>

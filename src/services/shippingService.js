@@ -80,6 +80,15 @@ export const carrierOf = (shipment) => (shipment?.carrier === 'delhivery' ? 'del
 // Moves a parcel that is not booked yet to the other carrier. checked: as for bookNow.
 export const setCarrier = (orderId, carrier, checked = false) => invoke('set_carrier', { order_id: orderId, carrier, ...(checked ? { checked: true } : {}) });
 // { url } of the parcel's label PDF (Delhivery makes it on request).
+// Whether a booked parcel has a label to print. Xpressbees labels are a saved link;
+// Delhivery makes one on request for a booked parcel.
+const LABEL_STATES = ['booked', 'in_transit', 'out_for_delivery', 'exception'];
+export function hasLabel(shipment) {
+  if (!shipment) return false;
+  if (carrierOf(shipment) === 'delhivery') return Boolean(shipment.awb_number) && LABEL_STATES.includes(shipment.status);
+  return Boolean(shipment.label_url);
+}
+
 export const getLabel = (orderId, kind = 'forward') => invoke('label', { order_id: orderId, kind });
 // Registers the saved pickup address with Delhivery under the saved Delhivery warehouse
 // name: { name, created } (created false = Delhivery already had it).
