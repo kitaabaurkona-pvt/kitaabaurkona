@@ -60,8 +60,8 @@ function AdminDashboard() {
         <>
           <Section id="orders-heading" title="Orders" link="/admin/orders/track" linkLabel="See all orders">
             <div className="ap-stats">
-              <Stat to="/admin/orders?pay=cod" value={s.confirmed} label="Cash on delivery, to ship" attention />
-              <Stat to="/admin/orders?pay=online" value={s.paid} label="Paid, to ship" attention />
+              <Stat to="/admin/orders?stage=all&pay=cod" value={s.confirmed} label="Cash on delivery, to ship" attention />
+              <Stat to="/admin/orders?stage=all&pay=online" value={s.paid} label="Paid, to ship" attention />
               <Stat to="/admin/orders?tab=pending" value={s.pending} label="Awaiting payment" />
               <Stat to="/admin/orders/track?tab=shipped" value={s.shipped} label="Shipped" />
               <Stat to="/admin/orders/track?tab=delivered" value={s.delivered} label="Delivered" />

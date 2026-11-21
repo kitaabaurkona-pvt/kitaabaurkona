@@ -1,16 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowDown, ArrowUp, MagnifyingGlass } from '@phosphor-icons/react';
+import { ArrowDown, ArrowUp, MagnifyingGlass, NotePencil, X } from '@phosphor-icons/react';
 import {
   ADMIN_PAGE_SIZE,
+  adminErrorMessage,
   adminListOrders,
   adminOrderSummary,
+  adminSetStage,
+  adminStageOrderIds,
+  fulfilmentOf,
   ORDER_TABS,
   shipByOf,
+  stageOf,
+  STAGES,
 } from '../../services/adminService';
 import { ADMIN_SHIPMENT_LABELS, CARRIER_NAMES, carrierOf, hasLabel, makeManifest } from '../../services/shippingService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useToast } from '../../hooks/useToast';
 import { formatCount, formatOrderNumber, formatPrice, plural } from '../../utils/format';
 import OrderStatus from '../../components/store/OrderStatus';
 import { LoadError, StateBlock } from '../../components/store/States';
@@ -18,6 +25,7 @@ import { LinesSkeleton } from '../../components/store/Skeletons';
 import PageHead from '../../components/admin/PageHead';
 import OrderDrawer from '../../components/admin/OrderDrawer';
 import LabelButton from '../../components/admin/LabelButton';
+import DelhiveryPickup from '../../components/admin/DelhiveryPickup';
 
 const SEARCH_BY = [
   ['order', 'Order no.'],
@@ -25,7 +33,7 @@ const SEARCH_BY = [
   ['name', 'Name'],
   ['awb', 'AWB'],
 ];
-const FILTER_KEYS = ['q', 'from', 'to', 'carrier', 'pay', 'parcel', 'delayed', 'items'];
+const FILTER_KEYS = ['q', 'from', 'to', 'carrier', 'pay', 'parcel', 'delayed', 'items', 'dup'];
 
 const ago = (value, now) => {
   const minutes = Math.max(0, Math.round((now - new Date(value).getTime()) / 60000));
@@ -51,10 +59,11 @@ function Summary({ data, onPick }) {
   );
   return (
     <div className="ap-stats ap-stats-flush">
-      {card('total', data.total, 'Orders to ship', {})}
-      {card('unbooked', data.unbooked, 'Parcels not booked yet', { parcel: 'unbooked' })}
-      {card('booked', data.booked, 'Booked, waiting for pickup', { parcel: 'booked' })}
-      {card('delayed', data.delayed, 'Delayed (not shipped in 2 days)', { delayed: '1' }, 'warn')}
+      {card('total', data.total, 'Orders to ship', { stage: 'all' })}
+      {card('print', data.stages.print ?? 0, 'To print', { stage: 'print' })}
+      {card('pack', data.stages.pack ?? 0, 'To pack', { stage: 'pack' })}
+      {card('handover', data.stages.handover ?? 0, 'To hand over', { stage: 'handover' })}
+      {card('delayed', data.delayed, 'Delayed (not shipped in 2 days)', { stage: 'all', delayed: '1' }, 'warn')}
       <Link to="/admin/shipping" className="ap-stat" data-tone={data.problems > 0 ? 'warn' : undefined}>
         <span className="ap-stat-value">{formatCount(data.problems)}</span>
         <span className="ap-stat-label">Parcels needing attention</span>
@@ -63,7 +72,9 @@ function Summary({ data, onPick }) {
   );
 }
 
-function OrderRow({ order, view, tab, now, picked, onPick, onOpen }) {
+function OrderRow({ order, view, tab, now, selectable, picked, customerOrders, working, onPick, onOpen, onStage }) {
+  const note = fulfilmentOf(order)?.note;
+  const stage = tab === 'to_ship' ? stageOf(order) : null;
   const first = order.order_items[0];
   const more = order.order_items.length - 1;
   const total = Number(order.total ?? order.subtotal ?? 0);
@@ -77,10 +88,10 @@ function OrderRow({ order, view, tab, now, picked, onPick, onOpen }) {
   return (
     <tr data-picked={picked || undefined}>
       <td className="ap-col-pick">
-        {manifestable(order) && (
+        {selectable && (
           <label className="pick">
             <input type="checkbox" checked={picked} onChange={() => onPick(order.id)} />
-            <span className="visually-hidden">Add {formatOrderNumber(order.order_number)} to the manifest</span>
+            <span className="visually-hidden">Select {formatOrderNumber(order.order_number)}</span>
           </label>
         )}
       </td>
@@ -98,6 +109,12 @@ function OrderRow({ order, view, tab, now, picked, onPick, onOpen }) {
           {ago(order.created_at, now)} · {shortDate.format(new Date(order.created_at))}, {timeFormat.format(new Date(order.created_at))}
         </span>
         {order.is_test && <span className="ap-badge">Test order</span>}
+        {note && (
+          <span className="ap-note" title={note}>
+            <NotePencil size={14} aria-label="Note" />
+            <span className="ap-clamp">{note}</span>
+          </span>
+        )}
       </td>
       <td className="ap-col-book" data-label="Books">
         {first && (
@@ -139,7 +156,17 @@ function OrderRow({ order, view, tab, now, picked, onPick, onOpen }) {
       </td>
       <td className="ap-col-customer" data-label="Customer">
         <span className="ap-strong">{order.shipping_name}</span>
-        <span className="ap-cell-meta tnum">{order.shipping_phone}</span>
+        <span className="ap-cell-meta tnum">
+          {order.shipping_phone}{' '}
+          {customerOrders != null &&
+            (customerOrders >= 2 ? (
+              <span className="ap-badge ap-badge-sm" data-tone="ok" title={`${customerOrders} orders from this number`}>
+                Repeat · {customerOrders}
+              </span>
+            ) : (
+              <span className="ap-badge ap-badge-sm">New</span>
+            ))}
+        </span>
         <span className="ap-cell-meta ap-clamp" title={`${order.shipping_address}, ${order.shipping_city}`}>
           {order.shipping_address}, {order.shipping_city}
         </span>
@@ -168,7 +195,15 @@ function OrderRow({ order, view, tab, now, picked, onPick, onOpen }) {
       )}
       <td className="ap-col-actions">
         <div className="ap-row-actions ap-row-actions-stack">
-          {hasLabel(parcel) && <LabelButton order={order} shipment={parcel} />}
+          {hasLabel(parcel) && (
+            <LabelButton order={order} shipment={parcel} primary={stage === 'print' || stage === null} onOpened={stage === 'print' ? () => onStage([order.id], 'pack', 'Label printed') : undefined} />
+          )}
+          {stage === 'pack' && (
+            <button type="button" className="btn btn-dark btn-sm" aria-busy={working} onClick={() => onStage([order.id], 'handover', 'Packed')}>
+              {working && <span className="spinner" aria-hidden="true" />}
+              Packed
+            </button>
+          )}
           <button type="button" className="btn btn-outline btn-sm" onClick={() => onOpen(order.id)}>
             Manage
           </button>
@@ -191,9 +226,14 @@ function AdminOrders({ view = 'process' }) {
   const q = params.get('q') ?? '';
   const [term, setTerm] = useState(q);
   const [page, setPage] = useState(0);
+  // Process orders > To ship is split into the packing steps; "all" shows every step.
+  const stageParam = params.get('stage');
+  const stage = tab === 'to_ship' && view === 'process' ? (STAGES.some(([value]) => value === stageParam) || stageParam === 'all' ? stageParam : 'print') : '';
   const filters = {
     view,
     tab,
+    stage: stage === 'all' ? '' : stage,
+    dup: tab === 'to_ship' && params.get('dup') === '1',
     searchBy,
     search: q,
     from: params.get('from') ?? '',
@@ -213,12 +253,27 @@ function AdminOrders({ view = 'process' }) {
   const total = result.data?.total ?? 0;
   const pages = Math.max(1, Math.ceil(total / ADMIN_PAGE_SIZE));
   const [picked, setPicked] = useState(() => new Set());
-  const [manifest, setManifest] = useState({ working: false, error: null });
+  const [bulk, setBulk] = useState({ working: null, error: null });
+  const [rowWorking, setRowWorking] = useState(null);
+  // Delhivery parcels just handed over: Delhivery collects only when asked.
+  const [pickupFor, setPickupFor] = useState(0);
   const [openId, setOpenId] = useState(null);
+  const { show } = useToast();
   // "Now" for ages and late badges: when the list arrived.
   const now = result.data?.at ?? 0;
   const openOrder = orders.find((o) => o.id === openId) ?? null;
-  const pickable = orders.filter(manifestable);
+
+  // What a selection is for depends on the step: printed labels, packed parcels, the
+  // hand-over (manifest), or elsewhere just the Xpressbees manifest.
+  const bulkStage = stage && stage !== 'all' ? stage : null;
+  function selectable(order) {
+    const parcel = forwardOf(order);
+    if (bulkStage === 'print') return hasLabel(parcel);
+    if (bulkStage === 'pack') return true;
+    if (bulkStage === 'handover') return parcel?.status === 'booked' && Boolean(parcel.awb_number);
+    return manifestable(order);
+  }
+  const pickable = orders.filter(selectable);
 
   // The search box waits for a pause in typing before it searches.
   useEffect(() => {
@@ -261,25 +316,100 @@ function AdminOrders({ view = 'process' }) {
     });
   }
 
-  async function openManifest() {
-    if (manifest.working || picked.size === 0) return;
-    setManifest({ working: true, error: null });
-    try {
-      const { url } = await makeManifest([...picked]);
-      window.open(url, '_blank', 'noopener,noreferrer');
-      setManifest({ working: false, error: null });
-    } catch (err) {
-      setManifest({ working: false, error: err.message });
-    }
-  }
-
   function changed() {
     result.retry();
     summary.retry();
   }
 
+  // One order moved by its own row button (Label printed, Packed).
+  async function moveRow(ids, to, done) {
+    if (rowWorking) return;
+    setRowWorking(ids[0]);
+    try {
+      await adminSetStage(ids, to);
+      show({ message: `${done}: ${formatOrderNumber(orders.find((o) => o.id === ids[0])?.order_number)}` });
+      changed();
+    } catch (err) {
+      show({ message: adminErrorMessage(err), tone: 'error' });
+    } finally {
+      setRowWorking(null);
+    }
+  }
+
+  // The selected orders, only those that can take the current action.
+  const chosen = () => orders.filter((o) => picked.has(o.id) && selectable(o));
+
+  async function runBulk(name, fn) {
+    if (bulk.working) return;
+    setBulk({ working: name, error: null });
+    try {
+      await fn();
+      setBulk({ working: null, error: null });
+      setPicked(new Set());
+      changed();
+    } catch (err) {
+      setBulk({ working: null, error: err.code || err.hint ? adminErrorMessage(err) : err.message });
+    }
+  }
+
+  const markPrinted = () =>
+    runBulk('printed', async () => {
+      const n = await adminSetStage(chosen().map((o) => o.id), 'pack');
+      show({ message: `${plural(n ?? 0, 'order')} moved to Pack` });
+    });
+
+  // ShopDeck's "Move All to Handover": every order at Pack, not only this page.
+  const moveAllToHandover = () =>
+    runBulk('all-handover', async () => {
+      const ids = await adminStageOrderIds('pack');
+      if (ids.length === 0) return;
+      const n = await adminSetStage(ids, 'handover');
+      show({ message: `${plural(n ?? 0, 'order')} moved to Handover` });
+    });
+
+  const markPacked = () =>
+    runBulk('packed', async () => {
+      const n = await adminSetStage(chosen().map((o) => o.id), 'handover');
+      show({ message: `${plural(n ?? 0, 'order')} moved to Handover` });
+    });
+
+  // Hand-over: the Xpressbees parcels go on one manifest (opened in a new tab, printed
+  // and given to the courier with the parcels); Delhivery collects when asked, so its
+  // pickup form opens for the Delhivery parcels.
+  function handOver() {
+    if (bulk.working) return;
+    const list = chosen();
+    const xb = list.filter((o) => carrierOf(forwardOf(o)) !== 'delhivery').map((o) => o.id);
+    const dl = list.length - xb.length;
+    const tab = xb.length ? window.open('about:blank', '_blank') : null;
+    if (tab) tab.opener = null;
+    return runBulk('handover', async () => {
+      try {
+        if (xb.length) {
+          const { url } = await makeManifest(xb);
+          if (tab) tab.location.href = url;
+          else window.open(url, '_blank', 'noopener,noreferrer');
+        }
+      } catch (err) {
+        tab?.close();
+        throw err;
+      }
+      const n = await adminSetStage(list.map((o) => o.id), 'handed_over');
+      show({ message: `${plural(n ?? 0, 'order')} handed over` });
+      if (dl > 0) setPickupFor(dl);
+    });
+  }
+
+  const openManifest = () =>
+    runBulk('manifest', async () => {
+      const { url } = await makeManifest(chosen().map((o) => o.id));
+      window.open(url, '_blank', 'noopener,noreferrer');
+    });
+
   const anyFilter = FILTER_KEYS.some((name) => params.get(name));
   const allPicked = pickable.length > 0 && pickable.every((o) => picked.has(o.id));
+  const pickedCount = chosen().length;
+  const stageCounts = summary.data?.stages ?? {};
 
   return (
     <div className="stack-sm ap-orders-page">
@@ -289,13 +419,34 @@ function AdminOrders({ view = 'process' }) {
 
       <div className="ap-underline-tabs" role="tablist" aria-label="Show orders">
         {tabs.map(([value, label]) => (
-          <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => update({ tab: value, parcel: '', delayed: '' })}>
+          <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => update({ tab: value, parcel: '', delayed: '', dup: '', stage: '' })}>
             {label}
           </button>
         ))}
       </div>
 
       <section className="ap-card" aria-label="Orders">
+        {stage && (
+          <div className="ap-stage-bar">
+            <div className="ap-segment ap-segment-stage" role="group" aria-label="Packing step">
+              {STAGES.map(([value, label]) => (
+                <button key={value} type="button" aria-pressed={stage === value} onClick={() => update({ stage: value === 'print' ? '' : value })}>
+                  {label}
+                  {stageCounts[value] != null && <span className="ap-count">{formatCount(stageCounts[value])}</span>}
+                </button>
+              ))}
+              <button type="button" aria-pressed={stage === 'all'} onClick={() => update({ stage: 'all' })}>
+                All steps
+              </button>
+            </div>
+            {stage === 'pack' && (stageCounts.pack ?? 0) > 0 && (
+              <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'all-handover'} onClick={moveAllToHandover}>
+                {bulk.working === 'all-handover' && <span className="spinner" aria-hidden="true" />}
+                Move all to Handover
+              </button>
+            )}
+          </div>
+        )}
         <div className="ap-toolbar ap-toolbar-orders">
           <div className="ap-segment" role="group" aria-label="Books in the order">
             <button type="button" aria-pressed={!filters.items} onClick={() => update({ items: '' })}>
@@ -311,6 +462,11 @@ function AdminOrders({ view = 'process' }) {
           {tab === 'to_ship' && (
             <button type="button" className="chip" aria-pressed={filters.delayed} onClick={() => update({ delayed: filters.delayed ? '' : '1' })}>
               Delayed only
+            </button>
+          )}
+          {tab === 'to_ship' && (
+            <button type="button" className="chip" aria-pressed={filters.dup} onClick={() => update({ dup: filters.dup ? '' : '1' })}>
+              Possible duplicates
             </button>
           )}
         </div>
@@ -399,24 +555,52 @@ function AdminOrders({ view = 'process' }) {
           )}
         </div>
 
-        {picked.size > 0 && (
+        {pickedCount > 0 && (
           <div className="ap-bulkbar">
-            <p>{plural(picked.size, 'order')} selected</p>
+            <p>{plural(pickedCount, 'order')} selected</p>
             <div className="inline-actions">
-              <button type="button" className="btn btn-dark btn-sm" aria-busy={manifest.working} onClick={openManifest}>
-                {manifest.working && <span className="spinner" aria-hidden="true" />}
-                Xpressbees manifest for {plural(picked.size, 'order')}
-              </button>
+              {bulkStage === 'print' && (
+                <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'printed'} onClick={markPrinted}>
+                  {bulk.working === 'printed' && <span className="spinner" aria-hidden="true" />}
+                  Labels printed: move to Pack
+                </button>
+              )}
+              {bulkStage === 'pack' && (
+                <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'packed'} onClick={markPacked}>
+                  {bulk.working === 'packed' && <span className="spinner" aria-hidden="true" />}
+                  Packed: move to Handover
+                </button>
+              )}
+              {bulkStage === 'handover' && (
+                <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'handover'} onClick={handOver}>
+                  {bulk.working === 'handover' && <span className="spinner" aria-hidden="true" />}
+                  Hand over {plural(pickedCount, 'parcel')}
+                </button>
+              )}
+              {(!bulkStage || bulkStage === 'handed_over') && (
+                <button type="button" className="btn btn-dark btn-sm" aria-busy={bulk.working === 'manifest'} onClick={openManifest}>
+                  {bulk.working === 'manifest' && <span className="spinner" aria-hidden="true" />}
+                  Xpressbees manifest for {plural(pickedCount, 'order')}
+                </button>
+              )}
               <button type="button" className="btn btn-outline btn-sm" onClick={() => setPicked(new Set())}>
                 Clear selection
               </button>
             </div>
           </div>
         )}
-        {manifest.error && (
+        {bulk.error && (
           <p className="notice ap-card-notice" data-tone="error" role="alert">
-            {manifest.error}
+            {bulk.error}
           </p>
+        )}
+        {pickupFor > 0 && (
+          <div className="ap-card-notice ap-pickup">
+            <button type="button" className="ap-icon-button ap-pickup-close" aria-label="Close the Delhivery pickup form" onClick={() => setPickupFor(0)}>
+              <X size={20} aria-hidden="true" />
+            </button>
+            <DelhiveryPickup key={pickupFor} waiting={pickupFor} onDone={() => setPickupFor(0)} />
+          </div>
         )}
 
         {result.loading && !result.data && (
@@ -448,7 +632,7 @@ function AdminOrders({ view = 'process' }) {
                           checked={allPicked}
                           onChange={() => setPicked(allPicked ? new Set() : new Set(pickable.map((o) => o.id)))}
                         />
-                        <span className="visually-hidden">Select every order on this page that can go on the manifest</span>
+                        <span className="visually-hidden">Select every order on this page</span>
                       </label>
                     )}
                   </th>
@@ -470,7 +654,20 @@ function AdminOrders({ view = 'process' }) {
               </thead>
               <tbody>
                 {orders.map((order) => (
-                  <OrderRow key={order.id} order={order} view={view} tab={tab} now={now} picked={picked.has(order.id)} onPick={togglePick} onOpen={setOpenId} />
+                  <OrderRow
+                    key={order.id}
+                    order={order}
+                    view={view}
+                    tab={tab}
+                    now={now}
+                    selectable={selectable(order)}
+                    picked={picked.has(order.id)}
+                    customerOrders={result.data.customerOrders?.[order.shipping_phone]}
+                    working={rowWorking === order.id}
+                    onPick={togglePick}
+                    onOpen={setOpenId}
+                    onStage={moveRow}
+                  />
                 ))}
               </tbody>
             </table>

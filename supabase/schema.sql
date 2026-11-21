@@ -2320,9 +2320,293 @@ commit;
 
 
 -- -----------------------------------------------------------------------------
+-- 9d. PROCESS ORDERS (admin: Print -> Pack -> Handover, notes, address fixes)
+-- -----------------------------------------------------------------------------
+-- Where each order still to ship stands in the packing workflow, and the admins' own
+-- note about it. Kept apart from orders, which customers can read, so a customer never
+-- sees the note. The website only reads this table; the functions below change it.
+--   Print        label not printed yet       (label_printed_at is null)
+--   Pack         label printed, not packed   (packed_at is null)
+--   Handover     packed, not handed over     (handed_over_at is null)
+--   Handed over  given to the courier, waiting for the pickup scan
+create table if not exists public.order_fulfilment (
+  order_id uuid primary key references public.orders (id) on delete cascade,
+  label_printed_at timestamptz,
+  packed_at timestamptz,
+  handed_over_at timestamptz,
+  note text check (char_length(note) <= 500),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.order_fulfilment enable row level security;
+
+drop policy if exists "Admins view order fulfilment" on public.order_fulfilment;
+create policy "Admins view order fulfilment" on public.order_fulfilment
+  for select to authenticated
+  using ((select public.is_admin()));
+
+revoke all on public.order_fulfilment from anon, authenticated;
+grant select on public.order_fulfilment to authenticated;
+
+-- The first time this runs, orders whose parcel is already booked start at Pack (their
+-- label was most likely printed already); every other order to ship starts at Print.
+do $$
+begin
+  if not exists (select 1 from public.order_fulfilment) then
+    insert into public.order_fulfilment (order_id, label_printed_at)
+    select o.id, now()
+    from public.orders o
+    where o.status in ('confirmed', 'paid')
+      and exists (
+        select 1 from public.shipments s
+        where s.order_id = o.id and s.kind = 'forward' and s.status = 'booked'
+      );
+  end if;
+end $$;
+
+-- A parcel booked again (a new AWB, or a new parcel after switching carrier) needs a
+-- new label: its order goes back to Print.
+create or replace function public.reset_fulfilment_on_new_awb()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.kind = 'forward' and (tg_op = 'INSERT' or old.awb_number is distinct from new.awb_number) then
+    update public.order_fulfilment
+    set label_printed_at = null, handed_over_at = null, updated_at = now()
+    where order_id = new.order_id and (label_printed_at is not null or handed_over_at is not null);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists shipments_reset_fulfilment on public.shipments;
+create trigger shipments_reset_fulfilment
+  after insert or update of awb_number on public.shipments
+  for each row execute function public.reset_fulfilment_on_new_awb();
+
+-- Order ids from a JSON array of 1 to 500 ids.
+create or replace function public.order_ids_from_json(p_ids jsonb)
+returns uuid[]
+language plpgsql
+immutable
+set search_path = ''
+as $$
+declare
+  v_ids uuid[];
+begin
+  if jsonb_typeof(p_ids) is distinct from 'array' or jsonb_array_length(p_ids) not between 1 and 500 then
+    raise exception 'Choose 1 to 500 orders' using errcode = '22023';
+  end if;
+  select array_agg(distinct value::uuid) into v_ids from jsonb_array_elements_text(p_ids);
+  return v_ids;
+end;
+$$;
+
+-- Moves orders to a step: 'print', 'pack', 'handover' or 'handed_over'. Only orders
+-- still to ship (order placed or paid) move. Returns how many moved.
+create or replace function public.admin_set_fulfilment_stage(p_orders jsonb, p_stage text)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_ids uuid[];
+  v_count integer;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if p_stage is null or p_stage not in ('print', 'pack', 'handover', 'handed_over') then
+    raise exception 'Unknown step' using errcode = '22023';
+  end if;
+  v_ids := public.order_ids_from_json(p_orders);
+
+  insert into public.order_fulfilment (order_id)
+  select o.id from public.orders o
+  where o.id = any(v_ids) and o.status in ('confirmed', 'paid')
+  on conflict (order_id) do nothing;
+
+  update public.order_fulfilment f
+  set label_printed_at = case when p_stage = 'print' then null else coalesce(f.label_printed_at, now()) end,
+      packed_at = case when p_stage in ('print', 'pack') then null else coalesce(f.packed_at, now()) end,
+      handed_over_at = case when p_stage = 'handed_over' then coalesce(f.handed_over_at, now()) else null end,
+      updated_at = now()
+  from public.orders o
+  where f.order_id = o.id and o.id = any(v_ids) and o.status in ('confirmed', 'paid');
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- The admins' note on an order (empty removes it).
+create or replace function public.admin_set_order_note(p_order uuid, p_note text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_note text := nullif(btrim(coalesce(p_note, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if char_length(v_note) > 500 then
+    raise exception 'Keep the note under 500 characters' using errcode = '22023', hint = 'note';
+  end if;
+  if not exists (select 1 from public.orders where id = p_order) then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  insert into public.order_fulfilment (order_id, note) values (p_order, v_note)
+  on conflict (order_id) do update set note = excluded.note, updated_at = now();
+  return v_note;
+end;
+$$;
+
+-- Corrects the delivery address while the parcel is not booked yet. The courier is
+-- given the address when it books, so a booked parcel keeps the old one.
+create or replace function public.admin_update_order_address(p_order uuid, p_address jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_status text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  select status into v_status from public.orders where id = p_order for update;
+  if v_status is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  if v_status not in ('pending_payment', 'confirmed', 'paid')
+     or exists (
+       select 1 from public.shipments
+       where order_id = p_order and kind = 'forward'
+         and (status not in ('queued', 'failed', 'cancelled') or (status = 'failed' and needs_check))
+     ) then
+    raise exception 'The parcel is booked, so the address cannot change' using errcode = 'P0001', hint = 'booked';
+  end if;
+  update public.orders
+  set shipping_name = btrim(p_address ->> 'name'),
+      shipping_phone = btrim(p_address ->> 'phone'),
+      shipping_address = btrim(p_address ->> 'address'),
+      shipping_city = btrim(p_address ->> 'city'),
+      shipping_state = btrim(p_address ->> 'state'),
+      shipping_pincode = btrim(p_address ->> 'pincode')
+  where id = p_order;
+end;
+$$;
+
+-- Orders to ship at one step, for the Print / Pack / Handover lists.
+create or replace function public.admin_fulfilment_order_ids(p_stage text)
+returns table (order_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.id
+  from public.orders o
+  left join public.order_fulfilment f on f.order_id = o.id
+  where public.is_admin()
+    and o.status in ('confirmed', 'paid')
+    and case p_stage
+      when 'print' then f.label_printed_at is null
+      when 'pack' then f.label_printed_at is not null and f.packed_at is null
+      when 'handover' then f.packed_at is not null and f.handed_over_at is null
+      when 'handed_over' then f.handed_over_at is not null
+      else false
+    end
+$$;
+
+-- How many orders to ship are at each step.
+create or replace function public.admin_fulfilment_counts()
+returns json
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select json_build_object(
+    'print', count(*) filter (where f.label_printed_at is null),
+    'pack', count(*) filter (where f.label_printed_at is not null and f.packed_at is null),
+    'handover', count(*) filter (where f.packed_at is not null and f.handed_over_at is null),
+    'handed_over', count(*) filter (where f.handed_over_at is not null)
+  )
+  from public.orders o
+  left join public.order_fulfilment f on f.order_id = o.id
+  where public.is_admin() and o.status in ('confirmed', 'paid')
+$$;
+
+-- Orders to ship whose mobile number placed another order within 3 days: possibly the
+-- same order twice.
+create or replace function public.admin_duplicate_order_ids()
+returns table (order_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.id
+  from public.orders o
+  where public.is_admin()
+    and o.status in ('confirmed', 'paid')
+    and exists (
+      select 1 from public.orders d
+      where d.id <> o.id
+        and d.shipping_phone = o.shipping_phone
+        and d.status not in ('pending_payment', 'cancelled')
+        and d.created_at between o.created_at - interval '3 days' and o.created_at + interval '3 days'
+    )
+$$;
+
+-- How many orders (not unpaid, not cancelled) each mobile number has placed: one means
+-- a new customer.
+create or replace function public.admin_phone_order_counts(p_phones jsonb)
+returns table (phone text, orders integer)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.shipping_phone, count(*)::integer
+  from public.orders o
+  where public.is_admin()
+    and jsonb_typeof(p_phones) = 'array'
+    and o.shipping_phone in (select value from jsonb_array_elements_text(p_phones) limit 100)
+    and o.status not in ('pending_payment', 'cancelled')
+  group by o.shipping_phone
+$$;
+
+revoke execute on function public.reset_fulfilment_on_new_awb() from public, anon, authenticated;
+revoke execute on function public.order_ids_from_json(jsonb) from public, anon;
+revoke execute on function public.admin_set_fulfilment_stage(jsonb, text) from public, anon;
+revoke execute on function public.admin_set_order_note(uuid, text) from public, anon;
+revoke execute on function public.admin_update_order_address(uuid, jsonb) from public, anon;
+revoke execute on function public.admin_fulfilment_order_ids(text) from public, anon;
+revoke execute on function public.admin_fulfilment_counts() from public, anon;
+revoke execute on function public.admin_duplicate_order_ids() from public, anon;
+revoke execute on function public.admin_phone_order_counts(jsonb) from public, anon;
+grant execute on function public.admin_set_fulfilment_stage(jsonb, text) to authenticated;
+grant execute on function public.admin_set_order_note(uuid, text) to authenticated;
+grant execute on function public.admin_update_order_address(uuid, jsonb) to authenticated;
+grant execute on function public.admin_fulfilment_order_ids(text) to authenticated;
+grant execute on function public.admin_fulfilment_counts() to authenticated;
+grant execute on function public.admin_duplicate_order_ids() to authenticated;
+grant execute on function public.admin_phone_order_counts(jsonb) to authenticated;
+
+
+-- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: sixteen rows, all with
+-- The SQL Editor shows this table after the run. Expected: seventeen rows, all with
 -- rls_enabled = true (integration_tokens, pincode_checks, rate_limits and
 -- checkout_carts have 0 policies on purpose: only the Edge Functions may touch them).
 select
@@ -2333,7 +2617,7 @@ from pg_tables t
 where t.schemaname = 'public'
   and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items',
     'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits',
-    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates')
+    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates', 'order_fulfilment')
 order by t.tablename;
 
 

@@ -1,11 +1,238 @@
 import { useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from '@phosphor-icons/react';
-import { adminErrorMessage, adminSetOrderStatus, NEXT_STATUSES } from '../../services/adminService';
+import {
+  adminErrorMessage,
+  adminSetOrderNote,
+  adminSetOrderStatus,
+  adminSetStage,
+  adminUpdateOrderAddress,
+  fulfilmentOf,
+  NEXT_STATUSES,
+  stageOf,
+  STAGES,
+} from '../../services/adminService';
 import { useToast } from '../../hooks/useToast';
 import { formatDate, formatOrderNumber, formatPrice, ORDER_STATUS_LABELS, plural } from '../../utils/format';
+import { INDIAN_STATES, normalizeShipping, validateShipping } from '../../utils/storeForm';
 import OrderStatus from '../store/OrderStatus';
 import ParcelPanel from './ParcelPanel';
+
+const TO_SHIP = ['confirmed', 'paid'];
+const stageName = (value) => STAGES.find(([v]) => v === value)?.[1] ?? value;
+
+// Where the order is in Print -> Pack -> Handover, and a way to move it to another step.
+function StageControl({ order, onChanged }) {
+  const current = stageOf(order);
+  const [target, setTarget] = useState(current);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState(null);
+  const { show } = useToast();
+  const f = fulfilmentOf(order);
+
+  async function move() {
+    if (working || target === current) return;
+    setWorking(true);
+    setError(null);
+    try {
+      await adminSetStage([order.id], target);
+      show({ message: `${formatOrderNumber(order.order_number)} moved to ${stageName(target)}` });
+      onChanged();
+    } catch (err) {
+      setError(adminErrorMessage(err));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="stack-sm">
+      <p>
+        Now at <strong>{stageName(current)}</strong>
+        {f?.handed_over_at && ` · handed over ${formatDate(f.handed_over_at)}`}
+      </p>
+      <div className="inline-actions">
+        <label className="visually-hidden" htmlFor={`stage-${order.id}`}>
+          Move to step
+        </label>
+        <select id={`stage-${order.id}`} className="select select-sm" value={target} onChange={(e) => setTarget(e.target.value)}>
+          {STAGES.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <button type="button" className="btn btn-outline btn-sm" aria-busy={working} aria-disabled={target === current || undefined} onClick={move}>
+          {working && <span className="spinner" aria-hidden="true" />}
+          Move
+        </button>
+      </div>
+      {error && <p className="notice" data-tone="error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
+// The admins' private note on the order.
+function NoteEditor({ order, onChanged }) {
+  const saved = fulfilmentOf(order)?.note ?? '';
+  const [note, setNote] = useState(saved);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState(null);
+  const { show } = useToast();
+
+  async function save() {
+    if (working || note.trim() === saved) return;
+    setWorking(true);
+    setError(null);
+    try {
+      await adminSetOrderNote(order.id, note);
+      show({ message: note.trim() ? 'Note saved' : 'Note removed' });
+      onChanged();
+    } catch (err) {
+      setError(adminErrorMessage(err));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="stack-sm">
+      <label className="visually-hidden" htmlFor={`note-${order.id}`}>
+        Note about this order
+      </label>
+      <textarea
+        id={`note-${order.id}`}
+        className="textarea"
+        rows={3}
+        maxLength={500}
+        placeholder="Only admins see this note"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+      />
+      <div className="inline-actions">
+        <button type="button" className="btn btn-outline btn-sm" aria-busy={working} aria-disabled={note.trim() === saved || undefined} onClick={save}>
+          {working && <span className="spinner" aria-hidden="true" />}
+          Save note
+        </button>
+      </div>
+      {error && <p className="notice" data-tone="error" role="alert">{error}</p>}
+    </div>
+  );
+}
+
+// Whether the courier has the address already: once a parcel is booked it keeps it.
+const addressLocked = (order) =>
+  !['pending_payment', 'confirmed', 'paid'].includes(order.status) ||
+  (order.shipments ?? []).some((s) => s.kind === 'forward' && (!['queued', 'failed', 'cancelled'].includes(s.status) || (s.status === 'failed' && s.needs_check)));
+
+function AddressEditor({ order, onChanged, onClose }) {
+  const [form, setForm] = useState({
+    name: order.shipping_name,
+    phone: order.shipping_phone,
+    address: order.shipping_address,
+    city: order.shipping_city,
+    state: order.shipping_state,
+    pincode: order.shipping_pincode,
+  });
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState(null);
+  const { show } = useToast();
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+  const id = (key) => `addr-${key}-${order.id}`;
+
+  async function save(event) {
+    event.preventDefault();
+    if (working) return;
+    const clean = normalizeShipping(form);
+    const problem = validateShipping(clean);
+    if (problem) return setError(problem.message);
+    setWorking(true);
+    setError(null);
+    try {
+      await adminUpdateOrderAddress(order.id, clean);
+      show({ message: `Address of ${formatOrderNumber(order.order_number)} updated` });
+      onChanged();
+      onClose();
+    } catch (err) {
+      setError(adminErrorMessage(err));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const field = (key, label, props = {}) => (
+    <div>
+      <label className="label" htmlFor={id(key)}>
+        {label}
+      </label>
+      <input id={id(key)} className="input" value={form[key]} onChange={(e) => set(key, e.target.value)} {...props} />
+    </div>
+  );
+
+  return (
+    <form className="stack-sm" onSubmit={save} noValidate>
+      <div className="form-grid form-grid-2">
+        {field('name', 'Name', { maxLength: 80, autoComplete: 'off' })}
+        {field('phone', 'Mobile number', { maxLength: 10, inputMode: 'numeric' })}
+        <div className="span-2">
+          <label className="label" htmlFor={id('address')}>
+            Address
+          </label>
+          <input id={id('address')} className="input" maxLength={300} value={form.address} onChange={(e) => set('address', e.target.value)} />
+        </div>
+        {field('city', 'City', { maxLength: 60 })}
+        <div>
+          <label className="label" htmlFor={id('state')}>
+            State
+          </label>
+          <select id={id('state')} className="select" value={form.state} onChange={(e) => set('state', e.target.value)}>
+            {!INDIAN_STATES.includes(form.state) && <option value={form.state}>{form.state}</option>}
+            {INDIAN_STATES.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {field('pincode', 'PIN code', { maxLength: 6, inputMode: 'numeric' })}
+      </div>
+      {error && <p className="notice" data-tone="error" role="alert">{error}</p>}
+      <div className="inline-actions">
+        <button type="submit" className="btn btn-dark btn-sm" aria-busy={working}>
+          {working && <span className="spinner" aria-hidden="true" />}
+          Save address
+        </button>
+        <button type="button" className="btn btn-outline btn-sm" onClick={onClose}>
+          Keep as is
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CustomerSection({ order, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const locked = addressLocked(order);
+  return (
+    <>
+      {editing && !locked ? (
+        <AddressEditor order={order} onChanged={onChanged} onClose={() => setEditing(false)} />
+      ) : (
+        <address className="address">
+          {order.shipping_name}, {order.shipping_phone}
+          <br />
+          {order.shipping_address}, {order.shipping_city}, {order.shipping_state} {order.shipping_pincode}
+        </address>
+      )}
+      {!editing && !locked && (
+        <button type="button" className="btn btn-outline btn-sm ap-sheet-action" onClick={() => setEditing(true)}>
+          Edit address
+        </button>
+      )}
+      {locked && TO_SHIP.includes(order.status) && <p className="page-meta">The parcel is booked, so the address is with the courier and can no longer change here.</p>}
+    </>
+  );
+}
 
 const ACTION_LABELS = {
   paid: 'Mark paid',
@@ -145,11 +372,19 @@ function OrderDrawer({ order, onClose, onChanged }) {
 
               <section className="ap-sheet-section" aria-labelledby="sheet-address">
                 <h3 id="sheet-address">Customer</h3>
-                <address className="address">
-                  {order.shipping_name}, {order.shipping_phone}
-                  <br />
-                  {order.shipping_address}, {order.shipping_city}, {order.shipping_state} {order.shipping_pincode}
-                </address>
+                <CustomerSection key={order.id} order={order} onChanged={onChanged} />
+              </section>
+
+              {TO_SHIP.includes(order.status) && (
+                <section className="ap-sheet-section" aria-labelledby="sheet-stage">
+                  <h3 id="sheet-stage">Packing step</h3>
+                  <StageControl key={`${order.id}-${stageOf(order)}`} order={order} onChanged={onChanged} />
+                </section>
+              )}
+
+              <section className="ap-sheet-section" aria-labelledby="sheet-note">
+                <h3 id="sheet-note">Note</h3>
+                <NoteEditor key={order.id} order={order} onChanged={onChanged} />
               </section>
 
               <section className="ap-sheet-section" aria-labelledby="sheet-parcel">

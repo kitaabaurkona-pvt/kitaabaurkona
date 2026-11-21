@@ -126,7 +126,37 @@ const PARCEL_STATES = {
 const OPEN_PARCEL_STATES = ['queued', 'booking', 'booked', 'failed', 'cancel_requested'];
 
 const ORDER_COLUMNS =
-  '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at)';
+  '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at), order_fulfilment(label_printed_at, packed_at, handed_over_at, note)';
+
+// The packing steps of orders to ship (Process orders > To ship).
+export const STAGES = [
+  ['print', 'Print'],
+  ['pack', 'Pack'],
+  ['handover', 'Handover'],
+  ['handed_over', 'Handed over'],
+];
+
+// An order's packing record (one row, or none yet).
+export const fulfilmentOf = (order) => {
+  const f = order?.order_fulfilment;
+  return (Array.isArray(f) ? f[0] : f) ?? null;
+};
+
+// Which step an order to ship is at.
+export function stageOf(order) {
+  const f = fulfilmentOf(order);
+  if (!f?.label_printed_at) return 'print';
+  if (!f.packed_at) return 'pack';
+  if (!f.handed_over_at) return 'handover';
+  return 'handed_over';
+}
+
+const idsFrom = (rows) => (rows ?? []).map((r) => r.order_id ?? r);
+const intersect = (lists) => {
+  const used = lists.filter(Boolean);
+  if (used.length === 0) return null;
+  return used.reduce((acc, list) => acc.filter((id) => list.includes(id)));
+};
 
 // India's midnight at the start of a YYYY-MM-DD day, as an instant.
 const indiaMidnight = (day) => new Date(`${day}T00:00:00+05:30`);
@@ -168,7 +198,13 @@ function filtered(query, f, ids, { items = f.items } = {}) {
 // One page of orders for the orders table, plus how many are single-book and clubbed
 // (several books) under the same filters.
 export async function adminListOrders(f) {
-  const ids = await parcelOrderIds(f);
+  const toShip = f.view === 'process' && f.tab === 'to_ship';
+  const [parcelIds, stageIds, dupIds] = await Promise.all([
+    parcelOrderIds(f),
+    toShip && f.stage ? supabase.rpc('admin_fulfilment_order_ids', { p_stage: f.stage }).then((r) => idsFrom(unwrap(r).data)) : null,
+    toShip && f.dup ? supabase.rpc('admin_duplicate_order_ids').then((r) => idsFrom(unwrap(r).data)) : null,
+  ]);
+  const ids = intersect([parcelIds, stageIds, dupIds]);
   const from = f.page * ADMIN_PAGE_SIZE;
   const count = (items) => headCount(filtered(ordersCount(), f, ids, { items }));
   const [list, single, clubbed] = await Promise.all([
@@ -179,21 +215,43 @@ export async function adminListOrders(f) {
     count('clubbed'),
   ]);
   const { data, count: total } = unwrap(list);
-  return { orders: data ?? [], total: total ?? 0, single, clubbed, at: Date.now() };
+  const orders = data ?? [];
+  // How many orders each customer's mobile number has placed (New / Repeat badge).
+  const phones = [...new Set(orders.map((o) => o.shipping_phone))];
+  const counts = phones.length ? unwrap(await supabase.rpc('admin_phone_order_counts', { p_phones: phones })).data ?? [] : [];
+  const customerOrders = Object.fromEntries(counts.map((c) => [c.phone, c.orders]));
+  return { orders, total: total ?? 0, single, clubbed, customerOrders, at: Date.now() };
 }
 
 // The numbers at the top of Process orders.
 export async function adminOrderSummary() {
   const shipmentsCount = () => supabase.from('shipments').select('id', { count: 'exact', head: true });
   const toShip = () => ordersCount().in('status', ['confirmed', 'paid']);
-  const [total, delayed, unbooked, booked, problems] = await Promise.all([
+  const [total, delayed, problems, stages] = await Promise.all([
     headCount(toShip()),
     headCount(toShip().lt('created_at', delayedBefore())),
-    headCount(shipmentsCount().eq('kind', 'forward').in('status', PARCEL_STATES.unbooked)),
-    headCount(shipmentsCount().eq('kind', 'forward').in('status', PARCEL_STATES.booked)),
     headCount(shipmentsCount().in('status', ['failed', 'exception', 'rto', 'cancel_requested'])),
+    supabase.rpc('admin_fulfilment_counts').then((r) => unwrap(r).data ?? {}),
   ]);
-  return { total, delayed, unbooked, booked, problems };
+  return { total, delayed, problems, stages };
+}
+
+// Moves orders to a packing step ('print', 'pack', 'handover' or 'handed_over').
+export async function adminSetStage(orderIds, stage) {
+  return unwrap(await supabase.rpc('admin_set_fulfilment_stage', { p_orders: orderIds, p_stage: stage })).data;
+}
+
+// Every order to ship at one step (for "Move all to Handover").
+export async function adminStageOrderIds(stage) {
+  return idsFrom(unwrap(await supabase.rpc('admin_fulfilment_order_ids', { p_stage: stage })).data);
+}
+
+export async function adminSetOrderNote(orderId, note) {
+  return unwrap(await supabase.rpc('admin_set_order_note', { p_order: orderId, p_note: note })).data;
+}
+
+export async function adminUpdateOrderAddress(orderId, address) {
+  unwrap(await supabase.rpc('admin_update_order_address', { p_order: orderId, p_address: address }));
 }
 
 export async function adminSetOrderStatus(id, status) {
@@ -213,6 +271,8 @@ export function adminErrorMessage(error) {
   if (error?.code === '42501' || error?.status === 403) return "You don't have permission to do that.";
   if (error?.hint === 'stock' || error?.details?.hint === 'stock') return 'Not enough stock to mark this order paid.';
   if (error?.hint === 'shipped' || error?.details?.hint === 'shipped') return 'This parcel has already left with the courier, so the order cannot be cancelled now.';
+  if (error?.hint === 'booked' || error?.details?.hint === 'booked') return 'The parcel is already booked with the courier, so the address cannot change now. Cancel the booking first.';
+  if (error?.hint === 'note' || error?.details?.hint === 'note') return 'Keep the note under 500 characters.';
   if (error?.code === '23505') return 'Another book already uses this SKU or product code. Use a different one.';
   if (error?.code === '23514') return 'Those values are not allowed. Check that the price is not above the MRP and nothing is negative.';
   if (error?.status === 401 || error?.code === 'PGRST301') return 'Your session has expired. Sign in again.';

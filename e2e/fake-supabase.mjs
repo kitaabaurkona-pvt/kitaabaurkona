@@ -27,6 +27,7 @@ const RELATIONS = {
   orders: {
     order_items: { many: true, local: 'id', remote: 'order_id' },
     shipments: { many: true, local: 'id', remote: 'order_id' },
+    order_fulfilment: { many: false, local: 'id', remote: 'order_id' },
   },
   wishlist_items: { books: { many: false, local: 'book_id', remote: 'id' } },
 };
