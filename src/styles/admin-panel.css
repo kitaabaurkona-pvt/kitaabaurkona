@@ -2329,6 +2329,7 @@ button.ap-stat {
 .ap .ap-search-by .ap-search .input {
   width: 100%;
   min-width: 0;
+  max-width: none;
 }
 
 /* Fit the eight order columns on a laptop screen next to the menu. */
