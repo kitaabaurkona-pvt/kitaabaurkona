@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from '@phosphor-icons/react';
 import {
@@ -73,7 +73,7 @@ function StageControl({ order, onChanged }) {
 }
 
 // The admins' private note on the order.
-function NoteEditor({ order, onChanged }) {
+export function NoteEditor({ order, onChanged, onSaved }) {
   const saved = fulfilmentOf(order)?.note ?? '';
   const [note, setNote] = useState(saved);
   const [working, setWorking] = useState(false);
@@ -88,6 +88,7 @@ function NoteEditor({ order, onChanged }) {
       await adminSetOrderNote(order.id, note);
       show({ message: note.trim() ? 'Note saved' : 'Note removed' });
       onChanged();
+      onSaved?.();
     } catch (err) {
       setError(adminErrorMessage(err));
     } finally {
@@ -210,8 +211,8 @@ function AddressEditor({ order, onChanged, onClose }) {
   );
 }
 
-function CustomerSection({ order, onChanged }) {
-  const [editing, setEditing] = useState(false);
+function CustomerSection({ order, onChanged, edit = false }) {
+  const [editing, setEditing] = useState(edit);
   const locked = addressLocked(order);
   return (
     <>
@@ -304,7 +305,14 @@ function OrderActions({ order, onChanged }) {
 
 // Everything about one order, in a panel that slides in from the right: the books, the
 // money, the address, the parcel (carrier, courier, booking, label) and status changes.
-function OrderDrawer({ order, onClose, onChanged, onPrint, printing = false }) {
+// focus: the section to show first ('address' also opens the address form, 'parcel').
+function OrderDrawer({ order, focus = null, onClose, onChanged, onPrint, printing = false }) {
+  const orderId = order?.id;
+  useEffect(() => {
+    if (!orderId || !focus) return undefined;
+    const timer = setTimeout(() => document.getElementById(`sheet-${focus}`)?.scrollIntoView({ block: 'start' }), 50);
+    return () => clearTimeout(timer);
+  }, [orderId, focus]);
   const total = Number(order?.total ?? order?.subtotal ?? 0);
   const toCollect = order?.payment_method === 'cod' ? Math.max(0, total - Number(order.amount_paid ?? 0)) : 0;
 
@@ -372,7 +380,7 @@ function OrderDrawer({ order, onClose, onChanged, onPrint, printing = false }) {
 
               <section className="ap-sheet-section" aria-labelledby="sheet-address">
                 <h3 id="sheet-address">Customer</h3>
-                <CustomerSection key={order.id} order={order} onChanged={onChanged} />
+                <CustomerSection key={order.id} order={order} onChanged={onChanged} edit={focus === 'address'} />
               </section>
 
               {TO_SHIP.includes(order.status) && (

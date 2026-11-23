@@ -147,7 +147,7 @@ function ReturnTable({ id, title, orders, kind, onDone, empty }) {
 // books into stock: an RTO cancels its order, a customer return keeps its order
 // Delivered.
 function AdminReturns() {
-  useDocumentTitle('Returns');
+  useDocumentTitle('RTO & returns');
   const result = useAsync(() => adminListReturns(), []);
   const orders = result.data ?? [];
   const rto = orders.filter((o) => parcelOf(o, 'forward')?.status === 'rto');
@@ -155,7 +155,7 @@ function AdminReturns() {
 
   return (
     <div className="stack ap-orders-page">
-      <PageHead title="Returns" />
+      <PageHead title="RTO & returns" />
       {result.loading && !result.data && <LinesSkeleton count={3} label="Loading returns…" />}
       {result.error && <LoadError onRetry={result.retry} what="returns" />}
       {result.data && (

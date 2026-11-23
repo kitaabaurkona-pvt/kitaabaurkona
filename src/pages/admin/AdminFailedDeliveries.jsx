@@ -97,13 +97,13 @@ function NdrRow({ item, onDone }) {
 }
 
 function AdminFailedDeliveries() {
-  useDocumentTitle('Failed deliveries');
+  useDocumentTitle('Non-delivery report (NDR)');
   const ndr = useAsync(() => listNdr(), []);
   const { show } = useToast();
 
   return (
     <div className="stack">
-      <PageHead title="Failed deliveries" />
+      <PageHead title="Non-delivery report (NDR)" />
       <section className="panel stack-sm" aria-label="Failed delivery attempts">
         {ndr.loading && !ndr.data && <LinesSkeleton count={2} label="Asking the couriers for failed deliveries…" />}
         {ndr.error && <LoadError onRetry={ndr.retry} what="failed deliveries" />}

@@ -99,15 +99,21 @@ export async function photoUsedElsewhere(url, exceptId) {
 
 // An order still waiting to leave is late once it is this old (the "Delayed" filter).
 export const SHIP_WITHIN_DAYS = 2;
+// The latest delivery date customers are shown: the top of the 3-7 days GoKwik's checkout
+// promises (DEFAULT_DELIVERY_DAYS in supabase/functions/gokwik/config.js).
+export const DELIVER_WITHIN_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const shipByOf = (createdAt) => new Date(new Date(createdAt).getTime() + SHIP_WITHIN_DAYS * DAY_MS);
+export const deliverByOf = (createdAt) => new Date(new Date(createdAt).getTime() + DELIVER_WITHIN_DAYS * DAY_MS);
 const delayedBefore = () => new Date(Date.now() - SHIP_WITHIN_DAYS * DAY_MS).toISOString();
 
-// Which orders each tab lists, by order status.
+// Which orders each tab lists, by order status. "Failed AWB orders" are orders to ship
+// whose courier booking failed (ShopDeck's "Expired AWB orders").
 export const ORDER_TABS = {
   process: [
-    ['to_ship', 'To ship', ['confirmed', 'paid']],
-    ['pending', 'Payment pending', ['pending_payment']],
+    ['to_ship', 'Non-dispatched orders', ['confirmed', 'paid']],
+    ['awb_failed', 'Failed AWB orders', ['confirmed', 'paid']],
+    ['pending', 'Payment pending orders', ['pending_payment']],
     ['cancelled', 'Cancelled', ['cancelled']],
   ],
   track: [
@@ -117,24 +123,33 @@ export const ORDER_TABS = {
   ],
 };
 
-// Parcel states the "Parcel" filter picks between, for orders still to ship.
-const PARCEL_STATES = {
-  unbooked: ['queued', 'booking', 'failed'],
-  booked: ['booked'],
-};
+// What the search box searches by.
+export const SEARCH_BY = [
+  ['order', 'Order Id'],
+  ['awb', 'AWB Number'],
+  ['phone', 'Customer No.'],
+  ['product', 'Product ID'],
+  ['sku', 'SKU ID'],
+  ['min_qty', 'Min Quantity'],
+  ['max_qty', 'Max Quantity'],
+];
+
 // Forward parcels of orders that have not left yet: small enough to filter by id.
 const OPEN_PARCEL_STATES = ['queued', 'booking', 'booked', 'failed', 'cancel_requested'];
+const LATER_PARCEL_STATES = ['in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto'];
 
 const ORDER_COLUMNS =
-  '*, order_items(sku, title, quantity, unit_price, image_url), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at, package_weight_g, package_length_cm, package_breadth_cm, package_height_cm, routing_code), order_fulfilment(label_printed_at, packed_at, handed_over_at, note, return_received_at)';
+  '*, order_items(sku, title, quantity, unit_price, image_url, book_id), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at, package_weight_g, package_length_cm, package_breadth_cm, package_height_cm, routing_code), order_fulfilment(label_printed_at, packed_at, handed_over_at, note, return_received_at)';
 
-// The packing steps of orders to ship (Process orders > To ship).
+// The packing steps of orders to ship. Process orders shows the first three; an order
+// leaves the page once handed over to the courier.
 export const STAGES = [
   ['print', 'Print'],
   ['pack', 'Pack'],
   ['handover', 'Handover'],
   ['handed_over', 'Handed over'],
 ];
+export const PROCESS_STAGES = STAGES.slice(0, 3);
 
 // An order's packing record (one row, or none yet).
 export const fulfilmentOf = (order) => {
@@ -152,11 +167,24 @@ export function stageOf(order) {
 }
 
 const idsFrom = (rows) => (rows ?? []).map((r) => r.order_id ?? r);
+const unique = (list) => [...new Set(list)];
 const intersect = (lists) => {
   const used = lists.filter(Boolean);
   if (used.length === 0) return null;
   return used.reduce((acc, list) => acc.filter((id) => list.includes(id)));
 };
+// The step an order was at when it was cancelled (orders.cancelled_from).
+export const CANCELLED_FROM = [
+  ['payment_pending', 'Payment pending'],
+  ['print', 'Print'],
+  ['pack', 'Pack'],
+  ['handover', 'Handover'],
+  ['handed_over', 'Handed over'],
+  ['shipped', 'Shipped (came back)'],
+  ['delivered', 'Delivered'],
+];
+const cancelledTab = (f) => f.view === 'process' && f.tab === 'cancelled';
+const tabStatuses = (f) => ORDER_TABS[f.view].find(([value]) => value === f.tab)?.[2] ?? null;
 
 // India's midnight at the start of a YYYY-MM-DD day, as an instant.
 const indiaMidnight = (day) => new Date(`${day}T00:00:00+05:30`);
@@ -165,75 +193,149 @@ const indiaMidnight = (day) => new Date(`${day}T00:00:00+05:30`);
 // a parcel field are done in two steps (parcels first, then their orders).
 async function parcelOrderIds(f) {
   const wantsAwb = f.searchBy === 'awb' && f.search;
-  if (!wantsAwb && !f.carrier && !f.parcel) return null;
+  const failed = f.view === 'process' && f.tab === 'awb_failed';
+  if (!wantsAwb && !f.carrier && !failed) return null;
   let query = supabase.from('shipments').select('order_id').eq('kind', 'forward');
   if (wantsAwb) query = query.ilike('awb_number', `%${f.search.replace(/[^0-9A-Za-z]/g, '')}%`);
   if (f.carrier) query = query.eq('carrier', f.carrier);
-  query = query.in('status', f.parcel ? PARCEL_STATES[f.parcel] : wantsAwb ? [...OPEN_PARCEL_STATES, 'in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto'] : OPEN_PARCEL_STATES);
-  const rows = unwrap(await query.limit(500)).data ?? [];
-  return [...new Set(rows.map((r) => r.order_id))];
+  const states = failed ? ['failed'] : wantsAwb || f.view === 'track' ? [...OPEN_PARCEL_STATES, ...LATER_PARCEL_STATES] : OPEN_PARCEL_STATES;
+  query = query.in('status', states);
+  return unique(idsFrom(unwrap(await query.limit(1000)).data));
 }
 
-// The same filters for the list and for its counts.
-function filtered(query, f, ids, { items = f.items } = {}) {
-  const statuses = ORDER_TABS[f.view].find(([value]) => value === f.tab)?.[2];
+// Orders holding a book, searched by SKU or by the book's product code.
+async function itemOrderIds(f) {
+  const term = cleanSearch(f.search ?? '');
+  if (!term || !['sku', 'product'].includes(f.searchBy)) return null;
+  let query = supabase.from('order_items').select('order_id');
+  if (f.searchBy === 'product') {
+    const books = unwrap(await supabase.from('books').select('id').ilike('product_code', term).limit(50)).data ?? [];
+    if (books.length === 0) return [];
+    query = query.in('book_id', books.map((b) => b.id));
+  } else {
+    query = query.ilike('sku', `%${term}%`);
+  }
+  return unique(idsFrom(unwrap(await query.limit(1000)).data));
+}
+
+// Orders from new customers (first order from that mobile number) or repeat ones.
+async function customerTypeIds(f) {
+  if (!['new', 'repeat'].includes(f.customer)) return null;
+  const statuses = tabStatuses(f);
+  let query = supabase.from('orders').select('id, shipping_phone');
+  if (statuses) query = query.in('status', statuses);
+  const rows = unwrap(await query.order('created_at', { ascending: false }).limit(1000)).data ?? [];
+  const phones = unique(rows.map((r) => r.shipping_phone));
+  if (phones.length === 0) return [];
+  const counts = unwrap(await supabase.rpc('admin_phone_order_counts', { p_phones: phones })).data ?? [];
+  const orders = Object.fromEntries(counts.map((c) => [c.phone, c.orders]));
+  return rows.filter((r) => ((orders[r.shipping_phone] ?? 0) >= 2) === (f.customer === 'repeat')).map((r) => r.id);
+}
+
+async function notedOrderIds() {
+  return idsFrom(unwrap(await supabase.from('order_fulfilment').select('order_id').not('note', 'is', null).limit(1000)).data);
+}
+
+// The same filters for the list and for its counts. ids: only these orders (null = any);
+// skip: never these.
+function filtered(query, f, ids, skip, { items = f.items, delayed = f.delayed } = {}) {
+  const statuses = tabStatuses(f);
   if (statuses) query = query.in('status', statuses);
   if (ids) query = query.in('id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000']);
+  if (skip.length) query = query.not('id', 'in', `(${skip.join(',')})`);
   const term = cleanSearch(f.search ?? '');
   if (term && f.searchBy === 'order') {
     const n = term.replace(/^(KB|KAK)-?/i, '').replace(/^0+/, '');
     query = /^[0-9]{1,12}$/.test(n) ? query.eq('order_number', n) : query.eq('order_number', -1);
   }
   if (term && f.searchBy === 'phone') query = query.ilike('shipping_phone', `%${term.replace(/\D/g, '').slice(-10)}%`);
-  if (term && f.searchBy === 'name') query = query.ilike('shipping_name', `%${term}%`);
-  if (f.from) query = query.gte('created_at', indiaMidnight(f.from).toISOString());
-  if (f.to) query = query.lt('created_at', new Date(indiaMidnight(f.to).getTime() + DAY_MS).toISOString());
+  if (term && ['min_qty', 'max_qty'].includes(f.searchBy)) {
+    const n = Number.parseInt(term.replace(/\D/g, ''), 10);
+    if (Number.isFinite(n)) query = f.searchBy === 'min_qty' ? query.gte('item_count', n) : query.lte('item_count', n);
+  }
+  // On the Cancelled tab the dates are cancellation dates (as on ShopDeck).
+  const dateColumn = cancelledTab(f) ? 'cancelled_at' : 'created_at';
+  if (f.from) query = query.gte(dateColumn, indiaMidnight(f.from).toISOString());
+  if (f.to) query = query.lt(dateColumn, new Date(indiaMidnight(f.to).getTime() + DAY_MS).toISOString());
+  if (cancelledTab(f) && f.was) query = query.eq('cancelled_from', f.was);
   if (f.payment) query = query.eq('payment_method', f.payment);
-  if (f.delayed) query = query.lt('created_at', delayedBefore());
+  if (f.coupon === 'yes') query = query.gt('discount_total', 0);
+  if (f.coupon === 'no') query = query.eq('discount_total', 0);
+  if (delayed) query = query.lt('created_at', delayedBefore());
   if (items === 'single') query = query.eq('item_count', 1);
   if (items === 'clubbed') query = query.gt('item_count', 1);
   return query;
 }
 
-// One page of orders for the orders table, plus how many are single-book and clubbed
-// (several books) under the same filters.
+// The most orders one "Print all" or "Group by SKU" works on at once.
+export const ADMIN_ALL_LIMIT = 300;
+
+// One page of orders for the orders table (or, with all, every match up to
+// ADMIN_ALL_LIMIT), plus how many are single-book, clubbed (several books) and delayed
+// under the same filters.
 export async function adminListOrders(f) {
   const toShip = f.view === 'process' && f.tab === 'to_ship';
-  const [parcelIds, stageIds, dupIds] = await Promise.all([
+  const [parcelIds, stageIds, dupIds, itemIds, customerIds, notedIds] = await Promise.all([
     parcelOrderIds(f),
     toShip && f.stage ? supabase.rpc('admin_fulfilment_order_ids', { p_stage: f.stage }).then((r) => idsFrom(unwrap(r).data)) : null,
-    toShip && f.dup ? supabase.rpc('admin_duplicate_order_ids').then((r) => idsFrom(unwrap(r).data)) : null,
+    ['yes', 'no'].includes(f.dup) ? supabase.rpc('admin_duplicate_order_ids').then((r) => idsFrom(unwrap(r).data)) : null,
+    itemOrderIds(f),
+    customerTypeIds(f),
+    ['yes', 'no'].includes(f.remarks) ? notedOrderIds() : null,
   ]);
-  const ids = intersect([parcelIds, stageIds, dupIds]);
-  const from = f.page * ADMIN_PAGE_SIZE;
-  const count = (items) => headCount(filtered(ordersCount(), f, ids, { items }));
-  const [list, single, clubbed] = await Promise.all([
-    filtered(supabase.from('orders').select(ORDER_COLUMNS, { count: 'exact' }), f, ids)
-      .order('created_at', { ascending: f.sort === 'oldest' })
-      .range(from, from + ADMIN_PAGE_SIZE - 1),
-    count('single'),
-    count('clubbed'),
+  const ids = intersect([parcelIds, stageIds, f.dup === 'yes' ? dupIds : null, itemIds, customerIds, f.remarks === 'yes' ? notedIds : null]);
+  const skip = [...(f.dup === 'no' ? dupIds : []), ...(f.remarks === 'no' ? notedIds : [])];
+  const from = f.all ? 0 : f.page * ADMIN_PAGE_SIZE;
+  const size = f.all ? ADMIN_ALL_LIMIT : ADMIN_PAGE_SIZE;
+  const count = (opts) => headCount(filtered(ordersCount(), f, ids, skip, opts));
+  const [list, single, clubbed, delayed] = await Promise.all([
+    filtered(supabase.from('orders').select(ORDER_COLUMNS, { count: 'exact' }), f, ids, skip)
+      .order(cancelledTab(f) ? 'cancelled_at' : 'created_at', { ascending: f.sort === 'oldest', nullsFirst: false })
+      .range(from, from + size - 1),
+    count({ items: 'single' }),
+    count({ items: 'clubbed' }),
+    count({ delayed: true }),
   ]);
   const { data, count: total } = unwrap(list);
   const orders = data ?? [];
-  // How many orders each customer's mobile number has placed (New / Repeat badge).
-  const phones = [...new Set(orders.map((o) => o.shipping_phone))];
-  const counts = phones.length ? unwrap(await supabase.rpc('admin_phone_order_counts', { p_phones: phones })).data ?? [] : [];
+  // How many orders each customer's mobile number has placed (New / Repeat badge), and
+  // each book's product code (Product ID).
+  const phones = unique(orders.map((o) => o.shipping_phone));
+  const bookIds = unique(orders.flatMap((o) => o.order_items.map((i) => i.book_id)).filter(Boolean));
+  // Cancelled orders: their online payment's refund (GoKwik) and when it went through.
+  const cancelledIds = cancelledTab(f) ? orders.map((o) => o.id) : [];
+  const [counts, books, payments, refundEvents] = await Promise.all([
+    phones.length ? supabase.rpc('admin_phone_order_counts', { p_phones: phones }).then((r) => unwrap(r).data ?? []) : [],
+    bookIds.length ? supabase.from('books').select('id, product_code').in('id', bookIds).then((r) => unwrap(r).data ?? []) : [],
+    cancelledIds.length ? supabase.from('order_payments').select('order_id, refund_status, refunded_amount').in('order_id', cancelledIds).then((r) => unwrap(r).data ?? []) : [],
+    cancelledIds.length
+      ? supabase.from('payment_events').select('order_id, received_at').eq('event', 'refund.successful').in('order_id', cancelledIds).then((r) => unwrap(r).data ?? [])
+      : [],
+  ]);
   const customerOrders = Object.fromEntries(counts.map((c) => [c.phone, c.orders]));
-  return { orders, total: total ?? 0, single, clubbed, customerOrders, at: Date.now() };
+  const productCodes = Object.fromEntries(books.map((b) => [b.id, b.product_code]));
+  const refunds = Object.fromEntries(payments.map((p) => [p.order_id, { ...p, refunded_at: refundEvents.find((e) => e.order_id === p.order_id)?.received_at ?? null }]));
+  return { orders, total: total ?? 0, single, clubbed, delayed, customerOrders, productCodes, refunds, at: Date.now() };
 }
 
-// The numbers at the top of Process orders.
+// The numbers at the top of Process orders and on its tabs. Handed-over orders have left
+// the page, so they are not counted.
 export async function adminOrderSummary() {
-  const shipmentsCount = () => supabase.from('shipments').select('id', { count: 'exact', head: true });
   const toShip = () => ordersCount().in('status', ['confirmed', 'paid']);
-  const [total, delayed, problems, stages] = await Promise.all([
-    headCount(toShip()),
-    headCount(toShip().lt('created_at', delayedBefore())),
-    headCount(shipmentsCount().in('status', ['failed', 'exception', 'rto', 'cancel_requested'])),
+  const [stages, handedOver, failedParcels] = await Promise.all([
     supabase.rpc('admin_fulfilment_counts').then((r) => unwrap(r).data ?? {}),
+    supabase.rpc('admin_fulfilment_order_ids', { p_stage: 'handed_over' }).then((r) => idsFrom(unwrap(r).data)),
+    supabase.from('shipments').select('order_id').eq('kind', 'forward').eq('status', 'failed').limit(1000).then((r) => unique(idsFrom(unwrap(r).data))),
   ]);
-  return { total, delayed, problems, stages };
+  let delayedQuery = toShip().lt('created_at', delayedBefore());
+  if (handedOver.length) delayedQuery = delayedQuery.not('id', 'in', `(${handedOver.join(',')})`);
+  const [delayed, failed, pending] = await Promise.all([
+    headCount(delayedQuery),
+    failedParcels.length ? headCount(toShip().in('id', failedParcels)) : 0,
+    headCount(ordersCount().eq('status', 'pending_payment')),
+  ]);
+  const total = (stages.print ?? 0) + (stages.pack ?? 0) + (stages.handover ?? 0);
+  return { total, delayed, stages, tabs: { to_ship: total, awb_failed: failed, pending } };
 }
 
 // Moves orders to a packing step ('print', 'pack', 'handover' or 'handed_over').

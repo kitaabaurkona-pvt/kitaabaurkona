@@ -2015,3 +2015,346 @@ button.ap-stat {
     background: var(--ap-hover);
   }
 }
+
+/* ---------- Process orders: ShopDeck layout (phase 4) ---------- */
+
+.ap-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.ap-summary .ap-stat {
+  border: 1px solid var(--ap-line);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ap-summary .ap-stat[data-tone='danger'] .ap-stat-value {
+  color: var(--ap-danger);
+}
+
+.ap-sum-stages {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  cursor: default;
+}
+
+.ap .ap-sum-stages:hover {
+  border-color: var(--ap-line);
+}
+
+.ap-sum-part {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ap-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ap-sum-part + .ap-sum-part {
+  align-items: flex-end;
+  text-align: right;
+}
+
+@media (hover: hover) {
+  .ap-sum-part:hover .ap-stat-label {
+    color: var(--ap-ink);
+    text-decoration: underline;
+  }
+}
+
+.ap-pill {
+  display: inline-block;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--ap-danger-wash);
+  color: var(--ap-danger);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  vertical-align: middle;
+}
+
+.ap-stage-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ap-stage-bar {
+  padding-bottom: 2px;
+}
+
+.ap-filters .btn-link {
+  min-height: 36px;
+}
+
+.ap-search-by .ap-search svg {
+  right: 12px;
+  left: auto;
+}
+
+.ap .ap-search-by .ap-search .input {
+  padding-right: 40px;
+  padding-left: 12px;
+}
+
+.ap-range {
+  position: relative;
+}
+
+.ap-range-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 190px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--ap-line-strong);
+  border-radius: var(--ap-radius-sm);
+  background: var(--ap-card);
+  color: var(--ap-ink);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ap-range-button[data-empty] {
+  color: var(--ap-muted);
+}
+
+.ap-range-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 25;
+  display: grid;
+  gap: 6px;
+  width: 240px;
+  padding: 12px;
+  border: 1px solid var(--ap-line);
+  border-radius: var(--ap-radius-sm);
+  background: var(--ap-card);
+  box-shadow: 0 8px 24px rgba(16, 24, 40, 0.14);
+}
+
+.ap-range-pop .btn-link {
+  justify-self: start;
+}
+
+.ap-tip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 20px;
+  border-bottom: 1px solid var(--ap-line);
+  background: var(--ap-soft);
+  color: var(--ap-body);
+  font-size: 14px;
+}
+
+.ap-tip p {
+  flex: 1;
+  margin: 0;
+}
+
+.ap-tip svg {
+  flex: none;
+}
+
+.ap-badge.ap-badge-caps {
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.ap-qty {
+  display: inline-block;
+  min-width: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--ap-line-strong);
+  border-radius: 4px;
+  color: var(--ap-ink);
+  font-weight: 600;
+  text-align: center;
+}
+
+.ap-text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ap-ink);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.ap-edit-link {
+  display: block;
+  color: var(--ap-muted);
+  font-size: 13px;
+}
+
+.ap-track {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ap .ap-copy {
+  width: 28px;
+  height: 28px;
+  min-height: 0;
+}
+
+.ap-clamp.ap-clamp-1 {
+  -webkit-line-clamp: 1;
+}
+
+.ap-row-actions-stack .ap-menu .btn {
+  width: 100%;
+}
+
+.ap-cancel-link {
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ap-danger);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ap-row-actions-stack .ap-menu-list {
+  right: 0;
+  left: auto;
+}
+
+.ap-orders-table .ap-col-actions {
+  min-width: 130px;
+}
+
+.ap-group-row td {
+  background: var(--ap-soft);
+}
+
+.ap-group + .ap-group .ap-group-row td {
+  border-top: 2px solid var(--ap-line);
+}
+
+/* Notes and Cancel pop-ups. */
+
+.ap-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 61;
+  display: grid;
+  gap: 14px;
+  width: min(460px, calc(100vw - 32px));
+  padding: 18px 20px 20px;
+  border-radius: var(--ap-radius);
+  background: var(--ap-card);
+  box-shadow: 0 20px 50px rgba(16, 24, 40, 0.3);
+  transform: translate(-50%, -50%);
+}
+
+.ap-dialog:focus {
+  outline: none;
+}
+
+.ap-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ap .ap-dialog-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ap-dialog p {
+  margin: 0;
+}
+
+@media (max-width: 960px) {
+  .ap-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .ap-sum-stages {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .ap-stage-tools {
+    justify-content: flex-start;
+  }
+
+  .ap-range,
+  .ap-range-button {
+    width: 100%;
+  }
+
+  .ap-row-actions-stack .ap-menu-list {
+    right: auto;
+    left: 0;
+  }
+}
+
+.ap-search-by .ap-search {
+  min-width: 0;
+}
+
+.ap .ap-search-by .ap-search .input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Fit the eight order columns on a laptop screen next to the menu. */
+.ap-orders-table th,
+.ap-orders-table td {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.ap-orders-table th {
+  white-space: normal;
+}
+
+.ap-orders-table .ap-book-cell {
+  gap: 10px;
+  min-width: 190px;
+}
+
+.ap-orders-table .ap-kv {
+  min-width: 128px;
+}
+
+.ap-orders-table .ap-col-customer .ap-clamp {
+  max-width: 170px;
+}
+
+.ap-orders-table .ap-col-actions {
+  min-width: 112px;
+}

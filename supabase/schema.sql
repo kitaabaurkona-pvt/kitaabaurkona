@@ -2744,6 +2744,71 @@ grant execute on function public.admin_receive_return(uuid) to authenticated;
 
 
 -- -----------------------------------------------------------------------------
+-- 9f. CANCELLED ORDERS (admin: when, by whom, from which step)
+-- -----------------------------------------------------------------------------
+-- Every cancellation records when it happened, who did it and where the order was at
+-- the time (Process orders > Cancelled, as on ShopDeck):
+--   cancelled_by   'seller' (an admin), 'customer' (on the website) or 'system'
+--                  (GoKwik's automatic refund, the courier worker). Null for orders
+--                  cancelled before this was added.
+--   cancelled_from 'payment_pending', 'print', 'pack', 'handover', 'handed_over',
+--                  'shipped' (a parcel that came back) or 'delivered'.
+alter table public.orders add column if not exists cancelled_at timestamptz;
+alter table public.orders add column if not exists cancelled_by text;
+alter table public.orders add column if not exists cancelled_from text;
+alter table public.orders drop constraint if exists orders_cancelled_by_check;
+alter table public.orders add constraint orders_cancelled_by_check
+  check (cancelled_by is null or cancelled_by in ('seller', 'customer', 'system'));
+alter table public.orders drop constraint if exists orders_cancelled_from_check;
+alter table public.orders add constraint orders_cancelled_from_check
+  check (cancelled_from is null or cancelled_from in ('payment_pending', 'print', 'pack', 'handover', 'handed_over', 'shipped', 'delivered'));
+create index if not exists orders_cancelled_at_idx on public.orders (cancelled_at) where cancelled_at is not null;
+
+create or replace function public.orders_record_cancel()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.status = 'cancelled' and old.status <> 'cancelled' then
+    new.cancelled_at := now();
+    new.cancelled_by := case
+      when public.is_admin() then 'seller'
+      when auth.uid() is not null and auth.uid() = new.user_id then 'customer'
+      else 'system'
+    end;
+    new.cancelled_from := case old.status
+      when 'pending_payment' then 'payment_pending'
+      when 'shipped' then 'shipped'
+      when 'delivered' then 'delivered'
+      else coalesce(
+        (select case
+            when f.handed_over_at is not null then 'handed_over'
+            when f.packed_at is not null then 'handover'
+            when f.label_printed_at is not null then 'pack'
+          end
+         from public.order_fulfilment f where f.order_id = new.id),
+        'print')
+    end;
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.orders_record_cancel() from public, anon, authenticated;
+
+drop trigger if exists orders_record_cancel on public.orders;
+create trigger orders_record_cancel
+  before update of status on public.orders
+  for each row execute function public.orders_record_cancel();
+
+-- Orders cancelled before this section existed: their last change is the best guess
+-- of when (who and from where stay unknown). Runs once; later runs find nothing.
+update public.orders set cancelled_at = updated_at
+where status = 'cancelled' and cancelled_at is null;
+
+-- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
 -- The SQL Editor shows this table after the run. Expected: eighteen rows, all with

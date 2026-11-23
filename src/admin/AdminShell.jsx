@@ -20,9 +20,9 @@ const SECTIONS = [
     Icon: Receipt,
     children: [
       { to: '/admin/orders', label: 'Process orders', end: true },
+      { to: '/admin/orders/failed-deliveries', label: 'Non-delivery report (NDR)' },
+      { to: '/admin/orders/returns', label: 'RTO & returns' },
       { to: '/admin/orders/track', label: 'Track orders' },
-      { to: '/admin/orders/failed-deliveries', label: 'Failed deliveries' },
-      { to: '/admin/orders/returns', label: 'Returns' },
     ],
   },
   { to: '/admin/shipping', label: 'Shipping', Icon: Truck },

@@ -1008,7 +1008,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     };
     const nav = (label) => page.$$eval('.ap-side .ap-nav-link', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), label);
     check('admin site: the menu shows who is signed in', (await text(page, '.ap-side .ap-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
-    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Track orders|Failed deliveries|Returns|Shipping');
+    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Non-delivery report (NDR)|RTO & returns|Track orders|Shipping');
     check('admin site: "Open the store" goes to the live store', (await page.$$eval('.ap-side-foot a', (as) => as.map((a) => a.href))).includes('https://www.kitaabaurkona.com/'));
 
     await gotoA(page, '/admin');
@@ -1163,10 +1163,10 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await db.query(`delete from public.books where product_code in ('E2E-ADMIN-1', 'E2E-ADMIN-2')`);
     for (const f of [csv, template, photoA, ...photoPaths]) fs.rmSync(f, { force: true });
 
-    for (const [label, sel] of [['Process orders', '.ap-underline-tabs'], ['Track orders', '.ap-underline-tabs'], ['Failed deliveries', 'main .panel'], ['Shipping', '#ship-warehouse_name']]) {
+    for (const [label, sel] of [['Process orders', '.ap-underline-tabs'], ['Track orders', '.ap-underline-tabs'], ['Non-delivery report (NDR)', 'main .panel'], ['Shipping', '#ship-warehouse_name']]) {
       await nav(label);
       check(`admin site: ${label} opens`, await waitSel(page, sel, 8000));
-      await page.screenshot({ path: path.join(SHOTS, `admin-site-${label.toLowerCase().replace(/ /g, '-')}-1280.png`), fullPage: true });
+      await page.screenshot({ path: path.join(SHOTS, `admin-site-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-$/, '')}-1280.png`), fullPage: true });
     }
 
     // ---- Phone width: slide-out menu, no sideways scrolling ----
@@ -1243,9 +1243,13 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await waitSel(page, '#ship-warehouse_name');
     await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-light-1280.png'), fullPage: true });
 
-    await gotoA(page, '/admin/orders?pay=cod');
-    check('admin orders: summary numbers show orders to ship', await page.waitForFunction(() => [...document.querySelectorAll('.ap-stat')].some((c) => /Orders to ship/.test(c.textContent) && /[1-9]/.test(c.querySelector('.ap-stat-value')?.textContent ?? '')), { timeout: 6000 }).then(() => true).catch(() => false));
-    check('admin orders: the order is listed as on time with a ship-by date', await page.waitForFunction(() => /On time/.test(document.querySelector('.ap-orders-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    const xbOrder = (await one(`select id from public.orders where payment_method = 'cod' and status in ('confirmed', 'paid') order by created_at desc limit 1`)).id;
+    // Process orders lists single-book orders unless Clubbed is chosen (as on ShopDeck).
+    const itemsOf = async (id) => ((await one(`select item_count from public.orders where id = $1`, [id])).item_count > 1 ? '&items=clubbed' : '');
+    const xbItems = await itemsOf(xbOrder);
+    await gotoA(page, `/admin/orders?pay=cod${xbItems}`);
+    check('admin orders: summary numbers show orders to ship', await page.waitForFunction(() => [...document.querySelectorAll('.ap-stat')].some((c) => /Total non-dispatched orders/.test(c.textContent) && /[1-9]/.test(c.querySelector('.ap-stat-value')?.textContent ?? '')), { timeout: 6000 }).then(() => true).catch(() => false));
+    check('admin orders: the order is listed as on time with a ship-by date', await page.waitForFunction(() => /On time/i.test(document.querySelector('.ap-orders-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.type('#orders-q', '0000000');
     check('admin orders: a search with no match says so', await page.waitForFunction(() => /No orders match these filters/.test(document.body.innerText), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.select('#orders-by', 'phone');
@@ -1257,7 +1261,6 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('admin orders: the order opens in a side panel', await waitSel(page, '.ap-sheet', 4000));
     await page.waitForFunction(() => /Parcel: Queued/i.test(document.querySelector('.ap-sheet')?.innerText ?? ''), { timeout: 6000 }).catch(() => {});
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-sheet-1280.png') });
-    const xbOrder = (await one(`select id from public.orders where payment_method = 'cod' and status in ('confirmed', 'paid') order by created_at desc limit 1`)).id;
     check('admin orders: the customer is marked as a repeat customer', /Repeat · \d/.test(await page.$eval('.ap-orders-table', (t) => t.innerText).catch(() => '')));
     await page.$$eval('.ap-sheet button', (bs) => bs.find((b) => /Edit address/.test(b.textContent))?.click());
     check('admin orders: the address can be edited before booking', await waitSel(page, '.ap-sheet input[id^="addr-city-"]', 3000));
@@ -1342,19 +1345,19 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       labelPdf,
     );
     check('admin orders: the label keeps the same invoice number', (await one(`select count(*)::int as n from public.order_invoices where order_id = $1`, [xbOrder])).n === 1);
-    await gotoA(page, '/admin/orders?stage=pack');
-    check('admin orders: the Pack step lists the order with its count', await page.waitForFunction(() => /Pack\s*1/.test(document.querySelector('.ap-segment-stage')?.innerText ?? '') && document.querySelectorAll('.ap-orders-table tbody tr').length === 1, { timeout: 6000 }).then(() => true).catch(() => false));
-    await page.$$eval('.ap-orders-table button', (bs) => bs.find((b) => b.textContent.trim() === 'Packed')?.click());
+    await gotoA(page, `/admin/orders?stage=pack${xbItems}`);
+    check('admin orders: the Pack step lists the order and counts it', await page.waitForFunction(() => /1\s*In Pack/.test(document.querySelector('.ap-sum-stages')?.innerText ?? '') && document.querySelector('.ap-segment-stage button[aria-pressed="true"]')?.textContent === 'Pack' && document.querySelectorAll('.ap-orders-table tbody tr').length === 1, { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.$$eval('.ap-orders-table button', (bs) => bs.find((b) => b.textContent.trim() === 'Handover')?.click());
     check(
-      'admin orders: Packed moves the order to Handover',
+      'admin orders: the row Handover button moves the packed order to Handover',
       (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Packed: KB-/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false)) &&
         (await one(`select packed_at from public.order_fulfilment where order_id = $1`, [xbOrder]))?.packed_at != null,
     );
-    await gotoA(page, '/admin/orders?stage=handover');
+    await gotoA(page, `/admin/orders?stage=handover${xbItems}`);
     await waitSel(page, 'tbody .pick input[type=checkbox]', 6000);
     await page.click('tbody .pick input[type=checkbox]');
     const manifestTab = new Promise((resolve) => ctx.once('targetcreated', (t) => resolve(t)));
-    await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /Hand over 1 parcel/.test(b.textContent))?.click());
+    await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /Print & lock manifest for 1 parcel/.test(b.textContent))?.click());
     const mTarget = await Promise.race([manifestTab, sleep(5000).then(() => null)]);
     const mOpened = Boolean(mTarget);
     const mPage = mTarget ? await mTarget.page() : null;
@@ -1362,17 +1365,20 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     if (mPage) await mPage.close().catch(() => {});
     await page.bringToFront();
     check(
-      'admin orders: Hand over makes the Xpressbees manifest and marks the order handed over',
+      'admin orders: Print & lock manifest makes the Xpressbees manifest and marks the order handed over',
       mOpened &&
         (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /1 order handed over/.test(t.textContent)), { timeout: 8000 }).then(() => true).catch(() => false)) &&
         (await one(`select handed_over_at from public.order_fulfilment where order_id = $1`, [xbOrder]))?.handed_over_at != null,
       JSON.stringify({ tab: mOpened, toasts: await page.$$eval('.toast, .notice', (ts) => ts.map((t) => t.textContent)).catch(() => []), row: await one(`select f.*, o.status from public.orders o left join public.order_fulfilment f on f.order_id = o.id where o.id = $1`, [xbOrder]) }),
     );
-    await gotoA(page, '/admin/orders?stage=handed_over');
-    check('admin orders: handed-over parcels can still go on a manifest', await waitSel(page, 'tbody .pick input[type=checkbox]', 6000));
+    const xbNumber = (await one(`select order_number from public.orders where id = $1`, [xbOrder])).order_number;
+    await gotoA(page, `/admin/orders?stage=handover${xbItems}`);
+    check('admin orders: a handed-over order leaves Process orders', await page.waitForFunction((n) => (document.querySelector('.state') || document.querySelector('.ap-orders-table')) && !document.querySelector('.skeleton') && ![...document.querySelectorAll('.ap-order-link')].some((a) => a.textContent.replace(/\D/g, '').replace(/^0+/, '') === n), { timeout: 6000 }, String(xbNumber)).then(() => true).catch(() => false));
+    await gotoA(page, `/admin/orders/track?q=${xbNumber}`);
+    check('admin orders: handed-over parcels can still go on a manifest from Track orders', await waitSel(page, 'tbody .pick input[type=checkbox]', 6000));
     await page.click('tbody .pick input[type=checkbox]');
     check('admin orders: manifest button appears', /Xpressbees manifest for 1 order/i.test(await page.$eval('main', (m) => m.innerText)));
-    await gotoA(page, '/admin/orders?dup=1&stage=all');
+    await gotoA(page, '/admin/orders?dup=yes');
     check('admin orders: the possible-duplicates filter loads', await page.waitForFunction(() => document.querySelector('.ap-orders-table, .state') && !document.querySelector('.skeleton'), { timeout: 6000 }).then(() => true).catch(() => false));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-parcel-light-1280.png'), fullPage: true });
     check('admin shipping flow: no console errors', errors.length === 0, errors.join(' | '));
@@ -1464,16 +1470,99 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await db.query(`insert into public.order_fulfilment (order_id, label_printed_at, packed_at) values ($1, now(), null) on conflict (order_id) do update set label_printed_at = now(), packed_at = null, handed_over_at = null`, [dlOrder]);
     await gotoA(page, '/admin/orders?stage=pack');
     await waitSel(page, '.ap-stage-bar .btn', 6000);
-    await page.$$eval('.ap-stage-bar .btn', (bs) => bs.find((b) => /Move all to Handover/.test(b.textContent))?.click());
+    await page.$$eval('.ap-stage-bar .btn', (bs) => bs.find((b) => /Move All to Handover/.test(b.textContent))?.click());
     check('admin orders: Move all to Handover moves every packed order', (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /moved to Handover/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false)) && (await one(`select packed_at from public.order_fulfilment where order_id = $1`, [dlOrder]))?.packed_at != null);
     await gotoA(page, '/admin/orders?stage=handover&carrier=delhivery');
     await waitSel(page, 'tbody .pick input[type=checkbox]', 6000);
     await page.click('tbody .pick input[type=checkbox]');
-    await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /Hand over 1 parcel/.test(b.textContent))?.click());
+    await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /Print & lock manifest for 1 parcel/.test(b.textContent))?.click());
     check('admin orders: handing over a Delhivery parcel opens its pickup form', (await waitSel(page, '.ap-pickup #dl-pickup-date', 6000)) && (await one(`select handed_over_at from public.order_fulfilment where order_id = $1`, [dlOrder]))?.handed_over_at != null);
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-handover-1280.png'), fullPage: true });
-    await gotoA(page, '/admin/orders?stage=all&carrier=delhivery');
+    await gotoA(page, '/admin/orders/track?carrier=delhivery');
     check('admin orders: the shipping partner filter shows only the Delhivery order', await page.waitForFunction(() => { const rows = document.querySelectorAll('.ap-orders-table tbody tr'); return rows.length === 1 && /Delhivery/.test(rows[0].innerText); }, { timeout: 6000 }).then(() => true).catch(() => false), await page.$eval('main', (m) => m.innerText.replace(/\s+/g, ' ').slice(-280)).catch((e) => e.message));
+
+    // Failed AWB orders: a booking that failed is booked again with Regenerate.
+    {
+      const spare = await one(`select id from public.books where is_visible and stock_quantity >= 1 order by stock_quantity desc limit 1`);
+      const failedOrder = (
+        await asRole(db, { role: 'authenticated', sub: USERS['reader@example.com'].id }, (tx) =>
+          tx.query(`select public.create_order($1::jsonb, $2::jsonb, 'cod') as id`, [
+            JSON.stringify([{ book_id: spare.id, quantity: 1 }]),
+            JSON.stringify({ name: 'Asha Rao', phone: '9876543210', address: '12 MG Road', city: 'Udaipur', state: 'Rajasthan', pincode: '313001' }),
+          ]),
+        )
+      ).rows[0].id;
+      await db.query(`update public.shipments set status = 'failed', last_error = 'Test: courier refused', carrier = 'xpressbees' where order_id = $1 and kind = 'forward'`, [failedOrder]);
+      const failedNumber = (await one(`select order_number from public.orders where id = $1`, [failedOrder])).order_number;
+      // Clicks a button in the failed order's row (found by its order number).
+      const inRow = (label) =>
+        page.evaluate(
+          (n, text) => {
+            const row = [...document.querySelectorAll('.ap-orders-table tbody tr')].find((r) => [...r.querySelectorAll('.ap-order-link')].some((a) => a.textContent.replace(/\D/g, '').replace(/^0+/, '') === n));
+            const button = [...(row?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === text);
+            button?.click();
+            return Boolean(button);
+          },
+          String(failedNumber),
+          label,
+        );
+      await gotoA(page, '/admin/orders?tab=awb_failed');
+      check(
+        'admin orders: the Failed AWB tab lists the failed booking with its count',
+        await page
+          .waitForFunction((n) => [...document.querySelectorAll('.ap-orders-table .ap-order-link')].some((a) => a.textContent.replace(/\D/g, '').replace(/^0+/, '') === n) && /Failed AWB orders \([1-9]/.test(document.querySelector('.ap-underline-tabs')?.innerText ?? ''), { timeout: 6000 }, String(failedNumber))
+          .then(() => true)
+          .catch(() => false),
+      );
+      await page.screenshot({ path: path.join(SHOTS, 'admin-orders-failed-awb-1280.png'), fullPage: true });
+      await inRow('Notes');
+      check('admin orders: Notes opens a pop-up', await waitSel(page, '.ap-dialog textarea', 4000));
+      await page.type('.ap-dialog textarea', 'Courier refused once');
+      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => /Save note/.test(b.textContent))?.click());
+      check(
+        'admin orders: the pop-up saves the note and closes',
+        (await page.waitForFunction(() => !document.querySelector('.ap-dialog'), { timeout: 6000 }).then(() => true).catch(() => false)) &&
+          (await one(`select note from public.order_fulfilment where order_id = $1`, [failedOrder]))?.note === 'Courier refused once',
+      );
+      await inRow('Regenerate');
+      check(
+        'admin orders: Regenerate books the failed parcel again',
+        (await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /1 parcel booked again/.test(t.textContent)), { timeout: 8000 }).then(() => true).catch(() => false)) &&
+          (await one(`select status from public.shipments where order_id = $1 and kind = 'forward' and status <> 'cancelled'`, [failedOrder]))?.status === 'booked',
+      );
+      await gotoA(page, `/admin/orders?group=sku&q=${failedNumber}`);
+      check('admin orders: Group By SKU ID shows the orders under their SKU', await page.waitForFunction(() => /SKU ID:/.test(document.querySelector('.ap-group-row')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+      await inRow('Cancel');
+      check('admin orders: Cancel asks first', await page.waitForFunction(() => /Cancel KB-/.test(document.querySelector('.ap-dialog')?.innerText ?? ''), { timeout: 4000 }).then(() => true).catch(() => false));
+      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => /Yes, cancel order/.test(b.textContent))?.click());
+      check(
+        'admin orders: the row Cancel cancels the order',
+        (await page.waitForFunction(() => !document.querySelector('.ap-dialog'), { timeout: 6000 }).then(() => true).catch(() => false)) &&
+          (await one(`select status from public.orders where id = $1`, [failedOrder])).status === 'cancelled',
+      );
+      const cancelRow = await one(`select cancelled_at, cancelled_by, cancelled_from from public.orders where id = $1`, [failedOrder]);
+      check(
+        'admin orders: the cancellation records when, by the seller, from the Print step',
+        cancelRow.cancelled_at != null && cancelRow.cancelled_by === 'seller' && cancelRow.cancelled_from === 'print',
+        JSON.stringify(cancelRow),
+      );
+      await gotoA(page, `/admin/orders?tab=cancelled&q=${failedNumber}`);
+      check(
+        'admin orders: the Cancelled tab shows who cancelled, from which step, and the refund',
+        await page
+          .waitForFunction(() => {
+            const row = document.querySelector('.ap-cancelled-table tbody tr')?.innerText ?? '';
+            return /By seller/.test(row) && /Earlier state:\s*Print/.test(row) && /Not applicable/i.test(row);
+          }, { timeout: 6000 })
+          .then(() => true)
+          .catch(() => false),
+        await page.$eval('main', (m) => m.innerText.replace(/\s+/g, ' ').slice(-400)).catch((e) => e.message),
+      );
+      await page.screenshot({ path: path.join(SHOTS, 'admin-orders-cancelled-1280.png'), fullPage: true });
+      await page.$$eval('.ap-tip button', (bs) => bs.find((b) => b.textContent.trim() === 'Download')?.click());
+      check('admin orders: Download makes a spreadsheet of the cancelled orders', await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /1 cancelled order downloaded/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
+    }
+
     // Returns: an undelivered parcel coming back (RTO) and a customer's return pickup.
     const rtoOrder = (await one(`select o.id from public.orders o join public.shipments s on s.order_id = o.id and s.kind = 'forward' where o.status = 'shipped' and s.carrier <> 'delhivery' order by o.created_at desc limit 1`))?.id;
     const stockOfOrder = async (id) => (await one(`select b.stock_quantity as n from public.order_items i join public.books b on b.id = i.book_id where i.order_id = $1 limit 1`, [id]))?.n;
@@ -1494,6 +1583,8 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       'admin returns: Received back cancels the RTO order and puts its book back in stock',
       (await receive('rto-heading')) && (await one(`select status from public.orders where id = $1`, [rtoOrder])).status === 'cancelled' && (await stockOfOrder(rtoOrder)) === rtoStock + 1,
     );
+    const rtoCancel = await one(`select cancelled_by, cancelled_from from public.orders where id = $1`, [rtoOrder]);
+    check('admin returns: the RTO cancellation is recorded as from Shipped', rtoCancel.cancelled_by === 'seller' && rtoCancel.cancelled_from === 'shipped', JSON.stringify(rtoCancel));
     check(
       'admin returns: Received back puts a customer return back in stock once',
       (await receive('returns-heading')) && (await stockOfOrder(dlOrder)) === returnStock + 1 && (await one(`select return_received_at from public.order_fulfilment where order_id = $1`, [dlOrder]))?.return_received_at != null,
@@ -1509,7 +1600,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await sleep(150);
     check('admin shipping at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.screenshot({ path: path.join(SHOTS, 'admin-shipping-delhivery-375.png'), fullPage: true });
-    await gotoA(page, '/admin/orders?stage=all&pay=cod');
+    await gotoA(page, '/admin/orders/track?pay=cod');
     await page.waitForFunction(() => /AWB/.test(document.body.innerText), { timeout: 6000 }).catch(() => {});
     check('admin orders at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), await page.evaluate(() => [...document.querySelectorAll('main *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1 && ![...e.children].some((c) => c.getBoundingClientRect().right > window.innerWidth + 1)).slice(0, 8).map((e) => e.tagName + '.' + e.className + ':' + Math.round(e.getBoundingClientRect().right)).join(' ')));
     await page.screenshot({ path: path.join(SHOTS, 'admin-orders-delhivery-375.png'), fullPage: true });
