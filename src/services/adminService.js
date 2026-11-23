@@ -139,7 +139,7 @@ const OPEN_PARCEL_STATES = ['queued', 'booking', 'booked', 'failed', 'cancel_req
 const LATER_PARCEL_STATES = ['in_transit', 'out_for_delivery', 'delivered', 'exception', 'rto'];
 
 const ORDER_COLUMNS =
-  '*, order_items(sku, title, quantity, unit_price, image_url, book_id), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at, package_weight_g, package_length_cm, package_breadth_cm, package_height_cm, routing_code), order_fulfilment(label_printed_at, packed_at, handed_over_at, note, return_received_at)';
+  '*, order_items(sku, title, quantity, unit_price, image_url, book_id), shipments(id, kind, carrier, status, needs_check, awb_number, xb_order_id, courier_id, courier_name, courier_chosen_by_admin, total_charges, label_url, last_error, attempts, book_after, updated_at, package_weight_g, package_length_cm, package_breadth_cm, package_height_cm, routing_code), order_fulfilment(label_printed_at, packed_at, handed_over_at, note, return_received_at, call_status, call_remarks, cancel_reason, cancel_customer_reason, cancel_remarks)';
 
 // The packing steps of orders to ship. Process orders shows the first three; an order
 // leaves the page once handed over to the courier.
@@ -173,6 +173,52 @@ const intersect = (lists) => {
   if (used.length === 0) return null;
   return used.reduce((acc, list) => acc.filter((id) => list.includes(id)));
 };
+// The customer call status (ShopDeck's Edit pop-up under the customer).
+export const CALL_STATUSES = [
+  ['pending', 'Pending'],
+  ['completed', 'Completed'],
+  ['hold', 'Hold'],
+  ['not_required', 'Not Required'],
+];
+
+export const callStatusLabel = (order) => {
+  const value = fulfilmentOf(order)?.call_status ?? 'pending';
+  return CALL_STATUSES.find(([v]) => v === value)?.[1] ?? 'Pending';
+};
+
+// Why an admin cancels an order, and the customer's own reason when they asked for it.
+// The database accepts exactly these (public.order_cancel_reasons, section 9h).
+export const CUSTOMER_CANCELLED = 'Customer cancelled the order';
+export const CANCEL_REASONS = [
+  'Product out of stock',
+  CUSTOMER_CANCELLED,
+  'RTO risk',
+  'Duplicate order',
+  'Shipped via another courier',
+  'Delivery time is high',
+  'Shipping charges are high',
+  'Pickup did not happen on time',
+  'Order not confirmed by the customer',
+  'Incomplete or unclear customer address',
+  'Other',
+];
+export const CUSTOMER_CANCEL_REASONS = [
+  'Found a better product offline',
+  'Found a better product on another website/marketplace',
+  'Delivery time was longer than expected',
+  'Found better quality for the same product',
+  'Found better price for the same product',
+  'Ordered the wrong size/colour/design',
+  'Ordered by Mistake',
+  'Unavailable to receive the order at the given address',
+  "Changed my mind, don't want the product anymore",
+  'I did not place this order',
+  'Product price has reduced',
+  'Incorrect payment method selected',
+  'Wrong address/details mentioned in order',
+  'Other',
+];
+
 // The step an order was at when it was cancelled (orders.cancelled_from).
 export const CANCELLED_FROM = [
   ['payment_pending', 'Payment pending'],
@@ -232,6 +278,16 @@ async function customerTypeIds(f) {
   return rows.filter((r) => ((orders[r.shipping_phone] ?? 0) >= 2) === (f.customer === 'repeat')).map((r) => r.id);
 }
 
+// Orders by customer call status. Orders never called have no record yet, so "Pending"
+// is every order except those with another status.
+async function callStatusIds(f) {
+  if (!CALL_STATUSES.some(([value]) => value === f.call)) return { only: null, skip: [] };
+  let query = supabase.from('order_fulfilment').select('order_id');
+  query = f.call === 'pending' ? query.neq('call_status', 'pending') : query.eq('call_status', f.call);
+  const ids = idsFrom(unwrap(await query.limit(1000)).data);
+  return f.call === 'pending' ? { only: null, skip: ids } : { only: ids, skip: [] };
+}
+
 async function notedOrderIds() {
   return idsFrom(unwrap(await supabase.from('order_fulfilment').select('order_id').not('note', 'is', null).limit(1000)).data);
 }
@@ -259,6 +315,7 @@ function filtered(query, f, ids, skip, { items = f.items, delayed = f.delayed } 
   if (f.to) query = query.lt(dateColumn, new Date(indiaMidnight(f.to).getTime() + DAY_MS).toISOString());
   if (cancelledTab(f) && f.was) query = query.eq('cancelled_from', f.was);
   if (f.payment) query = query.eq('payment_method', f.payment);
+  if (f.origin) query = query.eq('origin', f.origin);
   if (f.coupon === 'yes') query = query.gt('discount_total', 0);
   if (f.coupon === 'no') query = query.eq('discount_total', 0);
   if (delayed) query = query.lt('created_at', delayedBefore());
@@ -275,16 +332,17 @@ export const ADMIN_ALL_LIMIT = 300;
 // under the same filters.
 export async function adminListOrders(f) {
   const toShip = f.view === 'process' && f.tab === 'to_ship';
-  const [parcelIds, stageIds, dupIds, itemIds, customerIds, notedIds] = await Promise.all([
+  const [parcelIds, stageIds, dupIds, itemIds, customerIds, notedIds, called] = await Promise.all([
     parcelOrderIds(f),
     toShip && f.stage ? supabase.rpc('admin_fulfilment_order_ids', { p_stage: f.stage }).then((r) => idsFrom(unwrap(r).data)) : null,
     ['yes', 'no'].includes(f.dup) ? supabase.rpc('admin_duplicate_order_ids').then((r) => idsFrom(unwrap(r).data)) : null,
     itemOrderIds(f),
     customerTypeIds(f),
     ['yes', 'no'].includes(f.remarks) ? notedOrderIds() : null,
+    callStatusIds(f),
   ]);
-  const ids = intersect([parcelIds, stageIds, f.dup === 'yes' ? dupIds : null, itemIds, customerIds, f.remarks === 'yes' ? notedIds : null]);
-  const skip = [...(f.dup === 'no' ? dupIds : []), ...(f.remarks === 'no' ? notedIds : [])];
+  const ids = intersect([parcelIds, stageIds, f.dup === 'yes' ? dupIds : null, itemIds, customerIds, f.remarks === 'yes' ? notedIds : null, called.only]);
+  const skip = [...(f.dup === 'no' ? dupIds : []), ...(f.remarks === 'no' ? notedIds : []), ...called.skip];
   const from = f.all ? 0 : f.page * ADMIN_PAGE_SIZE;
   const size = f.all ? ADMIN_ALL_LIMIT : ADMIN_PAGE_SIZE;
   const count = (opts) => headCount(filtered(ordersCount(), f, ids, skip, opts));
@@ -372,6 +430,25 @@ export async function adminStageOrderIds(stage) {
   return idsFrom(unwrap(await supabase.rpc('admin_fulfilment_order_ids', { p_stage: stage })).data);
 }
 
+// Places an order from the admin panel (Orders > Place order). items: [{ book_id,
+// quantity, price }]. Returns the new order's id and number.
+export async function adminPlaceOrder({ items, shipping, payment, carrier = null, altPhone = '' }) {
+  const id = unwrap(
+    await supabase.rpc('admin_place_order', { p_items: items, p_shipping: shipping, p_payment: payment, p_carrier: carrier, p_alt_phone: altPhone || null }),
+  ).data;
+  const { data } = unwrap(await supabase.from('orders').select('id, order_number').eq('id', id).single());
+  return data;
+}
+
+export async function adminSetCallStatus(orderId, status, remarks) {
+  unwrap(await supabase.rpc('admin_set_call_status', { p_order: orderId, p_status: status, p_remarks: remarks }));
+}
+
+// Cancels an order with its reason (and the customer's reason, and remarks).
+export async function adminCancelOrder(orderId, { reason, customerReason = null, remarks = null }) {
+  unwrap(await supabase.rpc('admin_cancel_order', { p_order: orderId, p_reason: reason, p_customer_reason: customerReason, p_remarks: remarks }));
+}
+
 export async function adminSetOrderNote(orderId, note) {
   return unwrap(await supabase.rpc('admin_set_order_note', { p_order: orderId, p_note: note })).data;
 }
@@ -399,6 +476,12 @@ export function adminErrorMessage(error) {
   if (error?.hint === 'shipped' || error?.details?.hint === 'shipped') return 'This parcel has already left with the courier, so the order cannot be cancelled now.';
   if (error?.hint === 'booked' || error?.details?.hint === 'booked') return 'The parcel is already booked with the courier, so the address cannot change now. Cancel the booking first.';
   if (error?.hint === 'note' || error?.details?.hint === 'note') return 'Keep the note under 500 characters.';
+  if (error?.hint === 'unavailable' || error?.details?.hint === 'unavailable') return 'Some books are not in stock in that quantity. Lower the quantity or remove them.';
+  if (error?.hint === 'price' || error?.details?.hint === 'price') return 'A selling price is above the MRP. Lower it to the MRP or less.';
+  if (error?.hint === 'remarks' || error?.details?.hint === 'remarks') return 'Keep the remarks under 100 characters.';
+  if (error?.hint === 'cancel_remarks' || error?.details?.hint === 'cancel_remarks') return 'Write what happened in the remarks.';
+  if (error?.hint === 'cancel_reason' || error?.details?.hint === 'cancel_reason') return 'Choose the reason for cancelling.';
+  if (error?.hint === 'duplicate' || error?.details?.hint === 'duplicate') return 'The same book is listed twice. Change its quantity instead.';
   if (error?.code === '23505') return 'Another book already uses this SKU or product code. Use a different one.';
   if (error?.code === '23514') return 'Those values are not allowed. Check that the price is not above the MRP and nothing is negative.';
   if (error?.status === 401 || error?.code === 'PGRST301') return 'Your session has expired. Sign in again.';

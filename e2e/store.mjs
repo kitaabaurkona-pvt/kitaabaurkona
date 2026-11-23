@@ -1008,7 +1008,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     };
     const nav = (label) => page.$$eval('.ap-side .ap-nav-link', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), label);
     check('admin site: the menu shows who is signed in', (await text(page, '.ap-side .ap-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
-    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Non-delivery report (NDR)|RTO & returns|Track orders|Shipping');
+    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Non-delivery report (NDR)|RTO & returns|Track orders|Place order|Shipping');
     check('admin site: "Open the store" goes to the live store', (await page.$$eval('.ap-side-foot a', (as) => as.map((a) => a.href))).includes('https://www.kitaabaurkona.com/'));
 
     await gotoA(page, '/admin');
@@ -1532,14 +1532,51 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       );
       await gotoA(page, `/admin/orders?group=sku&q=${failedNumber}`);
       check('admin orders: Group By SKU ID shows the orders under their SKU', await page.waitForFunction(() => /SKU ID:/.test(document.querySelector('.ap-group-row')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
-      await inRow('Cancel');
-      check('admin orders: Cancel asks first', await page.waitForFunction(() => /Cancel KB-/.test(document.querySelector('.ap-dialog')?.innerText ?? ''), { timeout: 4000 }).then(() => true).catch(() => false));
-      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => /Yes, cancel order/.test(b.textContent))?.click());
+      // Call status: the Edit link under the customer opens ShopDeck's pop-up.
+      await inRow('Edit');
+      check('admin orders: Edit under the customer opens the call status pop-up', await waitSel(page, '.ap-dialog #call-status', 4000));
+      await page.select('.ap-dialog #call-status', 'completed');
+      await page.type('.ap-dialog #call-remarks', 'Asked to deliver after 5 pm');
+      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => b.textContent.trim() === 'Save')?.click());
       check(
-        'admin orders: the row Cancel cancels the order',
-        (await page.waitForFunction(() => !document.querySelector('.ap-dialog'), { timeout: 6000 }).then(() => true).catch(() => false)) &&
-          (await one(`select status from public.orders where id = $1`, [failedOrder])).status === 'cancelled',
+        'admin orders: the call status and remarks are saved and shown on the row',
+        (await page.waitForFunction(() => /Call Status: Completed/.test(document.querySelector('.ap-orders-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false)) &&
+          JSON.stringify(await one(`select call_status, call_remarks from public.order_fulfilment where order_id = $1`, [failedOrder])) === JSON.stringify({ call_status: 'completed', call_remarks: 'Asked to deliver after 5 pm' }),
       );
+      await gotoA(page, `/admin/orders?call=completed&q=${failedNumber}`);
+      check('admin orders: the Call Status filter finds it', await page.waitForFunction(() => document.querySelectorAll('.ap-orders-table tbody tr').length === 1, { timeout: 6000 }).then(() => true).catch(() => false));
+
+      // Hover text, as on ShopDeck.
+      await page.hover('.ap-orders-table .ap-kv .ap-hint');
+      check('admin orders: hovering FSP explains it', await page.waitForFunction(() => document.querySelector('.ap-tooltip')?.textContent === 'Final Selling Price', { timeout: 3000 }).then(() => true).catch(() => false));
+      await page.hover('.ap-summary .ap-stat-flip');
+      check('admin orders: hovering a summary card says what it counts', await page.waitForFunction(() => getComputedStyle(document.querySelector('.ap-summary .ap-stat-about')).visibility === 'visible', { timeout: 3000 }).then(() => true).catch(() => false));
+      await page.mouse.move(5, 5);
+
+      await inRow('Cancel');
+      check('admin orders: Cancel warns first', await page.waitForFunction(() => /You are about to cancel this order/.test(document.querySelector('.ap-dialog')?.innerText ?? ''), { timeout: 4000 }).then(() => true).catch(() => false));
+      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => b.textContent.trim() === 'Cancel Order')?.click());
+      check(
+        'admin orders: then asks for the reason, with ShopDeck’s 11 reasons',
+        await page.waitForFunction(() => /Select reason for cancellation/.test(document.querySelector('.ap-dialog')?.innerText ?? '') && document.querySelectorAll('.ap-dialog .ap-reason').length === 11, { timeout: 4000 }).then(() => true).catch(() => false),
+      );
+      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => b.textContent.trim() === 'Submit')?.click());
+      check('admin orders: a reason is required', /Choose the reason/.test(await page.$eval('.ap-dialog', (d) => d.innerText).catch(() => '')) && (await one(`select status from public.orders where id = $1`, [failedOrder])).status !== 'cancelled');
+      await page.$$eval('.ap-dialog .ap-reason', (bs) => bs.find((b) => b.textContent.trim() === 'Customer cancelled the order')?.click());
+      await waitSel(page, '.ap-dialog #cancel-customer-reason', 3000);
+      await page.select('.ap-dialog #cancel-customer-reason', 'Ordered by Mistake');
+      await page.type('.ap-dialog #cancel-remarks', 'Called the customer');
+      await page.screenshot({ path: path.join(SHOTS, 'admin-orders-cancel-reason-1280.png') });
+      await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => b.textContent.trim() === 'Submit')?.click());
+      check(
+        'admin orders: the row Cancel cancels the order with its reasons',
+        (await page.waitForFunction(() => !document.querySelector('.ap-dialog'), { timeout: 6000 }).then(() => true).catch(() => false)) &&
+          (await one(`select status from public.orders where id = $1`, [failedOrder])).status === 'cancelled' &&
+          JSON.stringify(await one(`select cancel_reason, cancel_customer_reason, cancel_remarks from public.order_fulfilment where order_id = $1`, [failedOrder])) ===
+            JSON.stringify({ cancel_reason: 'Customer cancelled the order', cancel_customer_reason: 'Ordered by Mistake', cancel_remarks: 'Called the customer' }),
+      );
+      const readerReasons = await asRole(db, { role: 'authenticated', sub: USERS['reader@example.com'].id }, (tx) => tx.query(`select count(*)::int as n from public.order_fulfilment where cancel_reason is not null`));
+      check('admin orders: customers cannot read the cancel reasons', readerReasons.rows[0].n === 0);
       const cancelRow = await one(`select cancelled_at, cancelled_by, cancelled_from from public.orders where id = $1`, [failedOrder]);
       check(
         'admin orders: the cancellation records when, by the seller, from the Print step',
@@ -1552,7 +1589,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
         await page
           .waitForFunction(() => {
             const row = document.querySelector('.ap-cancelled-table tbody tr')?.innerText ?? '';
-            return /By seller/.test(row) && /Earlier state:\s*Print/.test(row) && /Not applicable/i.test(row);
+            return /By seller/.test(row) && /Reason:\s*Customer cancelled the order/.test(row) && /Customer reason:\s*Ordered by Mistake/.test(row) && /Earlier state:\s*Print/.test(row) && /Not applicable/i.test(row);
           }, { timeout: 6000 })
           .then(() => true)
           .catch(() => false),
@@ -1561,6 +1598,58 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       await page.screenshot({ path: path.join(SHOTS, 'admin-orders-cancelled-1280.png'), fullPage: true });
       await page.$$eval('.ap-tip button', (bs) => bs.find((b) => b.textContent.trim() === 'Download')?.click());
       check('admin orders: Download makes a spreadsheet of the cancelled orders', await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /1 cancelled order downloaded/.test(t.textContent)), { timeout: 6000 }).then(() => true).catch(() => false));
+    }
+
+    // Place order: an order taken by phone, entered in the admin panel's five steps.
+    {
+      const pick = await one(`select id, sku, price, stock_quantity from public.books where stock_quantity >= 2 and price > 10 order by stock_quantity desc limit 1`);
+      const sellAt = Math.floor(Number(pick.price)) - 5;
+      const clickText = (selector, text) => page.$$eval(selector, (bs, t) => bs.find((b) => b.textContent.trim() === t)?.click(), text);
+      await gotoA(page, '/admin/orders/new');
+      check('place order: the first step asks for the customer', await waitSel(page, '#po-phone', 8000));
+      await clickText('.ap-po-actions button', 'Next');
+      check('place order: missing customer details are pointed out', await page.waitForFunction(() => document.querySelectorAll('.ap-field-error').length >= 5, { timeout: 4000 }).then(() => true).catch(() => false));
+      await page.type('#po-phone', '9123456780');
+      await page.type('#po-name', 'Phone Order Test');
+      await clickText('#po-payment button', 'COD');
+      await page.type('#po-pincode', '313001');
+      await page.type('#po-city', 'Udaipur');
+      await page.select('#po-state', 'Rajasthan');
+      await page.type('#po-house', '5');
+      await page.type('#po-street', 'Lake Road');
+      await page.waitForFunction(() => /Delivery available/.test(document.querySelector('.ap-pin')?.textContent ?? ''), { timeout: 6000 }).catch(() => {});
+      await page.screenshot({ path: path.join(SHOTS, 'admin-place-order-1-1280.png'), fullPage: true });
+      await clickText('.ap-po-actions button', 'Next');
+      check('place order: step 2 searches the books', await waitSel(page, '#po-book-search', 4000));
+      await page.type('#po-book-search', pick.sku);
+      await page.waitForFunction(() => [...document.querySelectorAll('.ap-po-results button')].some((b) => b.textContent.trim() === 'Add'), { timeout: 6000 }).catch(() => {});
+      await clickText('.ap-po-results button', 'Add');
+      await waitSel(page, `#po-price-${pick.id}`, 4000);
+      await page.$eval(`#po-price-${pick.id}`, (i) => i.select());
+      await page.keyboard.press('Backspace');
+      await page.type(`#po-price-${pick.id}`, String(sellAt));
+      await page.screenshot({ path: path.join(SHOTS, 'admin-place-order-2-1280.png'), fullPage: true });
+      await clickText('.ap-po-actions button', 'Next');
+      check('place order: step 3 offers both couriers', await page.waitForFunction(() => document.querySelectorAll('.ap-po-courier input[type=radio]').length === 2, { timeout: 4000 }).then(() => true).catch(() => false));
+      await page.click('.ap-po-courier input[value="xpressbees"]');
+      await clickText('.ap-po-actions button', 'Next');
+      check('place order: the review shows the cash to collect', await page.waitForFunction((n) => new RegExp(`Cash to collect ₹${n}`).test(document.querySelector('main')?.innerText ?? ''), { timeout: 4000 }, String(sellAt)).then(() => true).catch(() => false));
+      await clickText('.ap-po-actions button', 'Place order');
+      check('place order: the order is placed and its number shown', await page.waitForFunction(() => /Order KB-\d+ placed/.test(document.querySelector('.ap-po-done')?.innerText ?? ''), { timeout: 8000 }).then(() => true).catch(() => false));
+      await page.screenshot({ path: path.join(SHOTS, 'admin-place-order-5-1280.png'), fullPage: true });
+      const placedRow = await one(`select o.*, (select unit_price from public.order_items i where i.order_id = o.id) as unit_price, (select carrier from public.shipments s where s.order_id = o.id and s.kind = 'forward') as carrier from public.orders o where o.origin = 'admin' order by o.created_at desc limit 1`);
+      check(
+        'place order: saved as a confirmed COD order from the admin panel, at the chosen price, with no customer account',
+        placedRow && placedRow.status === 'confirmed' && placedRow.payment_method === 'cod' && placedRow.user_id === null && Number(placedRow.unit_price) === sellAt && placedRow.shipping_address === '5, Lake Road' && placedRow.carrier === 'xpressbees',
+        JSON.stringify(placedRow && { status: placedRow.status, user: placedRow.user_id, price: placedRow.unit_price, address: placedRow.shipping_address, carrier: placedRow.carrier }),
+      );
+      check('place order: the book leaves stock', (await one(`select stock_quantity from public.books where id = $1`, [pick.id])).stock_quantity === pick.stock_quantity - 1);
+      const sneaky = await asRole(db, { role: 'authenticated', sub: USERS['reader@example.com'].id }, (tx) =>
+        tx.query(`select public.admin_place_order($1::jsonb, $2::jsonb, 'cod')`, [JSON.stringify([{ book_id: pick.id, quantity: 1 }]), JSON.stringify({ name: 'X Y', phone: '9123456780', address: '5, Lake Road', city: 'Udaipur', state: 'Rajasthan', pincode: '313001' })]).then(() => 'placed', (e) => e.code),
+      );
+      check('place order: customers cannot place orders this way', sneaky === '42501', sneaky);
+      await clickText('.ap-po-done a', 'Open in Process orders');
+      check('place order: the new order is in Process orders, marked as from the admin panel', await page.waitForFunction(() => /Admin panel/.test(document.querySelector('.ap-orders-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
     }
 
     // Returns: an undelivered parcel coming back (RTO) and a customer's return pickup.

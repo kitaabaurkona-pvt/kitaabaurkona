@@ -9,8 +9,11 @@ import {
   adminOrderSummary,
   adminSetStage,
   adminStageOrderIds,
+  CALL_STATUSES,
+  callStatusLabel,
   CANCELLED_FROM,
   deliverByOf,
+  SHIP_WITHIN_DAYS,
   fulfilmentOf,
   NEXT_STATUSES,
   ORDER_TABS,
@@ -29,11 +32,12 @@ import { LoadError, StateBlock } from '../../components/store/States';
 import { LinesSkeleton } from '../../components/store/Skeletons';
 import PageHead from '../../components/admin/PageHead';
 import OrderDrawer from '../../components/admin/OrderDrawer';
-import { CancelDialog, NoteDialog } from '../../components/admin/OrderDialogs';
+import { CallStatusDialog, CancelDialog, NoteDialog } from '../../components/admin/OrderDialogs';
 import DelhiveryPickup from '../../components/admin/DelhiveryPickup';
+import HoverHint from '../../components/admin/HoverHint';
 
 const NUMERIC_SEARCH = ['order', 'phone', 'min_qty', 'max_qty'];
-const MORE_KEYS = ['pay', 'customer', 'remarks', 'coupon'];
+const MORE_KEYS = ['pay', 'customer', 'call', 'remarks', 'coupon', 'origin'];
 const FILTER_KEYS = ['q', 'from', 'to', 'carrier', 'delayed', 'dup', 'was', ...MORE_KEYS];
 const PRINT_KINDS = [
   ['labels', 'Label'],
@@ -72,6 +76,21 @@ const trackingUrl = (parcel) =>
   carrierOf(parcel) === 'delhivery'
     ? `https://www.delhivery.com/track-v2/package/${parcel.awb_number}`
     : `https://www.xpressbees.com/shipment/tracking?awbNo=${parcel.awb_number}`;
+// The parcel's size and weight, for the Charge hover text.
+function parcelSize(parcel) {
+  const dims = [parcel.package_length_cm, parcel.package_breadth_cm, parcel.package_height_cm];
+  const lines = [];
+  if (dims.every((d) => d != null)) lines.push(`Dimension: ${dims.map((d) => Number(d)).join(' x ')} (CM)`);
+  if (parcel.package_weight_g != null) lines.push(`Weight: ${Number(parcel.package_weight_g) / 1000} KG`);
+  if (lines.length === 0) return 'Courier charge for this parcel';
+  return lines.map((line, i) => (
+    <span key={line} className="ap-tooltip-line">
+      {i > 0 && <br />}
+      {line}
+    </span>
+  ));
+}
+
 // Orders grouped by the books in them (Group By SKU ID).
 const skuKey = (order) =>
   order.order_items
@@ -115,13 +134,16 @@ const csvCell = (value) => {
 };
 
 function downloadCancelled(orders, refunds) {
-  const head = ['Cancelled on', 'Cancelled by', 'Order', 'Placed on', 'Earlier state', 'AWB', 'Courier', 'Payment', 'Order value', 'Refund amount', 'Refund state', 'Customer', 'Mobile', 'Note'];
+  const head = ['Cancelled on', 'Cancelled by', 'Reason', 'Customer reason', 'Remarks', 'Order', 'Placed on', 'Earlier state', 'AWB', 'Courier', 'Payment', 'Order value', 'Refund amount', 'Refund state', 'Customer', 'Mobile', 'Note'];
   const rows = orders.map((o) => {
     const parcel = lastForward(o);
     const refund = refundOf(o, refunds[o.id]);
     return [
       o.cancelled_at ? dateTime.format(new Date(o.cancelled_at)).replace(',', '') : '',
       CANCELLED_BY[o.cancelled_by] ?? '',
+      fulfilmentOf(o)?.cancel_reason ?? '',
+      fulfilmentOf(o)?.cancel_customer_reason ?? '',
+      fulfilmentOf(o)?.cancel_remarks ?? '',
       formatOrderNumber(o.order_number),
       dateTime.format(new Date(o.created_at)).replace(',', ''),
       wasLabel(o.cancelled_from),
@@ -207,6 +229,20 @@ function CancelledRow({ order, refund, onOpen, onNotes }) {
         {refund.at && <span className="ap-cell-meta">Refunded {dayMonth.format(new Date(refund.at))}</span>}
       </td>
       <td className="ap-col-actions" data-label="Status & details">
+        <span className="ap-cell-meta">Reason:</span>
+        <span className="ap-strong">{fulfilmentOf(order)?.cancel_reason ?? 'Not recorded'}</span>
+        {fulfilmentOf(order)?.cancel_customer_reason && (
+          <>
+            <span className="ap-cell-meta">Customer reason:</span>
+            <span className="ap-strong">{fulfilmentOf(order).cancel_customer_reason}</span>
+          </>
+        )}
+        {fulfilmentOf(order)?.cancel_remarks && (
+          <>
+            <span className="ap-cell-meta">Remarks:</span>
+            <span className="ap-strong">{fulfilmentOf(order).cancel_remarks}</span>
+          </>
+        )}
         <span className="ap-cell-meta">Earlier state:</span>
         <span className="ap-strong">{wasLabel(order.cancelled_from)}</span>
         {note && (
@@ -235,21 +271,33 @@ function Summary({ data, onPick }) {
   );
   return (
     <div className="ap-summary">
-      <button type="button" className="ap-stat" onClick={() => onPick({})}>
-        <span className="ap-stat-value">{formatCount(data.total)}</span>
-        <span className="ap-stat-label">Total non-dispatched orders</span>
+      <button type="button" className="ap-stat ap-stat-flip" onClick={() => onPick({})}>
+        <span className="ap-stat-face">
+          <span className="ap-stat-value">{formatCount(data.total)}</span>
+          <span className="ap-stat-label">Total non-dispatched orders</span>
+        </span>
+        <span className="ap-stat-about">
+          <strong>Total non-dispatched orders</strong>
+          Total orders that have not been dispatched yet.
+        </span>
       </button>
       <div className="ap-stat ap-sum-stages">
         {stage('print', 'Non-dispatched orders in Print')}
         {stage('pack', 'In Pack')}
         {stage('handover', 'In Handover')}
       </div>
-      <button type="button" className="ap-stat" data-tone={data.delayed > 0 ? 'danger' : undefined} onClick={() => onPick({ delayed: '1' })}>
-        <span className="ap-stat-value">
-          {formatCount(data.delayed)}
-          {data.delayed > 0 && <span className="ap-pill">Dispatch to avoid RTO</span>}
+      <button type="button" className="ap-stat ap-stat-flip" data-tone={data.delayed > 0 ? 'danger' : undefined} onClick={() => onPick({ delayed: '1' })}>
+        <span className="ap-stat-face">
+          <span className="ap-stat-value">
+            {formatCount(data.delayed)}
+            {data.delayed > 0 && <span className="ap-pill">Dispatch to avoid RTO</span>}
+          </span>
+          <span className="ap-stat-label">Delayed non-dispatched orders</span>
         </span>
-        <span className="ap-stat-label">Delayed non-dispatched orders</span>
+        <span className="ap-stat-about">
+          <strong>Delayed non-dispatched orders</strong>
+          Orders not dispatched within {SHIP_WITHIN_DAYS} days of being placed. Please dispatch soon to minimise RTOs.
+        </span>
       </button>
     </div>
   );
@@ -369,7 +417,7 @@ function useTip(stage) {
   return [hidden, hide];
 }
 
-function OrderRow({ order, mode, now, selectable, picked, customerOrders, productCodes, working, onPick, onOpen, onNotes, onCancel, onStage, onPrint, onRegenerate, onPhone }) {
+function OrderRow({ order, mode, now, selectable, picked, customerOrders, productCodes, working, onPick, onOpen, onNotes, onCall, onCancel, onStage, onPrint, onRegenerate, onPhone }) {
   const note = fulfilmentOf(order)?.note;
   const first = order.order_items[0];
   const more = order.order_items.length - 1;
@@ -490,7 +538,7 @@ function OrderRow({ order, mode, now, selectable, picked, customerOrders, produc
         {(mode === 'track' || mode === 'pending' || mode === 'cancelled') && <OrderStatus status={order.status} />}
         <span className="ap-cell-meta">{ago(order.created_at, now)}</span>
         <span className="ap-cell-meta tnum">{dateTime.format(created).replace(',', '')}</span>
-        <span className="ap-cell-meta">Website</span>
+        <span className="ap-cell-meta">{order.origin === 'admin' ? 'Admin panel' : 'Website'}</span>
         <button type="button" className="ap-order-link" onClick={() => onOpen(order.id)}>
           {formatOrderNumber(order.order_number)}
         </button>
@@ -525,15 +573,45 @@ function OrderRow({ order, mode, now, selectable, picked, customerOrders, produc
             <dd>{cod ? 'COD' : 'Prepaid'}</dd>
           </div>
           <div>
-            <dt>FSP</dt>
+            <dt>
+              <HoverHint tip="Final Selling Price">FSP</HoverHint>
+            </dt>
             <dd>{formatPrice(total)}</dd>
           </div>
           <div>
-            <dt>Total discount</dt>
+            <dt>
+              <HoverHint
+                tip={
+                  <>
+                    Coupon &amp; offer discount: {formatPrice(order.discount_total ?? 0)}
+                    <br />
+                    Total discount: {formatPrice(order.discount_total ?? 0)}
+                  </>
+                }
+              >
+                Total discount
+              </HoverHint>
+            </dt>
             <dd>{formatPrice(order.discount_total ?? 0)}</dd>
           </div>
           <div>
-            <dt>Amt. to collect</dt>
+            <dt>
+              <HoverHint
+                tip={
+                  <>
+                    Amount to Collect
+                    {cod && Number(order.amount_paid ?? 0) > 0 && (
+                      <>
+                        <br />
+                        Paid online: {formatPrice(order.amount_paid)}
+                      </>
+                    )}
+                  </>
+                }
+              >
+                Amt. to collect
+              </HoverHint>
+            </dt>
             <dd>{formatPrice(toCollect)}</dd>
           </div>
         </dl>
@@ -553,11 +631,13 @@ function OrderRow({ order, mode, now, selectable, picked, customerOrders, produc
             ))}
         </span>
         <span className="ap-strong">{order.shipping_name}</span>
-        <span className="ap-cell-meta ap-clamp ap-clamp-1" title={`${order.shipping_address}, ${order.shipping_city}, ${order.shipping_state} ${order.shipping_pincode}`}>
+        <HoverHint className="ap-cell-meta ap-clamp ap-clamp-1 ap-hint-plain" tip={`${order.shipping_address}, ${order.shipping_city}, ${order.shipping_state} - ${order.shipping_pincode}`}>
           {order.shipping_address}, {order.shipping_city}, {order.shipping_state} {order.shipping_pincode}
-        </span>
-        {['pending_payment', 'confirmed', 'paid'].includes(order.status) && (
-          <button type="button" className="ap-text-link ap-edit-link" onClick={() => onOpen(order.id, 'address')}>
+        </HoverHint>
+        {mode !== 'track' && <span className="ap-cell-meta">Call Status: {callStatusLabel(order)}</span>}
+        {mode !== 'track' && fulfilmentOf(order)?.call_remarks && <span className="ap-cell-meta ap-clamp">“{fulfilmentOf(order).call_remarks}”</span>}
+        {mode !== 'track' && (
+          <button type="button" className="ap-text-link ap-edit-link" onClick={() => onCall(order)}>
             Edit
           </button>
         )}
@@ -588,8 +668,14 @@ function OrderRow({ order, mode, now, selectable, picked, customerOrders, produc
                 {parcelState}
               </span>
             )}
-            {parcel.total_charges != null && <span className="ap-cell-meta">Charge: {formatPrice(parcel.total_charges)}</span>}
-            <span className="ap-cell-meta">Partner: {parcel.courier_name ?? CARRIER_NAMES[carrierOf(parcel)]}</span>
+            {parcel.total_charges != null && (
+              <span className="ap-cell-meta">
+                <HoverHint tip={parcelSize(parcel)}>Charge: {formatPrice(parcel.total_charges)}</HoverHint>
+              </span>
+            )}
+            <HoverHint className="ap-cell-meta ap-clamp ap-clamp-1 ap-hint-plain" tip={parcel.courier_name ?? CARRIER_NAMES[carrierOf(parcel)]}>
+              Partner: {parcel.courier_name ?? CARRIER_NAMES[carrierOf(parcel)]}
+            </HoverHint>
           </>
         ) : (
           <span className="ap-cell-meta">No parcel yet</span>
@@ -644,8 +730,10 @@ function AdminOrders({ view = 'process' }) {
     dup: waitingTab && ['yes', 'no'].includes(params.get('dup')) ? params.get('dup') : '',
     payment: ['cod', 'online'].includes(params.get('pay')) ? params.get('pay') : '',
     customer: ['new', 'repeat'].includes(params.get('customer')) ? params.get('customer') : '',
+    call: CALL_STATUSES.some(([value]) => value === params.get('call')) ? params.get('call') : '',
     remarks: ['yes', 'no'].includes(params.get('remarks')) ? params.get('remarks') : '',
     coupon: ['yes', 'no'].includes(params.get('coupon')) ? params.get('coupon') : '',
+    origin: ['website', 'admin'].includes(params.get('origin')) ? params.get('origin') : '',
     was: process && tab === 'cancelled' && CANCELLED_FROM.some(([value]) => value === params.get('was')) ? params.get('was') : '',
     delayed: waitingTab && params.get('delayed') === '1',
     items,
@@ -668,6 +756,7 @@ function AdminOrders({ view = 'process' }) {
   const [open, setOpen] = useState({ id: null, focus: null });
   const [noteFor, setNoteFor] = useState(null);
   const [cancelFor, setCancelFor] = useState(null);
+  const [callFor, setCallFor] = useState(null);
   const [tipHidden, hideTip] = useTip(stage || tab);
   const { show } = useToast();
   // "Now" for ages and late badges: when the list arrived.
@@ -933,6 +1022,7 @@ function AdminOrders({ view = 'process' }) {
       onPick={togglePick}
       onOpen={openSheet}
       onNotes={setNoteFor}
+      onCall={setCallFor}
       onCancel={setCancelFor}
       onStage={moveRow}
       onPrint={printOne}
@@ -1123,6 +1213,17 @@ function AdminOrders({ view = 'process' }) {
                 <option value="new">New</option>
                 <option value="repeat">Repeat</option>
               </select>
+              <label className="visually-hidden" htmlFor="orders-call">
+                Call status
+              </label>
+              <select id="orders-call" className="select select-sm" value={filters.call} onChange={(e) => update({ call: e.target.value })}>
+                <option value="">Call Status</option>
+                {CALL_STATUSES.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
               <label className="visually-hidden" htmlFor="orders-remarks">
                 Notes
               </label>
@@ -1138,6 +1239,14 @@ function AdminOrders({ view = 'process' }) {
                 <option value="">Coupon</option>
                 <option value="yes">Discount used</option>
                 <option value="no">No discount</option>
+              </select>
+              <label className="visually-hidden" htmlFor="orders-origin">
+                Origin
+              </label>
+              <select id="orders-origin" className="select select-sm" value={filters.origin} onChange={(e) => update({ origin: e.target.value })}>
+                <option value="">Origin</option>
+                <option value="website">Website</option>
+                <option value="admin">Admin panel</option>
               </select>
             </>
           )}
@@ -1385,9 +1494,10 @@ function AdminOrders({ view = 'process' }) {
         )}
       </section>
 
-      <OrderDrawer order={openOrder} focus={open.focus} onClose={() => setOpen({ id: null, focus: null })} onChanged={changed} onPrint={printOne} printing={rowWorking === open.id} />
+      <OrderDrawer order={openOrder} focus={open.focus} onClose={() => setOpen({ id: null, focus: null })} onChanged={changed} onPrint={printOne} onCancel={setCancelFor} printing={rowWorking === open.id} />
       <NoteDialog order={noteFor} onClose={() => setNoteFor(null)} onChanged={changed} />
       <CancelDialog order={cancelFor} onClose={() => setCancelFor(null)} onChanged={changed} />
+      <CallStatusDialog order={callFor} onClose={() => setCallFor(null)} onChanged={changed} />
     </div>
   );
 }

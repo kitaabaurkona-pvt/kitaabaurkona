@@ -242,7 +242,7 @@ const ACTION_LABELS = {
   cancelled: 'Cancel order',
 };
 
-function OrderActions({ order, onChanged }) {
+function OrderActions({ order, onChanged, onCancel }) {
   const [working, setWorking] = useState(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [error, setError] = useState(null);
@@ -281,7 +281,7 @@ function OrderActions({ order, onChanged }) {
             </button>
           ))}
         {next.includes('cancelled') && !confirmCancel && (
-          <button type="button" className="btn btn-danger btn-sm" aria-disabled={Boolean(working) || undefined} onClick={() => !working && setConfirmCancel(true)}>
+          <button type="button" className="btn btn-danger btn-sm" aria-disabled={Boolean(working) || undefined} onClick={() => !working && (onCancel ? onCancel(order) : setConfirmCancel(true))}>
             Cancel order
           </button>
         )}
@@ -306,7 +306,7 @@ function OrderActions({ order, onChanged }) {
 // Everything about one order, in a panel that slides in from the right: the books, the
 // money, the address, the parcel (carrier, courier, booking, label) and status changes.
 // focus: the section to show first ('address' also opens the address form, 'parcel').
-function OrderDrawer({ order, focus = null, onClose, onChanged, onPrint, printing = false }) {
+function OrderDrawer({ order, focus = null, onClose, onChanged, onPrint, onCancel, printing = false }) {
   const orderId = order?.id;
   useEffect(() => {
     if (!orderId || !focus) return undefined;
@@ -423,7 +423,7 @@ function OrderDrawer({ order, focus = null, onClose, onChanged, onPrint, printin
 
               <section className="ap-sheet-section" aria-labelledby="sheet-status">
                 <h3 id="sheet-status">Order status</h3>
-                <OrderActions order={order} onChanged={onChanged} />
+                <OrderActions order={order} onChanged={onChanged} onCancel={onCancel} />
                 {(NEXT_STATUSES[order.status] ?? []).length === 0 && <p className="page-meta">Nothing left to change.</p>}
               </section>
             </div>

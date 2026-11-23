@@ -2809,6 +2809,299 @@ update public.orders set cancelled_at = updated_at
 where status = 'cancelled' and cancelled_at is null;
 
 -- -----------------------------------------------------------------------------
+-- 9g. PLACE ORDER (admin: orders taken by phone or WhatsApp)
+-- -----------------------------------------------------------------------------
+-- An admin can place an order for a customer (Orders > Place order, as on ShopDeck).
+--   origin      'website' (the customer ordered on the site) or 'admin' (placed here)
+--   placed_by   the admin who placed it
+--   alt_phone   a second mobile number for the courier, optional
+-- Such an order belongs to the customer's account when exactly one account has that
+-- mobile number (they then see it under My orders); otherwise to no account, so
+-- user_id may be empty for orders placed by an admin.
+alter table public.orders alter column user_id drop not null;
+alter table public.orders add column if not exists origin text not null default 'website';
+alter table public.orders drop constraint if exists orders_origin_check;
+alter table public.orders add constraint orders_origin_check check (origin in ('website', 'admin'));
+alter table public.orders add column if not exists placed_by uuid references auth.users (id) on delete set null;
+alter table public.orders add column if not exists alt_phone text;
+alter table public.orders drop constraint if exists orders_alt_phone_check;
+alter table public.orders add constraint orders_alt_phone_check check (alt_phone is null or alt_phone ~ '^[6-9][0-9]{9}$');
+alter table public.orders drop constraint if exists orders_user_or_admin_check;
+alter table public.orders add constraint orders_user_or_admin_check check (user_id is not null or origin = 'admin');
+
+-- Places an order from the admin panel. items: [{ "book_id": uuid, "quantity": 1-10,
+-- "price": selling price per copy, optional, 0 to the MRP }] (1 to 50 different books).
+-- shipping: { name, phone, address, city, state, pincode }. payment: 'cod' (confirmed,
+-- cash collected on delivery) or 'online' (prepaid: the customer has already paid the
+-- shop, so it is marked paid). carrier: 'xpressbees' or 'delhivery' for its parcel, or
+-- null for the default. Books leave stock at once and the parcel is queued for booking
+-- like any confirmed order.
+create or replace function public.admin_place_order(
+  p_items jsonb, p_shipping jsonb, p_payment text, p_carrier text default null, p_alt_phone text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+  v_user uuid;
+  v_lines integer;
+  v_distinct integer;
+  v_unavailable integer;
+  v_bad_price integer;
+  v_phone text := btrim(coalesce(p_shipping ->> 'phone', ''));
+  v_alt text := nullif(btrim(coalesce(p_alt_phone, '')), '');
+  v_ship uuid;
+  v_ship_carrier text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can place orders here' using errcode = '42501';
+  end if;
+  if p_payment is null or p_payment not in ('online', 'cod') then
+    raise exception 'Choose a payment mode' using errcode = '22023';
+  end if;
+  if p_carrier is not null and p_carrier not in ('xpressbees', 'delhivery') then
+    raise exception 'Unknown courier partner' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) not between 1 and 50 then
+    raise exception 'An order needs between 1 and 50 different books' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_shipping) is distinct from 'object' then
+    raise exception 'Customer details are missing' using errcode = '22023';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(p_items) as e
+    where coalesce(e ->> 'book_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or coalesce(e ->> 'quantity', '') !~ '^[0-9]{1,2}$'
+       or (e ? 'price' and jsonb_typeof(e -> 'price') <> 'null' and (e ->> 'price') !~ '^[0-9]{1,7}(\.[0-9]{1,2})?$')
+  ) then
+    raise exception 'Some book lines are not valid' using errcode = '22023';
+  end if;
+
+  -- Lock the books so two orders cannot take the same last copy.
+  perform 1 from public.books b
+  where b.id in (select (e ->> 'book_id')::uuid from jsonb_array_elements(p_items) as e)
+  for update;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity,
+      nullif(e ->> 'price', '')::numeric as price
+    from jsonb_array_elements(p_items) as e
+  )
+  select
+    count(*),
+    count(distinct r.book_id),
+    count(*) filter (where b.id is null or r.quantity not between 1 and 10 or b.stock_quantity < r.quantity),
+    count(*) filter (where b.id is not null and r.price is not null and (r.price < 0 or r.price > b.mrp))
+  into v_lines, v_distinct, v_unavailable, v_bad_price
+  from req r
+  left join public.books b on b.id = r.book_id;
+
+  if v_distinct <> v_lines then
+    raise exception 'The same book appears twice' using errcode = '22023', hint = 'duplicate';
+  end if;
+  if v_unavailable > 0 then
+    raise exception 'Some books are not in stock in that quantity' using errcode = 'P0001', hint = 'unavailable';
+  end if;
+  if v_bad_price > 0 then
+    raise exception 'A selling price is above the MRP' using errcode = 'P0001', hint = 'price';
+  end if;
+
+  -- The customer's account, when exactly one account has this mobile number.
+  select case when count(*) = 1 then min(u.id::text)::uuid end into v_user
+  from public.users u where u.phone = v_phone;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity,
+      nullif(e ->> 'price', '')::numeric as price
+    from jsonb_array_elements(p_items) as e
+  )
+  insert into public.orders (
+    user_id, status, payment_method, item_count, subtotal, mrp_total, amount_paid,
+    shipping_name, shipping_phone, shipping_address, shipping_city, shipping_state, shipping_pincode,
+    origin, placed_by, alt_phone
+  )
+  select
+    v_user,
+    case when p_payment = 'cod' then 'confirmed' else 'paid' end,
+    p_payment,
+    sum(r.quantity),
+    sum(coalesce(r.price, b.price) * r.quantity),
+    sum(b.mrp * r.quantity),
+    case when p_payment = 'online' then sum(coalesce(r.price, b.price) * r.quantity) else 0 end,
+    btrim(p_shipping ->> 'name'), v_phone, btrim(p_shipping ->> 'address'),
+    btrim(p_shipping ->> 'city'), btrim(p_shipping ->> 'state'), btrim(p_shipping ->> 'pincode'),
+    'admin', auth.uid(), v_alt
+  from req r
+  join public.books b on b.id = r.book_id
+  returning id into v_order;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity,
+      nullif(e ->> 'price', '')::numeric as price
+    from jsonb_array_elements(p_items) as e
+  )
+  insert into public.order_items (order_id, book_id, sku, title, image_url, unit_price, unit_mrp, quantity)
+  select v_order, b.id, b.sku, b.title, b.image_urls[1], coalesce(r.price, b.price), b.mrp, r.quantity
+  from req r
+  join public.books b on b.id = r.book_id;
+
+  update public.books b
+  set stock_quantity = b.stock_quantity - i.quantity
+  from public.order_items i
+  where i.order_id = v_order and b.id = i.book_id;
+
+  -- The parcel was queued with the default carrier when the order was saved.
+  if p_carrier is not null then
+    select id, carrier into v_ship, v_ship_carrier from public.shipments
+    where order_id = v_order and kind = 'forward' and status <> 'cancelled';
+    if v_ship is not null and v_ship_carrier <> p_carrier then
+      perform public.set_shipment_carrier(v_ship, p_carrier, auth.uid());
+    end if;
+  end if;
+
+  return v_order;
+end;
+$$;
+
+revoke execute on function public.admin_place_order(jsonb, jsonb, text, text, text) from public, anon;
+grant execute on function public.admin_place_order(jsonb, jsonb, text, text, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 9h. CALL STATUS AND CANCEL REASONS (admin only)
+-- -----------------------------------------------------------------------------
+-- As on ShopDeck: each order to ship has a customer call status and short remarks
+-- (the Edit link under the customer), and a cancellation by an admin records why
+-- (shared with the courier when needed). Kept in order_fulfilment, which only admins
+-- can read.
+alter table public.order_fulfilment add column if not exists call_status text not null default 'pending';
+alter table public.order_fulfilment drop constraint if exists order_fulfilment_call_status_check;
+alter table public.order_fulfilment add constraint order_fulfilment_call_status_check
+  check (call_status in ('pending', 'completed', 'hold', 'not_required'));
+alter table public.order_fulfilment add column if not exists call_remarks text;
+alter table public.order_fulfilment drop constraint if exists order_fulfilment_call_remarks_check;
+alter table public.order_fulfilment add constraint order_fulfilment_call_remarks_check
+  check (call_remarks is null or char_length(call_remarks) <= 100);
+alter table public.order_fulfilment add column if not exists cancel_reason text;
+alter table public.order_fulfilment add column if not exists cancel_customer_reason text;
+alter table public.order_fulfilment add column if not exists cancel_remarks text;
+alter table public.order_fulfilment drop constraint if exists order_fulfilment_cancel_text_check;
+alter table public.order_fulfilment add constraint order_fulfilment_cancel_text_check check (
+  (cancel_reason is null or char_length(cancel_reason) <= 100)
+  and (cancel_customer_reason is null or char_length(cancel_customer_reason) <= 100)
+  and (cancel_remarks is null or char_length(cancel_remarks) <= 100)
+);
+
+-- The reasons an admin picks from when cancelling (ShopDeck's "Select reason for
+-- cancellation"), and the customer's own reasons (ShopDeck's Settings > Order
+-- Cancellation). The admin panel shows the same lists.
+create or replace function public.order_cancel_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array[
+    'Product out of stock', 'Customer cancelled the order', 'RTO risk',
+    'Duplicate order', 'Shipped via another courier', 'Delivery time is high',
+    'Shipping charges are high', 'Pickup did not happen on time', 'Order not confirmed by the customer',
+    'Incomplete or unclear customer address', 'Other'
+  ]
+$$;
+
+create or replace function public.order_customer_cancel_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array[
+    'Found a better product offline', 'Found a better product on another website/marketplace',
+    'Delivery time was longer than expected', 'Found better quality for the same product',
+    'Found better price for the same product', 'Ordered the wrong size/colour/design',
+    'Ordered by Mistake', 'Unavailable to receive the order at the given address',
+    'Changed my mind, don''t want the product anymore', 'I did not place this order',
+    'Product price has reduced', 'Incorrect payment method selected',
+    'Wrong address/details mentioned in order', 'Other'
+  ]
+$$;
+
+-- Saves the customer call status and remarks (the Edit pop-up under the customer).
+create or replace function public.admin_set_call_status(p_order uuid, p_status text, p_remarks text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_remarks text := nullif(btrim(coalesce(p_remarks, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if p_status is null or p_status not in ('pending', 'completed', 'hold', 'not_required') then
+    raise exception 'Choose a call status' using errcode = '22023';
+  end if;
+  if char_length(v_remarks) > 100 then
+    raise exception 'Keep the remarks under 100 characters' using errcode = '22023', hint = 'remarks';
+  end if;
+  if not exists (select 1 from public.orders where id = p_order) then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  insert into public.order_fulfilment (order_id, call_status, call_remarks) values (p_order, p_status, v_remarks)
+  on conflict (order_id) do update set call_status = excluded.call_status, call_remarks = excluded.call_remarks, updated_at = now();
+end;
+$$;
+
+-- Cancels an order from the admin panel with its reason. p_customer_reason is needed
+-- when the customer asked for it; p_remarks when the reason is Other.
+create or replace function public.admin_cancel_order(p_order uuid, p_reason text, p_customer_reason text default null, p_remarks text default null)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_customer text := nullif(btrim(coalesce(p_customer_reason, '')), '');
+  v_remarks text := nullif(btrim(coalesce(p_remarks, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if p_reason is null or not (p_reason = any (public.order_cancel_reasons())) then
+    raise exception 'Choose a reason for cancelling' using errcode = '22023', hint = 'cancel_reason';
+  end if;
+  if p_reason = 'Customer cancelled the order' and (v_customer is null or not (v_customer = any (public.order_customer_cancel_reasons()))) then
+    raise exception 'Choose the customer''s reason' using errcode = '22023', hint = 'cancel_reason';
+  end if;
+  if p_reason <> 'Customer cancelled the order' then
+    v_customer := null;
+  end if;
+  if char_length(v_remarks) > 100 then
+    raise exception 'Keep the remarks under 100 characters' using errcode = '22023', hint = 'remarks';
+  end if;
+  if v_remarks is null and (p_reason = 'Other' or v_customer = 'Other') then
+    raise exception 'Write what happened in the remarks' using errcode = '22023', hint = 'cancel_remarks';
+  end if;
+  -- Changes the status (stock back, parcel cancelled with the courier) or refuses.
+  perform public.admin_set_order_status(p_order, 'cancelled');
+  insert into public.order_fulfilment (order_id, cancel_reason, cancel_customer_reason, cancel_remarks)
+  values (p_order, p_reason, v_customer, v_remarks)
+  on conflict (order_id) do update
+  set cancel_reason = excluded.cancel_reason, cancel_customer_reason = excluded.cancel_customer_reason,
+      cancel_remarks = excluded.cancel_remarks, updated_at = now();
+  return 'cancelled';
+end;
+$$;
+
+revoke execute on function public.admin_set_call_status(uuid, text, text) from public, anon;
+revoke execute on function public.admin_cancel_order(uuid, text, text, text) from public, anon;
+grant execute on function public.admin_set_call_status(uuid, text, text) to authenticated;
+grant execute on function public.admin_cancel_order(uuid, text, text, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
 -- The SQL Editor shows this table after the run. Expected: eighteen rows, all with

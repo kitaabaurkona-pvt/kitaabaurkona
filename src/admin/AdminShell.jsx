@@ -23,6 +23,7 @@ const SECTIONS = [
       { to: '/admin/orders/failed-deliveries', label: 'Non-delivery report (NDR)' },
       { to: '/admin/orders/returns', label: 'RTO & returns' },
       { to: '/admin/orders/track', label: 'Track orders' },
+      { to: '/admin/orders/new', label: 'Place order' },
     ],
   },
   { to: '/admin/shipping', label: 'Shipping', Icon: Truck },
