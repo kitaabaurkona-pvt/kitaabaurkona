@@ -76,6 +76,9 @@ async function fakeXpressbees(url, init = {}) {
     return json(200, { status: true, data: { status: 'in transit', history: [{ status_code: 'IT', location: 'Udaipur', event_time: '2026-11-10 10:00', message: 'In Transit' }] } });
   }
   if (p === '/api/shipments2/manifest') return json(200, { status: true, data: 'https://xb-files.s3.amazonaws.com/manifest/test.pdf' });
+  if (p === '/api/reverseshipments') {
+    return json(200, { status: true, data: { order_id: 1, shipment_id: 2, awb_number: String(14344940400000 + XB_CALLS.length), courier_id: '8', courier_name: 'Express Reverse', status: 'booked', label: 'https://xb-files.s3.amazonaws.com/labels/r.pdf' } });
+  }
   if (p === '/api/ndr') return json(200, { status: true, data: [] });
   return json(404, { status: false, message: 'Not found' });
 }
@@ -156,6 +159,36 @@ async function photoHost(req, url) {
   return req.respond({ status: 404, body: '' });
 }
 
+// A stand-in for Supabase Storage: uploads of customers' return photos and the
+// short-lived links admins open them with. Uploads must go to the caller's own folder,
+// as the bucket's policy in schema.sql asks.
+const storedPhotos = new Map();
+function storageHost(req, url) {
+  const json = (status, value) => req.respond({ status, headers: { ...CORS, 'content-type': 'application/json' }, body: JSON.stringify(value) });
+  const p = decodeURIComponent(url.pathname.replace(/^\/storage\/v1/, ''));
+  if (req.method() === 'POST' && p === '/object/sign/return-photos') {
+    const body = JSON.parse(req.postData() || '{}');
+    return json(200, (body.paths ?? []).map((name) => (storedPhotos.has(name) ? { path: name, signedURL: `/object/sign/return-photos/${name}?token=t`, error: null } : { path: name, signedURL: null, error: 'Not found' })));
+  }
+  if (req.method() === 'GET' && p.startsWith('/object/sign/return-photos/')) {
+    const name = p.slice('/object/sign/return-photos/'.length);
+    return storedPhotos.has(name) ? req.respond({ status: 200, headers: { ...CORS, 'content-type': 'image/png' }, body: TINY_PNG }) : req.respond({ status: 404, headers: CORS, body: '' });
+  }
+  if (req.method() === 'POST' && p.startsWith('/object/return-photos/')) {
+    const name = p.slice('/object/return-photos/'.length);
+    let sub = null;
+    try {
+      sub = JSON.parse(Buffer.from(String(req.headers().authorization ?? '').split('.')[1] ?? '', 'base64url').toString()).sub;
+    } catch {
+      sub = null;
+    }
+    if (!sub || name.split('/')[0] !== sub) return json(403, { statusCode: '403', error: 'Unauthorized', message: 'new row violates row-level security policy' });
+    storedPhotos.set(name, true);
+    return json(200, { Key: `return-photos/${name}`, Id: crypto.randomUUID() });
+  }
+  return json(404, { statusCode: '404', error: 'not_found', message: 'Not found' });
+}
+
 async function newPage({ width = 1280, height = 900, scheme = 'light', touch = false, prefs = null } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
@@ -173,6 +206,7 @@ async function newPage({ width = 1280, height = 900, scheme = 'light', touch = f
     if (url.origin === PHOTO_ORIGIN) return photoHost(req, url);
     if (!url.hostname.endsWith('.supabase.co')) return req.continue();
     if (req.method() === 'OPTIONS') return req.respond({ status: 204, headers: CORS });
+    if (url.pathname.startsWith('/storage/v1/')) return storageHost(req, url);
     if (url.pathname === '/functions/v1/shipping') {
       const res = await shippingFunction(new Request('https://fake.supabase.co/functions/v1/shipping', { method: req.method(), headers: req.headers(), body: req.postData() }));
       return req.respond({ status: res.status, headers: { ...CORS, ...Object.fromEntries(res.headers) }, body: await res.text() });
@@ -1008,7 +1042,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     };
     const nav = (label) => page.$$eval('.ap-side .ap-nav-link', (as, t) => as.find((a) => a.textContent.trim() === t)?.click(), label);
     check('admin site: the menu shows who is signed in', (await text(page, '.ap-side .ap-user')) === 'admin@example.com' && (await page.$('.site-header')) === null);
-    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Non-delivery report (NDR)|RTO & returns|Track orders|Place order|Shipping');
+    check('admin site: every section is in the menu', (await page.$$eval('.ap-side .ap-nav a', (as) => as.map((a) => a.textContent.trim()).join('|'))) === 'Home|Books|Bulk upload|Process orders|Non-delivery report (NDR)|Return/Exchange requests|RTO & returns|Track orders|Place order|Shipping');
     check('admin site: "Open the store" goes to the live store', (await page.$$eval('.ap-side-foot a', (as) => as.map((a) => a.href))).includes('https://www.kitaabaurkona.com/'));
 
     await gotoA(page, '/admin');
@@ -1696,6 +1730,106 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     check('Delhivery admin flow: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
     await db.query(`update public.shipping_settings set auto_book = true`);
+  }
+
+  // ---------- Return and exchange requests: customer asks, admin decides ----------
+  {
+    const reader = await newPage();
+    await goto(reader.page, '/sign-in');
+    await waitSel(reader.page, '#email');
+    await reader.page.type('#email', 'reader@example.com');
+    await reader.page.type('#password', 'reader-pass-1');
+    await reader.page.click('button[type=submit]');
+    await reader.page.waitForFunction(() => location.pathname === '/', { timeout: 8000 }).catch(() => {});
+    const book = await one(`select id, sku, price from public.books where is_visible and stock_quantity >= 5 order by stock_quantity desc limit 1`);
+    const placed = await asRole(db, { role: 'authenticated', sub: USERS['reader@example.com'].id }, (tx) =>
+      tx.query(`select public.create_order($1::jsonb, $2::jsonb, 'cod') as id`, [
+        JSON.stringify([{ book_id: book.id, quantity: 2 }]),
+        JSON.stringify({ name: 'Asha Rao', phone: '9876543210', address: '12 MG Road', city: 'Udaipur', state: 'Rajasthan', pincode: '313001' }),
+      ]),
+    );
+    const retOrder = placed.rows[0].id;
+    await db.query(`update public.orders set status = 'shipped' where id = $1`, [retOrder]);
+    await db.query(`update public.orders set status = 'delivered' where id = $1`, [retOrder]);
+    await db.query(`update public.shipments set status = 'delivered' where order_id = $1 and kind = 'forward'`, [retOrder]);
+
+    await goto(reader.page, `/orders/${retOrder}`);
+    check('returns: a delivered order offers Return or exchange', await reader.page.waitForFunction(() => [...document.querySelectorAll('main a')].some((a) => a.textContent.trim() === 'Return or exchange'), { timeout: 8000 }).then(() => true).catch(() => false));
+    await reader.page.$$eval('main a', (as) => as.find((a) => a.textContent.trim() === 'Return or exchange')?.click());
+    check('returns: the form opens', await waitSel(reader.page, '#return-reason', 8000));
+    await reader.page.$eval('.return-line-qty select', (s) => {
+      s.value = '1';
+      s.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await reader.page.select('#return-reason', 'Damaged Product');
+    await reader.page.$$eval('.return-form button[type=submit]', (bs) => bs[0].click());
+    check('returns: a damaged book needs a photo before sending', await reader.page.waitForFunction(() => /Add a photo that shows the problem/.test(document.querySelector('.return-form')?.innerText ?? ''), { timeout: 4000 }).then(() => true).catch(() => false));
+    const photo = path.join(SHOTS, 'e2e-return-photo.png');
+    fs.writeFileSync(photo, TINY_PNG);
+    await (await reader.page.$('#return-photo-input')).uploadFile(photo);
+    const uploaded = await reader.page.waitForFunction(() => document.querySelectorAll('.return-photo').length === 1 && !document.querySelector('.return-photo[aria-busy]'), { timeout: 8000 }).then(() => true).catch(() => false);
+    check("returns: the photo uploads to the customer's own folder", uploaded && [...storedPhotos.keys()].some((k) => k.startsWith(`${USERS['reader@example.com'].id}/`)), [...storedPhotos.keys()].join(','));
+    await reader.page.type('#return-remark', 'The cover arrived torn');
+    await reader.page.type('#return-upi', 'asha@okbank');
+    await reader.page.screenshot({ path: path.join(SHOTS, 'return-form-1280.png'), fullPage: true });
+    await reader.page.$$eval('.return-form button[type=submit]', (bs) => bs[0].click());
+    check('returns: sending the request returns to the order', await reader.page.waitForFunction((id) => location.pathname === `/orders/${id}`, { timeout: 8000 }, retOrder).then(() => true).catch(() => false));
+    const asked = await one(`select * from public.return_requests where order_id = $1`, [retOrder]);
+    check('returns: the request is saved with one copy, the photo and the UPI ID', asked && asked.stage === 'new' && asked.items[0].quantity === 1 && asked.photos.length === 1 && asked.refund_upi === 'asha@okbank' && asked.remark === 'The cover arrived torn', JSON.stringify(asked && { stage: asked.stage, items: asked.items, photos: asked.photos }));
+    check('returns: the order page shows the request as Requested', await reader.page.waitForFunction(() => /Return request R-\d+/.test(document.querySelector('main')?.innerText ?? '') && document.querySelector('.return-status')?.textContent.trim() === 'Requested', { timeout: 6000 }).then(() => true).catch(() => false));
+    await reader.page.screenshot({ path: path.join(SHOTS, 'return-requested-1280.png'), fullPage: true });
+
+    const { page, ctx, errors } = await newPage();
+    await adminSignIn(page);
+    await gotoA(page, '/admin/orders/return-requests');
+    check('admin returns: the request is under New Request', await page.waitForFunction(() => document.querySelectorAll('.ap-returns-table tbody tr').length >= 1 && /Damaged Product/.test(document.querySelector('.ap-returns-table')?.innerText ?? ''), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin returns: the summary and tab counts are shown', /Customer Return Request %/.test(await page.$eval('main', (m) => m.innerText)) && /New Request \(1\)/.test(await page.$eval('.ap-underline-tabs', (t) => t.innerText)));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-return-requests-new-1280.png'), fullPage: true });
+    await page.$$eval('.ap-returns-table button', (bs) => bs.find((b) => /View All 1 File/.test(b.textContent))?.click());
+    check("admin returns: the customer's photo opens", await page.waitForFunction(() => document.querySelector('.ap-dialog .ap-return-photo img')?.complete && document.querySelector('.ap-dialog .ap-return-photo img').naturalWidth > 0, { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.keyboard.press('Escape');
+    await gone(page, '.ap-dialog');
+    await page.$$eval('.ap-returns-table button', (bs) => bs.find((b) => b.textContent.trim() === 'Approve')?.click());
+    await page.waitForFunction(() => [...document.querySelectorAll('.ap-dialog button')].some((b) => b.textContent.trim() === 'Approve'), { timeout: 4000 }).catch(() => {});
+    await page.screenshot({ path: path.join(SHOTS, 'admin-return-approve-1280.png') });
+    await page.$$eval('.ap-dialog button', (bs) => bs.find((b) => b.textContent.trim() === 'Approve')?.click());
+    check('admin returns: approving books the return pickup', await page.waitForFunction(() => /approved: pickup booked/.test(document.querySelector('.toast')?.textContent ?? ''), { timeout: 8000 }).then(() => true).catch(() => false), await page.$eval('.toast', (t) => t.textContent).catch(() => 'no toast'));
+    const reverse = await one(`select * from public.shipments where order_id = $1 and kind = 'reverse' and status <> 'cancelled'`, [retOrder]);
+    check('admin returns: the pickup is booked with an AWB, and the request is Ongoing', reverse?.status === 'booked' && reverse.awb_number && (await one(`select stage from public.return_requests where id = $1`, [asked.id])).stage === 'ongoing', JSON.stringify(reverse && { status: reverse.status, awb: reverse.awb_number }));
+    await page.$$eval('.ap-underline-tabs button', (bs) => bs.find((b) => /^Ongoing/.test(b.textContent.trim()))?.click());
+    check('admin returns: Ongoing shows the return pickup', await page.waitForFunction((awb) => (document.querySelector('.ap-returns-table')?.innerText ?? '').includes(awb), { timeout: 6000 }, reverse?.awb_number ?? 'none').then(() => true).catch(() => false));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-return-requests-ongoing-1280.png'), fullPage: true });
+
+    if (reverse) await db.query(`update public.shipments set status = 'in_transit' where id = $1`, [reverse.id]);
+    await gotoA(page, '/admin/orders/return-requests?tab=settlement_pending');
+    check('admin returns: once picked up, it waits under Settlement Pending', await page.waitForFunction(() => [...document.querySelectorAll('.ap-returns-table button')].some((b) => b.textContent.trim() === 'Paid Offline'), { timeout: 8000 }).then(() => true).catch(() => false));
+    check('admin returns: a COD order offers no GoKwik refund', !(await page.$$eval('.ap-returns-table button', (bs) => bs.some((b) => b.textContent.trim() === 'Send Refund'))));
+    await page.$$eval('.ap-returns-table button', (bs) => bs.find((b) => b.textContent.trim() === 'Paid Offline')?.click());
+    await waitSel(page, '#refund-ref', 4000);
+    check("admin returns: Paid Offline shows the customer's UPI ID", /asha@okbank/.test(await page.$eval('.ap-dialog', (d) => d.innerText).catch(() => '')));
+    await page.type('#refund-ref', 'UTR629717944373');
+    await page.$$eval('.ap-dialog button[type=submit]', (bs) => bs[0].click());
+    const refunded = await page.waitForFunction(() => /marked paid offline/.test(document.querySelector('.toast')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false);
+    const closedRow = await one(`select stage, outcome, refund_ref from public.return_requests where id = $1`, [asked.id]);
+    check('admin returns: the refund is recorded and the request closed', refunded && closedRow.stage === 'closed' && closedRow.outcome === 'passed' && closedRow.refund_ref === 'UTR629717944373', JSON.stringify(closedRow));
+    await gotoA(page, '/admin/orders/return-requests?tab=closed');
+    check('admin returns: Closed Requests shows it as Approved and Passed', await page.waitForFunction(() => /approved/i.test(document.querySelector('.ap-returns-table')?.innerText ?? '') && /Passed/i.test(document.querySelector('.ap-returns-table')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-return-requests-closed-1280.png'), fullPage: true });
+    await page.setViewport({ width: 375, height: 800 });
+    await sleep(200);
+    check('admin returns at 375px: no sideways scrolling', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), await page.evaluate(() => [...document.querySelectorAll('main *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1 && ![...e.children].some((c) => c.getBoundingClientRect().right > window.innerWidth + 1)).slice(0, 8).map((e) => e.tagName + '.' + e.className + ':' + Math.round(e.getBoundingClientRect().right)).join(' ')));
+    await page.screenshot({ path: path.join(SHOTS, 'admin-return-requests-375.png'), fullPage: true });
+
+    await goto(reader.page, `/orders/${retOrder}`);
+    check('returns: the customer sees the refund', await reader.page.waitForFunction(() => document.querySelector('.return-status')?.textContent.trim() === 'Refunded', { timeout: 6000 }).then(() => true).catch(() => false));
+    await reader.page.setViewport({ width: 375, height: 800 });
+    await goto(reader.page, `/orders/${retOrder}/return`);
+    check('returns: a returned order cannot be returned again', await reader.page.waitForFunction(() => /already returned or exchanged/.test(document.querySelector('main')?.innerText ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
+    check('returns at 375px: no sideways scrolling', await reader.page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    check('returns (customer): no console errors', reader.errors.length === 0, reader.errors.join(' | '));
+    check('returns (admin): no console errors', errors.length === 0, errors.join(' | '));
+    await reader.ctx.close();
+    await ctx.close();
   }
 
   // ---------- Reduced motion ----------

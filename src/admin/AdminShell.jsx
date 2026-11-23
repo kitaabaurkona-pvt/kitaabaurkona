@@ -21,6 +21,7 @@ const SECTIONS = [
     children: [
       { to: '/admin/orders', label: 'Process orders', end: true },
       { to: '/admin/orders/failed-deliveries', label: 'Non-delivery report (NDR)' },
+      { to: '/admin/orders/return-requests', label: 'Return/Exchange requests' },
       { to: '/admin/orders/returns', label: 'RTO & returns' },
       { to: '/admin/orders/track', label: 'Track orders' },
       { to: '/admin/orders/new', label: 'Place order' },

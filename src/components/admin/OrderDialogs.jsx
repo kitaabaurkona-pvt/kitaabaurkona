@@ -16,7 +16,7 @@ import { formatOrderNumber } from '../../utils/format';
 import { NoteEditor } from './OrderDrawer';
 
 // A small box in the middle of the screen (ShopDeck's pop-ups).
-function OrderDialog({ open, title, onClose, children }) {
+export function OrderDialog({ open, title, onClose, children }) {
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>

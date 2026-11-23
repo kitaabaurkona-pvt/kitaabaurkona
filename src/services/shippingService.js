@@ -101,6 +101,22 @@ export const listNdr = () => invoke('ndr_list');
 export const actOnNdr = (items) => invoke('ndr_action', { items });
 export const bookReturnPickup = (orderId) => invoke('return_pickup', { order_id: orderId });
 
+// Books a return pickup; resolves to the courier's refusal (a message), or null once booked.
+export async function tryReturnPickup(orderId) {
+  try {
+    await bookReturnPickup(orderId);
+    return null;
+  } catch (err) {
+    return err?.message || 'The return pickup could not be booked.';
+  }
+}
+
+// The courier's public tracking page for a parcel.
+export const trackingUrl = (parcel) =>
+  carrierOf(parcel) === 'delhivery'
+    ? `https://www.delhivery.com/track-v2/package/${parcel.awb_number}`
+    : `https://www.xpressbees.com/shipment/tracking?awbNo=${parcel.awb_number}`;
+
 export async function getShippingSettings() {
   const supabase = await loadSupabase();
   const { data } = unwrap(await supabase.from('shipping_settings').select('*').limit(1));

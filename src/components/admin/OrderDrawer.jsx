@@ -17,6 +17,7 @@ import { formatDate, formatOrderNumber, formatPrice, ORDER_STATUS_LABELS, plural
 import { INDIAN_STATES, normalizeShipping, validateShipping } from '../../utils/storeForm';
 import OrderStatus from '../store/OrderStatus';
 import ParcelPanel from './ParcelPanel';
+import { AdminReturnForm } from './ReturnDialogs';
 
 const TO_SHIP = ['confirmed', 'paid'];
 const stageName = (value) => STAGES.find(([v]) => v === value)?.[1] ?? value;
@@ -242,6 +243,29 @@ const ACTION_LABELS = {
   cancelled: 'Cancel order',
 };
 
+// A return or exchange the customer asked for by phone: added to Return/Exchange
+// requests > New Request, to be approved there.
+function ReturnRequestSection({ order, onChanged }) {
+  const [open, setOpen] = useState(false);
+  if (!open) {
+    return (
+      <button type="button" className="btn btn-outline btn-sm" onClick={() => setOpen(true)}>
+        Create return/exchange request
+      </button>
+    );
+  }
+  return (
+    <AdminReturnForm
+      order={order}
+      onCancel={() => setOpen(false)}
+      onDone={() => {
+        setOpen(false);
+        onChanged();
+      }}
+    />
+  );
+}
+
 function OrderActions({ order, onChanged, onCancel }) {
   const [working, setWorking] = useState(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -420,6 +444,13 @@ function OrderDrawer({ order, focus = null, onClose, onChanged, onPrint, onCance
                 <ParcelPanel order={order} onChanged={onChanged} />
                 {!(order.shipments ?? []).length && <p className="page-meta">No parcel yet.</p>}
               </section>
+
+              {order.status === 'delivered' && order.origin !== 'exchange' && (
+                <section className="ap-sheet-section" aria-labelledby="sheet-return">
+                  <h3 id="sheet-return">Return or exchange</h3>
+                  <ReturnRequestSection key={order.id} order={order} onChanged={onChanged} />
+                </section>
+              )}
 
               <section className="ap-sheet-section" aria-labelledby="sheet-status">
                 <h3 id="sheet-status">Order status</h3>

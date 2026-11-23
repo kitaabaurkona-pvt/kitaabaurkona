@@ -2736,3 +2736,154 @@ button.ap-stat {
 .ap-stat-flip:focus-visible > .ap-stat-about {
   visibility: visible;
 }
+
+/* ---------- Return/Exchange requests ---------- */
+
+.ap-section-title {
+  margin: 0 0 10px;
+  color: var(--ap-ink);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ap-section-title .page-meta {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.ap .ap-summary.ap-summary-returns {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ap-summary-returns .ap-stat {
+  cursor: default;
+}
+
+.ap-summary-returns .ap-stat .ap-pill {
+  vertical-align: middle;
+  white-space: normal;
+}
+
+@media (max-width: 1100px) {
+  .ap .ap-summary.ap-summary-returns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .ap .ap-summary.ap-summary-returns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ap-check-menu .ap-range-button {
+  min-width: 190px;
+}
+
+.ap-menu-list.ap-check-list {
+  gap: 2px;
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.ap-check-list .pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--ap-ink);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ap-check-list .pick input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ap-primary);
+}
+
+@media (hover: hover) {
+  .ap-check-list .pick:hover {
+    background: var(--ap-hover);
+  }
+}
+
+.ap-returns-table td {
+  min-width: 120px;
+}
+
+.ap-returns-table td > .ap-badge + .ap-cell-meta,
+.ap-returns-table td > .ap-badge + .ap-strong {
+  margin-top: 4px;
+}
+
+.ap .ap-badge.ap-badge-dark {
+  margin-top: 4px;
+  background: #3d434d;
+  color: #ffffff;
+  font-size: 11px;
+}
+
+.ap .ap-danger-link {
+  color: var(--ap-danger);
+}
+
+.ap-return-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ap-return-photo {
+  display: grid;
+  place-items: center;
+  width: 120px;
+  height: 120px;
+  overflow: hidden;
+  border: 1px solid var(--ap-line);
+  border-radius: var(--ap-radius-sm);
+  background: var(--ap-soft);
+  color: var(--ap-muted);
+  font-size: 12px;
+}
+
+.ap-return-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ap-fieldset {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ap-return-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+
+.ap-return-pick .pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ap-return-pick .pick input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ap-primary);
+}

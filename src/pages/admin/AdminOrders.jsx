@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { ArrowDown, ArrowUp, CalendarBlank, CaretDown, Copy, Info, MagnifyingGlass, NotePencil, X } from '@phosphor-icons/react';
+import { ArrowDown, ArrowUp, CaretDown, Copy, Info, MagnifyingGlass, NotePencil, X } from '@phosphor-icons/react';
 import {
   ADMIN_ALL_LIMIT,
   ADMIN_PAGE_SIZE,
@@ -22,7 +22,7 @@ import {
   shipByOf,
   stageOf,
 } from '../../services/adminService';
-import { ADMIN_SHIPMENT_LABELS, bookNow, CARRIER_NAMES, carrierOf, makeManifest } from '../../services/shippingService';
+import { ADMIN_SHIPMENT_LABELS, bookNow, CARRIER_NAMES, carrierOf, makeManifest, trackingUrl } from '../../services/shippingService';
 import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useToast } from '../../hooks/useToast';
@@ -35,6 +35,8 @@ import OrderDrawer from '../../components/admin/OrderDrawer';
 import { CallStatusDialog, CancelDialog, NoteDialog } from '../../components/admin/OrderDialogs';
 import DelhiveryPickup from '../../components/admin/DelhiveryPickup';
 import HoverHint from '../../components/admin/HoverHint';
+import DateRange from '../../components/admin/DateRange';
+import { downloadCsv } from '../../utils/csv';
 
 const NUMERIC_SEARCH = ['order', 'phone', 'min_qty', 'max_qty'];
 const MORE_KEYS = ['pay', 'customer', 'call', 'remarks', 'coupon', 'origin'];
@@ -72,10 +74,6 @@ const manifestable = (order) => (order.shipments ?? []).some((s) => s.kind === '
 const held = (order) => Boolean(forwardOf(order)?.needs_check);
 const canCancel = (order) => (NEXT_STATUSES[order.status] ?? []).includes('cancelled');
 // The courier's public tracking page for an AWB.
-const trackingUrl = (parcel) =>
-  carrierOf(parcel) === 'delhivery'
-    ? `https://www.delhivery.com/track-v2/package/${parcel.awb_number}`
-    : `https://www.xpressbees.com/shipment/tracking?awbNo=${parcel.awb_number}`;
 // The parcel's size and weight, for the Charge hover text.
 function parcelSize(parcel) {
   const dims = [parcel.package_length_cm, parcel.package_breadth_cm, parcel.package_height_cm];
@@ -108,6 +106,7 @@ const REFUND_STATES = {
   failed: ['Failed', 'danger'],
   auto_refund: ['Auto refund', 'warn'],
 };
+const ORIGINS = { website: 'Website', admin: 'Admin panel', exchange: 'Exchange' };
 const CANCELLED_BY = { seller: 'By seller', customer: 'By customer', system: 'Automatic' };
 const wasLabel = (value) => CANCELLED_FROM.find(([v]) => v === value)?.[1] ?? 'Not recorded';
 // The order's last forward parcel, cancelled or not (a cancelled order's parcel usually is).
@@ -126,12 +125,6 @@ function refundOf(order, pay) {
   if (due > 0) return { amount: due, state: 'Refund by hand', tone: 'warn', at: null };
   return { amount: 0, state: 'Not applicable', tone: null, at: null };
 }
-
-// One spreadsheet cell: quoted, and text a spreadsheet would run as a formula is defused.
-const csvCell = (value) => {
-  const text = String(value ?? '');
-  return `"${(/^[=+\-@\t\r]/.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
-};
 
 function downloadCancelled(orders, refunds) {
   const head = ['Cancelled on', 'Cancelled by', 'Reason', 'Customer reason', 'Remarks', 'Order', 'Placed on', 'Earlier state', 'AWB', 'Courier', 'Payment', 'Order value', 'Refund amount', 'Refund state', 'Customer', 'Mobile', 'Note'];
@@ -158,15 +151,7 @@ function downloadCancelled(orders, refunds) {
       fulfilmentOf(o)?.note ?? '',
     ];
   });
-  const csv = [head, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n');
-  const url = URL.createObjectURL(new Blob(['﻿', csv], { type: 'text/csv;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `cancelled-orders-${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadCsv(`cancelled-orders-${new Date().toISOString().slice(0, 10)}.csv`, [head, ...rows]);
 }
 
 function CancelledRow({ order, refund, onOpen, onNotes }) {
@@ -299,52 +284,6 @@ function Summary({ data, onPick }) {
           Orders not dispatched within {SHIP_WITHIN_DAYS} days of being placed. Please dispatch soon to minimise RTOs.
         </span>
       </button>
-    </div>
-  );
-}
-
-// One date range control: the chosen days, with the two dates in a small pop-up.
-function DateRange({ from, to, onChange }) {
-  const [open, setOpen] = useState(false);
-  const box = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const close = (event) => {
-      if (!box.current?.contains(event.target)) setOpen(false);
-    };
-    const escape = (event) => event.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', escape);
-    return () => {
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', escape);
-    };
-  }, [open]);
-  const show = (day) => dayMonth.format(new Date(`${day}T00:00:00+05:30`));
-  const text = from || to ? `${from ? show(from) : '…'} – ${to ? show(to) : '…'}` : 'Date Range';
-  return (
-    <div className="ap-range" ref={box}>
-      <button type="button" className="ap-range-button" data-empty={!(from || to) || undefined} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <span>{text}</span>
-        <CalendarBlank size={18} aria-hidden="true" />
-      </button>
-      {open && (
-        <div className="ap-range-pop" role="group" aria-label="Order date range">
-          <label className="label" htmlFor="orders-from">
-            From
-          </label>
-          <input id="orders-from" className="input input-sm" type="date" value={from} max={to || undefined} onChange={(e) => onChange({ from: e.target.value })} />
-          <label className="label" htmlFor="orders-to">
-            To
-          </label>
-          <input id="orders-to" className="input input-sm" type="date" value={to} min={from || undefined} onChange={(e) => onChange({ to: e.target.value })} />
-          {(from || to) && (
-            <button type="button" className="btn-link" onClick={() => onChange({ from: '', to: '' })}>
-              Clear dates
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -538,7 +477,7 @@ function OrderRow({ order, mode, now, selectable, picked, customerOrders, produc
         {(mode === 'track' || mode === 'pending' || mode === 'cancelled') && <OrderStatus status={order.status} />}
         <span className="ap-cell-meta">{ago(order.created_at, now)}</span>
         <span className="ap-cell-meta tnum">{dateTime.format(created).replace(',', '')}</span>
-        <span className="ap-cell-meta">{order.origin === 'admin' ? 'Admin panel' : 'Website'}</span>
+        <span className="ap-cell-meta">{ORIGINS[order.origin] ?? 'Website'}</span>
         <button type="button" className="ap-order-link" onClick={() => onOpen(order.id)}>
           {formatOrderNumber(order.order_number)}
         </button>
@@ -1247,6 +1186,7 @@ function AdminOrders({ view = 'process' }) {
                 <option value="">Origin</option>
                 <option value="website">Website</option>
                 <option value="admin">Admin panel</option>
+                <option value="exchange">Exchange</option>
               </select>
             </>
           )}

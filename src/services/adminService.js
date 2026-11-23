@@ -488,3 +488,88 @@ export function adminErrorMessage(error) {
   if (error?.status === 0) return 'Unable to reach the server. Check your connection and try again.';
   return 'That change could not be saved. Try again.';
 }
+
+// ---------- Return/Exchange requests (Orders > Return/Exchange requests) ----------
+
+export const RETURN_TABS = [
+  ['new', 'New Request'],
+  ['ongoing', 'Ongoing'],
+  ['pickup_failed', 'Pickup Failed'],
+  ['settlement_pending', 'Settlement Pending'],
+  ['closed', 'Closed Requests'],
+];
+
+// The summary cards and tab counts (also closes pickups that failed over 7 days ago).
+export async function adminReturnOverview() {
+  return unwrap(await supabase.rpc('admin_return_overview')).data;
+}
+
+// One page of requests on a tab, with their orders (and replacement orders) and how
+// each order was paid (GoKwik refunds).
+// f: { tab, page, sort, searchBy ('order' | 'phone'), search, from, to (request date),
+//      afrom, ato (accepted or action date), reasons [], kinds [], source, action }
+export async function adminListReturnRequests(f) {
+  let query = supabase.from('return_requests').select('*', { count: 'exact' }).eq('stage', f.tab);
+  const term = cleanSearch(f.search ?? '');
+  if (term && f.searchBy === 'phone') query = query.ilike('phone', `%${term.replace(/\D/g, '').slice(-10)}%`);
+  else if (term) {
+    const n = term.replace(/^(KB|KAK)-?/i, '').replace(/^0+/, '');
+    query = /^[0-9]{1,12}$/.test(n) ? query.eq('order_number', n) : query.eq('order_number', -1);
+  }
+  if (f.from) query = query.gte('created_at', indiaMidnight(f.from).toISOString());
+  if (f.to) query = query.lt('created_at', new Date(indiaMidnight(f.to).getTime() + DAY_MS).toISOString());
+  if (f.afrom) query = query.gte('decided_at', indiaMidnight(f.afrom).toISOString());
+  if (f.ato) query = query.lt('decided_at', new Date(indiaMidnight(f.ato).getTime() + DAY_MS).toISOString());
+  if (f.reasons?.length) query = query.in('reason', f.reasons);
+  if (f.kinds?.length) query = query.in('kind', f.kinds);
+  if (f.source) query = query.eq('source', f.source);
+  if (f.action === 'approved' || f.action === 'rejected' || f.action === 'withdrawn') query = query.eq('decision', f.action);
+  const from = f.page * ADMIN_PAGE_SIZE;
+  const { data, count } = unwrap(await query.order('created_at', { ascending: f.sort === 'oldest' }).range(from, from + ADMIN_PAGE_SIZE - 1));
+  const requests = data ?? [];
+  const orderIds = unique(requests.flatMap((r) => [r.order_id, r.replacement_order_id]).filter(Boolean));
+  const [orders, payments] = await Promise.all([
+    orderIds.length ? supabase.from('orders').select(ORDER_COLUMNS).in('id', orderIds).then((r) => unwrap(r).data ?? []) : [],
+    orderIds.length ? supabase.from('order_payments').select('order_id, refund_status, refunded_amount').in('order_id', orderIds).then((r) => unwrap(r).data ?? []) : [],
+  ]);
+  return {
+    requests,
+    total: count ?? 0,
+    orders: Object.fromEntries(orders.map((o) => [o.id, o])),
+    payments: Object.fromEntries(payments.map((p) => [p.order_id, p])),
+    at: Date.now(),
+  };
+}
+
+// 'approved' (returns the replacement order's id for an exchange) or 'rejected'.
+export async function adminDecideReturn(requestId, decision, reason = null, remarks = null) {
+  return unwrap(await supabase.rpc('admin_decide_return', { p_request: requestId, p_decision: decision, p_reason: reason, p_remarks: remarks })).data;
+}
+
+export async function adminCloseReturnRequest(requestId, reason, remarks = null) {
+  unwrap(await supabase.rpc('admin_close_return_request', { p_request: requestId, p_reason: reason, p_remarks: remarks }));
+}
+
+// mode 'gokwik' (refund through GoKwik) or 'offline' (paid by hand, with its reference).
+export async function adminSettleReturn(requestId, mode, amount, reference = null) {
+  unwrap(await supabase.rpc('admin_settle_return', { p_request: requestId, p_mode: mode, p_amount: amount, p_ref: reference }));
+}
+
+export async function adminSetReturnNote(requestId, note) {
+  unwrap(await supabase.rpc('admin_set_return_note', { p_request: requestId, p_note: note }));
+}
+
+// A request the customer made by phone. items: [{ sku, quantity }].
+export async function adminCreateReturnRequest({ orderId, kind, items, reason, remark, refundUpi }) {
+  return unwrap(
+    await supabase.rpc('admin_create_return_request', { p_order: orderId, p_kind: kind, p_items: items, p_reason: reason, p_remark: remark || null, p_refund_upi: refundUpi || null }),
+  ).data;
+}
+
+// Short-lived links to customers' photos ({ path: url }).
+export async function adminReturnPhotoUrls(paths) {
+  if (!paths?.length) return {};
+  const { data, error } = await supabase.storage.from('return-photos').createSignedUrls(paths, 600);
+  if (error) return {};
+  return Object.fromEntries((data ?? []).filter((d) => d.signedUrl && !d.error).map((d) => [d.path, d.signedUrl]));
+}

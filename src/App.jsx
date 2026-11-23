@@ -17,6 +17,7 @@ const Cart = lazyPage(() => import('./pages/Cart'));
 const Checkout = lazyPage(() => import('./pages/Checkout'));
 const Orders = lazyPage(() => import('./pages/Orders'));
 const OrderDetail = lazyPage(() => import('./pages/OrderDetail'));
+const ReturnRequest = lazyPage(() => import('./pages/ReturnRequest'));
 const Wishlist = lazyPage(() => import('./pages/Wishlist'));
 const Account = lazyPage(() => import('./pages/Account'));
 const NotFound = lazyPage(() => import('./pages/NotFound'));
@@ -64,6 +65,7 @@ function App() {
             <Route path="/checkout" element={<Checkout />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/orders/:id" element={<OrderDetail />} />
+            <Route path="/orders/:id/return" element={<ReturnRequest />} />
             <Route path="/wishlist" element={<Wishlist />} />
             <Route path="/account" element={<Account />} />
             <Route path="/settings" element={<Settings />} />

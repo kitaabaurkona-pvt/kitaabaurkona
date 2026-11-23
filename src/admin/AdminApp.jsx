@@ -20,6 +20,7 @@ const BulkUpload = lazyPage(() => import('../pages/admin/BulkUpload'));
 const AdminShipping = lazyPage(() => import('../pages/admin/AdminShipping'));
 const AdminFailedDeliveries = lazyPage(() => import('../pages/admin/AdminFailedDeliveries'));
 const AdminReturns = lazyPage(() => import('../pages/admin/AdminReturns'));
+const AdminReturnRequests = lazyPage(() => import('../pages/admin/AdminReturnRequests'));
 const AdminPlaceOrder = lazyPage(() => import('../pages/admin/AdminPlaceOrder'));
 
 function AdminApp() {
@@ -40,6 +41,7 @@ function AdminApp() {
             <Route path="orders" element={<AdminOrders key="process" view="process" />} />
             <Route path="orders/track" element={<AdminOrders key="track" view="track" />} />
             <Route path="orders/failed-deliveries" element={<AdminFailedDeliveries />} />
+            <Route path="orders/return-requests" element={<AdminReturnRequests />} />
             <Route path="orders/returns" element={<AdminReturns />} />
             <Route path="orders/new" element={<AdminPlaceOrder />} />
             <Route path="bulk-upload" element={<BulkUpload />} />
