@@ -38,7 +38,10 @@ export function startKwikpass() {
   window.merchantInfo = { ...window.merchantInfo, environment: ENVIRONMENT, mid: MID, type: 'merchantInfo' };
   sdkPromise = new Promise((resolve, reject) => {
     const ready = instance();
-    if (ready) return resolve(ready);
+    if (ready) {
+      resolve(ready);
+      return sendPendingView();
+    }
     const script = document.createElement('script');
     const timer = setTimeout(() => fail(), LOAD_TIMEOUT_MS);
     function fail() {
@@ -57,6 +60,7 @@ export function startKwikpass() {
       if (!sdk) return fail();
       window.dispatchEvent(new CustomEvent('kp-script-loaded'));
       resolve(sdk);
+      sendPendingView();
     };
     document.body.appendChild(script);
   });
@@ -130,6 +134,76 @@ export async function signInWithKpToken(kpToken) {
   const { error: sessionError } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: 'email' });
   if (sessionError) throw new Error(GENERIC);
   return { newAccount: Boolean(data.new_account) };
+}
+
+// The environment this site's logins belong to (verified numbers are kept per environment).
+export const KWIKPASS_ENVIRONMENT = ENVIRONMENT;
+
+// A signed-in customer proves a number with an OTP and it joins their account, so they
+// can log in with it. Returns the verified number; throws an Error to show the customer.
+export async function linkWithKpToken(kpToken) {
+  const supabase = await loadSupabase();
+  const { data, error } = await supabase.functions.invoke('kwikpass/link', { body: { kp_token: kpToken } });
+  if (error) {
+    let message = GENERIC;
+    try {
+      const body = await error.context?.json?.();
+      if (typeof body?.error === 'string' && body.error) message = body.error;
+    } catch {
+      // no readable answer: keep the general message
+    }
+    throw new Error(message);
+  }
+  if (!data?.phone) throw new Error(GENERIC);
+  return data.phone;
+}
+
+// The signed-in customer's number verified by OTP on this site (null when none).
+export async function getVerifiedPhone() {
+  const supabase = await loadSupabase();
+  const { data, error } = await supabase.from('phone_logins').select('phone, environment').eq('environment', ENVIRONMENT).maybeSingle();
+  if (error) throw error;
+  return data?.phone ?? null;
+}
+
+// ---------- Page views (GoKwik's guide: "page_view_kp", for KwikEngage reminders) ----------
+// type 'product' { product_id, name, price, image_url, handle }, 'collection'
+// { collection_id, name, handle }, or 'other' {}. GoKwik's script listens for the event on
+// window; a view that happens before the script has loaded is sent once it has (only the
+// latest one: the page the customer is on).
+let pendingView = null;
+function sendView(detail) {
+  window.dispatchEvent(new CustomEvent('page_view_kp', { detail }));
+}
+function sendPendingView() {
+  if (!pendingView) return;
+  const detail = pendingView;
+  pendingView = null;
+  sendView(detail);
+}
+export function trackPageView(type, data = {}) {
+  if (!kwikpassEnabled) return;
+  const clean = Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined && value !== null && value !== ''));
+  const detail = { type, data: clean };
+  if (instance()) sendView(detail);
+  else pendingView = detail;
+}
+
+// ---------- One-tap login ("Login with 98xxxxxx34 · Powered by KwikPass") ----------
+// GoKwik draws the button into <div id="kwikpass-sso-container"> only for a visitor it
+// already knows; otherwise the box stays empty. When the button is pressed GoKwik fires
+// "kwikpass-sso" on window with the sealed token (or none when its session has ended).
+export const SSO_CONTAINER_ID = 'kwikpass-sso-container';
+export const SSO_LOGO = 'https://pdp.gokwik.co/kwikpass/assets/icons/kwik_pass_logo.svg';
+export async function showSsoButton() {
+  const sdk = await startKwikpass();
+  sdk.handleKpSSOButton?.();
+}
+// The token in GoKwik's "kwikpass-sso" event: GoKwik's script puts it at event.detail,
+// its guide says event.data.detail; both are read.
+export function ssoTokenOf(event) {
+  const token = event?.detail?.kpToken ?? event?.data?.detail?.kpToken ?? null;
+  return typeof token === 'string' && token ? token : null;
 }
 
 // GoKwik asks that every logout on the site also logs out of KwikPass, or the next OTP

@@ -70,7 +70,9 @@ const answer = async (input) => (input.url.pathname.startsWith('/rest/v1/') ? ha
 const inProcessFetch = async (target, init = {}) => {
   const url = new URL(typeof target === 'string' ? target : target.url);
   const r = await answer({ method: init.method || 'GET', url, headers: Object.fromEntries(new Headers(init.headers).entries()), body: init.body });
-  return new Response(r.body ?? '', { status: r.status, headers: { 'content-type': 'application/json', ...(r.headers || {}) } });
+  // A 204 answer (e.g. an update without returned rows) may not carry a body.
+  const body = r.status === 204 || r.status === 304 ? null : (r.body ?? '');
+  return new Response(body, { status: r.status, headers: { 'content-type': 'application/json', ...(r.headers || {}) } });
 };
 const service = createClient('https://fake.supabase.co', SERVICE_TOKEN, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: inProcessFetch } });
 const newKey = () => jose.base64url.encode(crypto.getRandomValues(new Uint8Array(32)));
@@ -81,15 +83,17 @@ const kwikpass = createHandler({
   accounts: createAccounts(service),
   tokens: createTokenReader({ keys: { production: PROD_KEY, sandbox: SANDBOX_KEY }, jose }),
   origins: [BASE, STAGING_BASE],
-  log: { info() {}, warn() {}, error() {} },
+  // Errors are printed: a failure inside the function shows up as a plain message on the page.
+  log: { info() {}, warn() {}, error: (line) => console.log(`  kwikpass function error: ${line}`) },
 });
 const kpToken = (claims, key = PROD_KEY) => new jose.EncryptJWT(claims).setProtectedHeader({ alg: 'dir', enc: 'A256GCM' }).setIssuedAt().encrypt(jose.base64url.decode(key));
 
 // GoKwik's KwikPass script, replaced by one that records what the site asks of it and
 // answers as GoKwik's guide says. window.__kpTokens (set by the test) holds the token
 // GoKwik would give for each number; OTP 1234 is right, 0000 wrong, 9999 makes it fail.
-const FAKE_SDK = `window.__kp = window.__kp || { sends: [], verifies: [], logouts: 0 };
+const FAKE_SDK = `window.__kp = window.__kp || { sends: [], verifies: [], logouts: 0, views: [], ssoCalls: 0 };
 window.__kp.merchantInfoAtLoad = JSON.parse(JSON.stringify(window.merchantInfo || null));
+window.addEventListener('page_view_kp', (e) => window.__kp.views.push(e.detail));
 window.__KP_LOGIN_SDK_INSTANCE__ = {
   async kpSendOTP(phone) {
     window.__kp.sends.push(phone);
@@ -103,20 +107,34 @@ window.__KP_LOGIN_SDK_INSTANCE__ = {
     return { status: 200, body: { data: { email: '', token: 't', coreToken: 'c', kpToken: (window.__kpTokens || {})[input.phone] || '' } } };
   },
   handleKPLogout() { window.__kp.logouts += 1; },
-  handleKpSSOButton() {},
+  // Draws the one-tap button only for a visitor GoKwik "knows" (window.__kpSso, set by the test).
+  handleKpSSOButton() {
+    window.__kp.ssoCalls += 1;
+    const box = document.getElementById('kwikpass-sso-container');
+    const known = window.__kpSso;
+    if (!box || !known) return;
+    box.innerHTML = '';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'kp-sso-btn';
+    button.textContent = 'Login with ' + known.masked;
+    button.onclick = () => window.dispatchEvent(new CustomEvent('kwikpass-sso', { detail: { type: 'kp-token', kpToken: known.token || undefined } }));
+    box.appendChild(button);
+  },
 };`;
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
-async function newPage({ width = 1280, height = 900, sdk = 'fake', tokens = {} } = {}) {
+async function newPage({ width = 1280, height = 900, sdk = 'fake', tokens = {}, sso = null } = {}) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   await page.setViewport({ width, height });
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
-  await page.evaluateOnNewDocument((t) => {
+  await page.evaluateOnNewDocument((t, known) => {
     window.__kpTokens = t;
+    window.__kpSso = known;
     window.__csp = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__csp.push({ directive: e.violatedDirective, blocked: e.blockedURI || 'inline' }));
-  }, tokens);
+  }, tokens, sso);
   const errors = [];
   const sdkRequests = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -177,6 +195,7 @@ try {
     9812345678: await kpToken({ phone: '9812345678' }),
     9123456780: await kpToken({ data: { phone_number: '+91 91234 56780' } }),
     9000000002: await kpToken({ phone: { value: '9000000002', country_code: '+1' } }),
+    9876543210: await kpToken({ phone: '9876543210' }),
   };
 
   section('The sign-in page');
@@ -253,6 +272,150 @@ try {
     await sendOtp(page, '9000000002');
     await enterOtp(page, '1234');
     check('a non-Indian number in the token is refused with a clear message', (await waitFor(page, () => /Only Indian \(\+91\) mobile numbers/.test(document.body.innerText), 8000)) && (await page.evaluate(() => location.pathname)) === '/sign-in');
+    await ctx.close();
+  }
+
+  section('Page views for GoKwik (KwikEngage)');
+  {
+    const book = await one(`select id::text, title, price::float as price from public.books where is_visible and stock_quantity > 0 and category is not null order by id limit 1`);
+    const { page, ctx, errors } = await newPage({ tokens });
+    const views = () => page.evaluate(() => window.__kp?.views ?? []);
+    await goto(page, '/');
+    check('the home page sends "other" once the script has loaded', await waitFor(page, () => window.__kp?.views?.some((v) => v.type === 'other'), 10000), JSON.stringify(await views()));
+    await goto(page, `/books/${book.id}`);
+    await waitFor(page, () => window.__kp?.views?.length > 0, 10000);
+    const product = (await views()).find((v) => v.type === 'product');
+    check('a book page sends a product view with id, name, price and image', product?.data?.product_id === book.id && product.data.name === book.title && product.data.price === book.price && /^https:\/\//.test(product.data.image_url) && product.data.handle === `/books/${book.id}`, JSON.stringify(product));
+    check('...price is a number, as GoKwik asks', typeof product?.data?.price === 'number');
+    for (const [url, expected] of [
+      ['/books?category=Romance', { type: 'collection', id: 'romance', name: 'Romance' }],
+      ['/books?category=Thriller%20%26%20Mystery', { type: 'collection', id: 'thriller-and-mystery', name: 'Thriller & Mystery' }],
+      ['/books?collection=regional', { type: 'collection', id: 'regional', name: 'Regional editions' }],
+      ['/books?max=299&stock=1', { type: 'collection', id: 'under-299', name: 'Books under ₹299' }],
+      ['/books?q=harry', { type: 'other' }],
+      ['/books', { type: 'other' }],
+    ]) {
+      await goto(page, url);
+      await waitFor(page, () => window.__kp?.views?.length > 0, 10000);
+      const view = (await views()).at(-1);
+      const ok = view?.type === expected.type && (expected.type !== 'collection' || (view.data.collection_id === expected.id && view.data.name === expected.name));
+      check(`${url} sends ${expected.type}${expected.id ? ` "${expected.id}"` : ''}`, ok, JSON.stringify(view));
+    }
+    await goto(page, '/books');
+    await waitFor(page, () => window.__kp?.views?.length > 0, 10000);
+    await waitSel(page, '.chip[aria-pressed="false"]');
+    const before = (await views()).length;
+    const chip = await page.$$eval('.chip[aria-pressed="false"]', (els) => {
+      const el = els.find((e) => e.textContent.trim() !== 'All');
+      el?.click();
+      return el?.textContent.trim();
+    });
+    check('picking a genre on the page sends one new collection view (no reload)', (await waitFor(page, (n) => window.__kp.views.length === n + 1, 5000, before)) && (await views()).at(-1).data.name === chip, JSON.stringify((await views()).slice(before)));
+    await page.evaluate(() => document.querySelector('a[href="/"]')?.click());
+    check('going back home inside the site sends "other"', await waitFor(page, (n) => window.__kp.views.at(-1)?.type === 'other' && window.__kp.views.length > n, 5000, before + 1));
+    check('no script errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  section('One-tap login button');
+  {
+    const { page, ctx } = await newPage({ tokens });
+    await goto(page, '/sign-in');
+    await waitFor(page, () => window.__kp?.ssoCalls > 0, 10000);
+    const box = await page.$eval('#kwikpass-sso-container', (el) => ({ children: el.childElementCount, height: el.getBoundingClientRect().height }));
+    check('a visitor GoKwik does not know sees no button and no empty space', box.children === 0 && box.height === 0, JSON.stringify(box));
+    await ctx.close();
+  }
+  {
+    const { page, ctx } = await newPage({ tokens, sso: { masked: '98xxxxxx78', token: tokens[9812345678] } });
+    await goto(page, '/sign-in');
+    check("a visitor GoKwik knows sees GoKwik's button on the sign-in page", await waitSel(page, '#kwikpass-sso-container #kp-sso-btn'));
+    await page.screenshot({ path: path.join(SHOTS, 'kwikpass-sso-1280.png'), fullPage: true });
+    await page.click('#kp-sso-btn');
+    check('pressing it logs in to the account of that number', await waitFor(page, () => location.pathname === '/', 10000));
+    const session = await page.evaluate(() => Object.entries(localStorage).find(([k]) => k.includes('auth-token'))?.[1] ?? '');
+    check('...the same account as the OTP login made', session.includes(userId));
+    await ctx.close();
+  }
+  {
+    const { page, ctx } = await newPage({ tokens, sso: { masked: '98xxxxxx78', token: null } });
+    await goto(page, '/sign-in');
+    await waitSel(page, '#kp-sso-btn');
+    await page.click('#kp-sso-btn');
+    check('when GoKwik says the quick login has expired, the customer is told to use OTP', (await waitFor(page, () => /quick login has expired/.test(document.body.innerText), 5000)) && (await page.evaluate(() => location.pathname)) === '/sign-in');
+    await ctx.close();
+  }
+  {
+    const book = await one(`select id::text from public.books where is_visible and stock_quantity > 2 order by id limit 1`);
+    const { page, ctx, errors } = await newPage({ tokens, sso: { masked: '98xxxxxx78', token: tokens[9812345678] } });
+    await goto(page, `/books/${book.id}`);
+    await waitFor(page, () => [...document.querySelectorAll('main button')].some((b) => /^Add to cart/.test(b.textContent.trim())), 10000);
+    await clickText(page, 'main button', '^\\s*Add to cart');
+    // Adding keeps the panel closed (by design): open it from the header cart.
+    await waitFor(page, () => /[1-9]/.test(document.querySelector('.cart-button')?.textContent ?? ''), 5000);
+    await page.click('.cart-button');
+    check("the cart panel shows GoKwik's button to a visitor who is not logged in", await waitSel(page, '.cart-panel #kp-sso-btn', 10000));
+    await page.screenshot({ path: path.join(SHOTS, 'kwikpass-sso-cart-1280.png') });
+    await page.click('.cart-panel #kp-sso-btn');
+    check('pressing it there logs in and the button goes away', (await waitFor(page, () => !document.querySelector('.cart-panel #kwikpass-sso-container'), 10000)) && (await page.evaluate(() => Object.entries(localStorage).some(([k, v]) => k.includes('auth-token') && v.includes('access_token')))));
+    check('...the cart panel stays open on the same page', await page.evaluate(() => !!document.querySelector('.cart-panel') && location.pathname.startsWith('/books/')));
+    check('no script errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  section('Linking a number on My Account');
+  {
+    const { page, ctx, errors } = await newPage({ tokens });
+    await goto(page, '/sign-in');
+    await waitSel(page, '.auth-tab');
+    await clickText(page, '.auth-tab', '^Email$');
+    await waitSel(page, '#email');
+    await page.type('#email', 'reader@example.com');
+    await page.type('#password', 'reader-pass-1');
+    await page.click('button[type=submit]');
+    await waitFor(page, () => location.pathname === '/', 8000);
+    await goto(page, '/account');
+    check('My Account offers "Verify mobile number"', await waitFor(page, () => /Mobile number login/.test(document.body.innerText) && [...document.querySelectorAll('button')].some((b) => b.textContent === 'Verify mobile number'), 10000));
+    await clickText(page, 'button', '^Verify mobile number$');
+    check('...with the number from their profile filled in', (await waitSel(page, '#link-mobile')) && (await page.$eval('#link-mobile', (i) => i.value)) === '9876543210');
+    await clickText(page, 'button', '^Send OTP$');
+    await waitSel(page, '#link-otp', 5000);
+    await typeInto(page, '#link-otp', '1234');
+    await clickText(page, 'button', '^Verify number$');
+    check('after the OTP the number shows as verified', await waitFor(page, () => /\+91 9876543210 is verified/.test(document.body.innerText), 10000));
+    const reader = await one(`select l.user_id::text, l.linked_via from public.phone_logins l where l.phone = '9876543210' and l.environment = 'production'`);
+    check('...linked to their own account', reader?.linked_via === 'account_link' && (await page.evaluate(() => Object.entries(localStorage).find(([k]) => k.includes('auth-token'))?.[1] ?? '')).includes(reader.user_id));
+    await page.screenshot({ path: path.join(SHOTS, 'kwikpass-linked-1280.png'), fullPage: true });
+    await clickText(page, 'button', '^Sign out$');
+    await waitFor(page, () => location.pathname === '/sign-in', 8000);
+    await sendOtp(page, '9876543210');
+    await enterOtp(page, '1234');
+    await waitFor(page, () => location.pathname === '/', 10000);
+    const session = await page.evaluate(() => Object.entries(localStorage).find(([k]) => k.includes('auth-token'))?.[1] ?? '');
+    check('now logging in with that number opens their email account', session.includes(reader.user_id) && session.includes('reader@example.com'));
+    check('no script errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+  {
+    const { page, ctx } = await newPage({ tokens });
+    await goto(page, '/sign-in');
+    await waitSel(page, '.auth-tab');
+    await clickText(page, '.auth-tab', '^Email$');
+    await waitSel(page, '#email');
+    await page.type('#email', 'admin@example.com');
+    await page.type('#password', 'admin-pass-1');
+    await page.click('button[type=submit]');
+    await waitFor(page, () => location.pathname === '/', 8000);
+    await goto(page, '/account');
+    await waitFor(page, () => [...document.querySelectorAll('button')].some((b) => b.textContent === 'Verify mobile number'), 10000);
+    await clickText(page, 'button', '^Verify mobile number$');
+    await waitSel(page, '#link-mobile');
+    await typeInto(page, '#link-mobile', '9876543210');
+    await clickText(page, 'button', '^Send OTP$');
+    await waitSel(page, '#link-otp', 5000);
+    await typeInto(page, '#link-otp', '1234');
+    await clickText(page, 'button', '^Verify number$');
+    check("a number already on someone else's account is refused with a clear message", await waitFor(page, () => /already belongs to another account/.test(document.body.innerText), 10000));
     await ctx.close();
   }
 

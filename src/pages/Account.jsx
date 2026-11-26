@@ -11,6 +11,8 @@ import { formatCount } from '../utils/format';
 import { useToast } from '../hooks/useToast';
 import { GENDER_OPTIONS, normalizeName } from '../utils/authForm';
 import { isMobileLoginEmail } from '../utils/mobileLogin';
+import MobileLoginSection from '../components/account/MobileLoginSection';
+import { KWIKPASS_ENVIRONMENT, kwikpassEnabled } from '../services/kwikpassService';
 import { LoadError } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 
@@ -199,6 +201,17 @@ function Account() {
               profile.setData(saved);
               setEditing(false);
               show({ message: 'Your details were saved.' });
+            }}
+          />
+        )}
+
+        {kwikpassEnabled && profile.data !== undefined && !editing && (
+          <MobileLoginSection
+            profilePhone={p.phone}
+            onVerified={(phone) => {
+              // The live store saves a verified number on the profile too (the kwikpass function).
+              if (KWIKPASS_ENVIRONMENT === 'production') profile.setData({ ...p, phone });
+              show({ message: 'Your mobile number is verified. You can now log in with it.' });
             }}
           />
         )}

@@ -12,6 +12,7 @@ import {
 import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
 import Splash from '../components/Splash';
 import MobileOtpForm from '../components/auth/MobileOtpForm';
+import KwikpassSsoButton from '../components/auth/KwikpassSsoButton';
 import { kwikpassEnabled } from '../services/kwikpassService';
 import {
   focusField,
@@ -62,6 +63,7 @@ function SignIn() {
 
   return (
     <AuthShell title="Log in" subtitle="Your saved books and orders, in one little corner." backTo="/" backLabel="Back to home">
+      {kwikpassEnabled && <KwikpassSsoButton errorClassName="auth-error auth-error--sso" />}
       {kwikpassEnabled && (
         <div className="auth-tabs" role="tablist" aria-label="Log in with">
           {[

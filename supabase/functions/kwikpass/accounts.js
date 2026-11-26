@@ -14,6 +14,8 @@ export function mobileEmail() {
 }
 
 export class AccountError extends Error {}
+// A link that is refused for a reason the customer can act on (message shown as it is).
+export class LinkConflict extends Error {}
 
 export function createAccounts(db) {
   async function lookup(environment, phone) {
@@ -57,6 +59,44 @@ export function createAccounts(db) {
     return { userId, email, created: true };
   }
 
+  // A signed-in customer proves a number with an OTP and it joins their account, so they
+  // can log in with it from now on. Refused (LinkConflict, message for the customer)
+  // when the number already belongs to another account or the account already has a
+  // different verified number. A production number also becomes the profile's number.
+  async function link(environment, phone, userId) {
+    const existing = await lookup(environment, phone);
+    if (existing && existing.userId !== userId) {
+      throw new LinkConflict('This mobile number already belongs to another account. Log out and log in with the number instead, or verify a different number.');
+    }
+    if (!existing) {
+      const { data: owner, error } = await db.rpc('kwikpass_link_phone', {
+        p_environment: environment,
+        p_phone: phone,
+        p_user: userId,
+        p_via: 'account_link',
+      });
+      if (error?.code === '23505' || /different verified mobile number/.test(error?.message ?? '')) {
+        throw new LinkConflict('Your account already has a different verified mobile number.');
+      }
+      if (error) throw new AccountError(`could not link the number: ${error.message}`);
+      if (owner !== userId) {
+        throw new LinkConflict('This mobile number already belongs to another account. Log out and log in with the number instead, or verify a different number.');
+      }
+    }
+    if (environment === 'production') {
+      const { error } = await db.from('users').update({ phone }).eq('id', userId);
+      if (error) throw new AccountError(`could not save the number on the profile: ${error.message}`);
+    }
+    return { alreadyLinked: Boolean(existing) };
+  }
+
+  // The signed-in customer behind a session token, or null.
+  async function userOfSession(accessToken) {
+    if (!accessToken) return null;
+    const { data, error } = await db.auth.getUser(accessToken);
+    return error || !data?.user?.id ? null : data.user;
+  }
+
   // A single-use code for this account. The website hands it to Supabase Auth
   // (verifyOtp with type "email") and gets a normal session back. No email is sent.
   async function signInCode(email) {
@@ -67,5 +107,5 @@ export function createAccounts(db) {
     return hash;
   }
 
-  return { lookup, findOrCreate, signInCode };
+  return { lookup, findOrCreate, link, userOfSession, signInCode };
 }

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as jose from 'jose';
 import { createClient } from '@supabase/supabase-js';
-import { asRole, authAdminCalls, createBackend, fetchPublicBooks, handleAuth, handleAuthAdmin, handleRest, SERVICE_TOKEN, USERS } from './fake-supabase.mjs';
+import { asRole, authAdminCalls, createBackend, fetchPublicBooks, handleAuth, handleAuthAdmin, handleRest, SERVICE_TOKEN, sessionFor, USERS } from './fake-supabase.mjs';
 import { createHandler } from '../supabase/functions/kwikpass/handler.js';
 import { createAccounts } from '../supabase/functions/kwikpass/accounts.js';
 import { createTokenReader, phoneFromClaims, tenDigits } from '../supabase/functions/kwikpass/token.js';
@@ -75,10 +75,10 @@ const STORE = 'https://www.kitaabaurkona.com';
 const STAGING = 'https://kitaabaurkonastaging.bizwitheet.com';
 let ipCounter = 1;
 const freshIp = () => `10.0.${Math.floor(ipCounter / 250)}.${ipCounter++ % 250}`;
-async function call(route, body, { origin = STORE, method = 'POST', ip = freshIp(), via = handle, raw } = {}) {
+async function call(route, body, { origin = STORE, method = 'POST', ip = freshIp(), via = handle, raw, session } = {}) {
   const req = new Request(`http://fn.local/functions/v1/kwikpass${route}`, {
     method,
-    headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}), 'cf-connecting-ip': ip },
+    headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}), 'cf-connecting-ip': ip, ...(session ? { authorization: `Bearer ${session}` } : {}) },
     body: method === 'POST' ? (raw ?? JSON.stringify(body)) : undefined,
   });
   const res = await via(req);
@@ -236,6 +236,40 @@ try {
     check('...and refused with KWIKPASS_MAX_AGE_SECONDS=600', (await login(oldToken, { via: makeHandler({ tokens: { maxAgeSeconds: 600 } }) })).status === 401);
   }
 
+  section('Linking a number to an account that is logged in (My Account)');
+  {
+    const reader = USERS['reader@example.com'];
+    const readerSession = sessionFor('reader@example.com').access_token;
+    const adminSession = sessionFor('admin@example.com').access_token;
+    const link = (token, session, options = {}) => call('/link', { kp_token: token }, { session, ...options });
+    const t1 = await kpToken({ phone: '9300000001' });
+    check('linking needs a logged-in customer', (await link(t1, null)).status === 401 && (await link(t1, 'not-a-session')).status === 401);
+    const before = Number((await one('select count(*) from auth.users')).count);
+    const r = await link(t1, readerSession);
+    check('a logged-in customer links a number they proved with an OTP', r.status === 200 && r.json?.phone === '9300000001' && r.json?.already_linked === false, r.text);
+    const row = await one(`select user_id::text, linked_via, environment from public.phone_logins where phone = '9300000001'`);
+    check('...recorded for their own account as account_link (production)', row?.user_id === reader.id && row?.linked_via === 'account_link' && row?.environment === 'production', JSON.stringify(row));
+    check('...the verified number replaces the typed one on their profile', (await one('select phone from public.users where id = $1', [reader.id])).phone === '9300000001');
+    check('...and no new account was made', Number((await one('select count(*) from auth.users')).count) === before);
+    const viaLogin = await login(await kpToken({ phone: '9300000001' }));
+    check('logging in with that number now opens their existing account', viaLogin.status === 200 && viaLogin.json.new_account === false && (await exchange(viaLogin.json.token_hash)).userId === reader.id, viaLogin.text);
+    const again = await link(await kpToken({ phone: '9300000001' }), readerSession);
+    check('linking the same number again is fine (already linked)', again.status === 200 && again.json?.already_linked === true);
+    const other = await link(await kpToken({ phone: '9300000001' }), adminSession);
+    check("another account cannot take a number that is already linked", other.status === 409 && /already belongs to another account/.test(other.json?.error));
+    const second = await link(await kpToken({ phone: '9300000002' }), readerSession);
+    check('an account cannot link a second number', second.status === 409 && /already has a different verified mobile number/.test(second.json?.error), second.text);
+    check('a number made by mobile login cannot be linked to someone else', (await link(await kpToken({ phone: '9812345678' }), adminSession)).status === 409);
+    const sandbox = await link(await kpToken({ phone: '9300000002' }, { key: SANDBOX_KEY }), adminSession, { origin: STAGING });
+    const adminId = USERS['admin@example.com'].id;
+    check('a sandbox link stays in the sandbox and leaves the profile alone', sandbox.status === 200 && (await one(`select environment from public.phone_logins where phone = '9300000002'`))?.environment === 'sandbox' && (await one('select phone from public.users where id = $1', [adminId])).phone === null, sandbox.text);
+    const sandboxLogin = await login(await kpToken({ phone: '9300000002' }, { key: SANDBOX_KEY }), { origin: STAGING });
+    check('...a sandbox login with it opens that account on the test shop', (await exchange(sandboxLogin.json?.token_hash)).userId === adminId);
+    const prodLogin = await login(await kpToken({ phone: '9300000002' }));
+    check('...but a live login with the same number does not', prodLogin.status === 200 && prodLogin.json.new_account === true && (await exchange(prodLogin.json.token_hash)).userId !== adminId);
+    check('a link with a refused token is refused', (await link(await kpToken({ phone: '9300000003' }, { key: OTHER_KEY }), readerSession)).status === 401);
+  }
+
   section('Database rules');
   {
     const reader = { role: 'authenticated', sub: USERS['reader@example.com'].id };
@@ -253,7 +287,7 @@ try {
     check('visitors cannot read phone_logins', await denied({ role: 'anon', sub: null }, 'select * from public.phone_logins'));
     const own = await asRole(db, { role: 'authenticated', sub: prodUser }, (tx) => tx.query('select phone from public.phone_logins'));
     const other = await asRole(db, reader, (tx) => tx.query('select phone from public.phone_logins'));
-    check('a customer sees only their own verified number', own.rows.length === 1 && own.rows[0].phone === '9812345678' && other.rows.length === 0);
+    check('a customer sees only their own verified number', own.rows.length === 1 && own.rows[0].phone === '9812345678' && other.rows.length === 1 && other.rows[0].phone === '9300000001', JSON.stringify({ own: own.rows, other: other.rows }));
     let refused = false;
     try {
       await db.query(`select public.kwikpass_link_phone('production', '9111111111', $1, 'account_link')`, [prodUser]);

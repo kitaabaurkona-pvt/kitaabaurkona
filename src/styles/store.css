@@ -621,6 +621,11 @@
   background: var(--c-surface);
 }
 
+/* GoKwik's one-tap login: no gap is kept for it until GoKwik draws the button. */
+.cart-panel-foot .kp-sso:empty {
+  display: none;
+}
+
 .cart-panel-sum {
   display: grid;
   gap: 4px;
@@ -4068,4 +4073,10 @@
 
 .return-withdraw {
   justify-items: start;
+}
+
+/* My Account: mobile number login (GoKwik KwikPass) */
+.mobile-login-state,
+.mobile-otp-sent {
+  margin: 0;
 }

@@ -6,6 +6,10 @@
 //                                "Login with 98xxxxxx34" button. Answers { token_hash }:
 //                                a one-time code the website exchanges with Supabase Auth
 //                                for a session (verifyOtp, type "email").
+//   POST /link     { kp_token }  with the signed-in customer's session token as
+//                                "Authorization: Bearer ...": the number in GoKwik's token
+//                                joins that customer's account (My Account), so they can
+//                                log in with it. Answers { phone }, or 409 with a reason.
 //   POST /health                 which of GoKwik's keys are set (never the keys).
 //
 // The number comes only from inside the token, which only GoKwik can make; the website
@@ -13,6 +17,7 @@
 
 import { LIMITS } from './config.js';
 import { claimNames, phoneFromClaims, TokenError } from './token.js';
+import { LinkConflict } from './accounts.js';
 
 // What the customer is told, by reason. Nothing says which check failed in a way that
 // helps someone trying tokens.
@@ -81,9 +86,18 @@ export function createHandler({ db, accounts, tokens, origins, log = console }) 
 
     const route = new URL(req.url).pathname.replace(/^.*\/kwikpass(?=\/|$)/, '').replace(/\/+$/, '') || '/';
     if (route === '/health') return reply(200, { ok: true, keys: tokens.configured });
-    if (route !== '/login') return fail(404, 'Not found');
+    if (route !== '/login' && route !== '/link') return fail(404, 'Not found');
 
     try {
+      // /link is for a signed-in customer only: their session token (sent by the website's
+      // Supabase client) decides which account the number joins.
+      let linkUser = null;
+      if (route === '/link') {
+        const session = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+        linkUser = await accounts.userOfSession(session);
+        if (!linkUser) return fail(401, 'Please log in again, then verify your number.');
+      }
+
       const declared = Number(req.headers.get('content-length') || 0);
       if (declared > LIMITS.bodyBytes) return fail(413, 'Request too large');
       const raw = await req.text();
@@ -118,6 +132,18 @@ export function createHandler({ db, accounts, tokens, origins, log = console }) 
       }
       if (!(await withinLimit(`kwikpass:phone:${opened.environment}:${phone}`, LIMITS.perPhone))) {
         return fail(429, 'Too many logins for this number. Please wait a few minutes and try again.');
+      }
+
+      if (linkUser) {
+        try {
+          const linked = await accounts.link(opened.environment, phone, linkUser.id);
+          log.info(JSON.stringify({ event: 'link', ref, environment: opened.environment, already: linked.alreadyLinked, ms: Date.now() - started }));
+          return reply(200, { ok: true, phone, environment: opened.environment, already_linked: linked.alreadyLinked });
+        } catch (error) {
+          if (!(error instanceof LinkConflict)) throw error;
+          log.warn(JSON.stringify({ event: 'link_refused', ref, environment: opened.environment }));
+          return fail(409, error.message);
+        }
       }
 
       const account = await accounts.findOrCreate(opened.environment, phone);

@@ -10,6 +10,9 @@ import { ShoppingCart } from '@phosphor-icons/react';
 import { LinesSkeleton } from '../store/Skeletons';
 import { CloseIcon } from '../icons';
 import CartLine from './CartLine';
+import KwikpassSsoButton from '../auth/KwikpassSsoButton';
+import { useAuth } from '../../hooks/useAuth';
+import { kwikpassEnabled } from '../../services/kwikpassService';
 
 
 // Slide-out cart opened from the header (loaded by CartPanel.jsx when first needed).
@@ -17,6 +20,7 @@ import CartLine from './CartLine';
 // whatever opened it.
 function CartPanelDialog() {
   const { ids } = useCart();
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const { cartOpen, setCartOpen, lines, totals, blocked, pending, data, loading, error, retry } = useCartLines();
   const saving = totals.mrp - totals.subtotal;
   const empty = ids.length === 0;
@@ -132,6 +136,8 @@ function CartPanelDialog() {
                         </div>
                       )}
                     </dl>
+                    {/* GoKwik's one-tap login, for a visitor GoKwik already knows (empty otherwise). */}
+                    {kwikpassEnabled && !authLoading && !isAuthenticated && <KwikpassSsoButton errorClassName="field-message" />}
                     {blocked || pending || totals.count === 0 ? (
                       <button type="button" className="btn btn-primary btn-block" aria-disabled="true">
                         Checkout

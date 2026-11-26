@@ -459,6 +459,12 @@ export async function handleAuthAdmin(db, { method, url, headers, body }) {
     const u = await account('id::text', entry.userId);
     return u ? json(200, sessionForAccount(u)) : fail(404, 'user_not_found', 'User not found');
   }
+  if (p === '/auth/v1/user' && method === 'GET') {
+    // Any account in auth.users (handleAuth only knows the seeded ones).
+    const { sub } = claimsFrom(headers);
+    const u = sub ? await account('id::text', sub) : null;
+    return u ? json(200, userJson(u)) : fail(401, 'bad_jwt', 'invalid JWT');
+  }
   if (!p.startsWith('/auth/v1/admin/')) return null;
   authAdminCalls.push({ method, path: p, body: input });
   if (claimsFrom(headers).role !== 'service_role') return fail(403, 'not_admin', 'User not allowed');

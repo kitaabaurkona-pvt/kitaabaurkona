@@ -5,6 +5,8 @@ import { useAsync } from '../hooks/useAsync';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { formatPrice, plural } from '../utils/format';
 import { COLLECTIONS, UNDER_PRICE, orderCategories } from '../utils/categories';
+import { booksPageView } from '../utils/pageViews';
+import { trackPageView } from '../services/kwikpassService';
 import BookCard from '../components/store/BookCard';
 import { LoadError, StateBlock } from '../components/store/States';
 import { BookGridSkeleton } from '../components/store/Skeletons';
@@ -110,6 +112,13 @@ function Books() {
   const maxPrice = Number(params.get('max')) === UNDER_PRICE ? UNDER_PRICE : null;
   const collection = COLLECTIONS[params.get('collection')] ? params.get('collection') : '';
   const filterKey = `${q}|${sort}|${inStock}|${category}|${maxPrice}|${collection}`;
+
+  // GoKwik KwikPass page view: a genre or collection, or "other" (only where mobile
+  // number login is on). Sent again only when the shelf being looked at changes.
+  useEffect(() => {
+    const view = booksPageView({ q, category, collection, maxPrice });
+    trackPageView(view.type, view.data);
+  }, [q, category, collection, maxPrice]);
 
   const [term, setTerm] = useState(q);
   const [prevQ, setPrevQ] = useState(q);
