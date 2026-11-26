@@ -1,6 +1,7 @@
 import { previewMode } from '../preview/mode';
 import { loadSupabase } from '../clients/supabase';
 import { safeRedirect } from '../utils/authForm';
+import { kwikpassLogout } from './kwikpassService';
 
 export async function signIn(email, password) {
   const supabase = await loadSupabase();
@@ -62,15 +63,18 @@ export async function updatePassword(password) {
 }
 
 // Ends every session for this account, on all devices (Supabase revokes all refresh tokens).
+// Every logout also logs out of GoKwik's KwikPass (GoKwik's rule), even when ours failed.
 export async function signOutEverywhere() {
   const supabase = await loadSupabase();
   const { error } = await supabase.auth.signOut({ scope: 'global' });
+  kwikpassLogout();
   if (error) throw error;
 }
 
 export async function signOut() {
   const supabase = await loadSupabase();
   const { error } = await supabase.auth.signOut();
+  kwikpassLogout();
   if (error) throw error;
 }
 

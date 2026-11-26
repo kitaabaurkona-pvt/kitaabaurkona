@@ -10,6 +10,7 @@ import { listOrders } from '../services/orderService';
 import { formatCount } from '../utils/format';
 import { useToast } from '../hooks/useToast';
 import { GENDER_OPTIONS, normalizeName } from '../utils/authForm';
+import { isMobileLoginEmail } from '../utils/mobileLogin';
 import { LoadError } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 
@@ -133,9 +134,11 @@ function Account() {
   }
 
   const p = profile.data ?? {};
+  // An account made by mobile number login has a made-up email address: never show it.
+  const email = p.email ?? user.email;
   const details = [
     ['Name', p.full_name],
-    ['Email', p.email ?? user.email],
+    ...(isMobileLoginEmail(email) ? [] : [['Email', email]]),
     ['Mobile number', p.phone],
     ['Gender', GENDER_LABELS[p.gender]],
     ['Delivery address', p.address],

@@ -11,6 +11,8 @@ import {
 } from '../components/auth/fields';
 import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
 import Splash from '../components/Splash';
+import MobileOtpForm from '../components/auth/MobileOtpForm';
+import { kwikpassEnabled } from '../services/kwikpassService';
 import {
   focusField,
   normalizeEmail,
@@ -26,6 +28,8 @@ function SignIn() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // Where mobile number login is on (GoKwik KwikPass), it is the first way offered.
+  const [method, setMethod] = useState(kwikpassEnabled ? 'mobile' : 'email');
   const google = useGoogleSignIn(location.state?.from);
 
   if (loading) return <Splash />;
@@ -58,45 +62,79 @@ function SignIn() {
 
   return (
     <AuthShell title="Log in" subtitle="Your saved books and orders, in one little corner." backTo="/" backLabel="Back to home">
-      <form className="auth-form" onSubmit={handleSubmit} noValidate>
-        <TextField
-          id="email"
-          label="Email"
-          type="email"
-          inputMode="email"
-          autoComplete="username"
-          autoCapitalize="none"
-          spellCheck={false}
-          maxLength={254}
-          placeholder="Enter your email address"
-          required
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          error={fieldError('email')}
-        />
-        <PasswordField
-          id="password"
-          label="Password"
-          autoComplete="current-password"
-          labelAction={
-            <Link to="/forgot-password" className="field-link">
-              Forgot password?
-            </Link>
-          }
-          maxLength={72}
-          placeholder="Enter your password"
-          required
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          error={fieldError('password')}
-        />
-        {error && !error.field && (
-          <p className="auth-error" role="alert">
-            {error.message}
-          </p>
+      {kwikpassEnabled && (
+        <div className="auth-tabs" role="tablist" aria-label="Log in with">
+          {[
+            ['mobile', 'Mobile number'],
+            ['email', 'Email'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              id={`login-tab-${value}`}
+              aria-selected={method === value}
+              aria-controls="login-panel"
+              className="auth-tab"
+              onClick={() => {
+                setMethod(value);
+                setError(null);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div
+        id="login-panel"
+        role={kwikpassEnabled ? 'tabpanel' : undefined}
+        aria-labelledby={kwikpassEnabled ? `login-tab-${method}` : undefined}
+      >
+        {method === 'mobile' ? (
+          <MobileOtpForm />
+        ) : (
+          <form className="auth-form" onSubmit={handleSubmit} noValidate>
+            <TextField
+              id="email"
+              label="Email"
+              type="email"
+              inputMode="email"
+              autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
+              maxLength={254}
+              placeholder="Enter your email address"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              error={fieldError('email')}
+            />
+            <PasswordField
+              id="password"
+              label="Password"
+              autoComplete="current-password"
+              labelAction={
+                <Link to="/forgot-password" className="field-link">
+                  Forgot password?
+                </Link>
+              }
+              maxLength={72}
+              placeholder="Enter your password"
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              error={fieldError('password')}
+            />
+            {error && !error.field && (
+              <p className="auth-error" role="alert">
+                {error.message}
+              </p>
+            )}
+            <SubmitButton busy={submitting} idleLabel="Log in" busyLabel="Logging in…" />
+          </form>
         )}
-        <SubmitButton busy={submitting} idleLabel="Log in" busyLabel="Logging in…" />
-      </form>
+      </div>
       <AuthDivider />
       <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
       <p className="auth-switch">

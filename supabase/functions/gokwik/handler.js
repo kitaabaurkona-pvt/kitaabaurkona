@@ -73,7 +73,9 @@ export function sentTokens(req) {
     let value = (req.headers.get(header) || '').trim();
     for (let i = 0; i < 3; i++) value = value.replace(/^(bearer|token)(\s*[:=]\s*|\s+)/i, '').trim();
     value = value.replace(/^(["'])(.*)\1$/, '$2').trim();
-    if (value) found.push({ header, value: value.slice(0, 512) });
+    // Not shortened: a long access token must arrive whole to match (headers are limited
+    // to a few KB by the gateway anyway).
+    if (value) found.push({ header, value });
   }
   return found;
 }
@@ -89,6 +91,21 @@ async function fingerprint(value) {
 // Shown to a caller whose token was not accepted (GoKwik's team reads this in Postman or
 // in their validator).
 const TOKEN_HELP = 'not authorized: send the access token we gave you as "Authorization: Bearer <token>" (or in an "X-API-Key" header). The sandbox and production tokens are different.';
+
+// What arrived instead of our token, said so the caller can fix it without asking us:
+// an unfilled Postman variable is named (it is their own text), anything else is
+// described by its length only. Nothing about our tokens is shown except their length.
+export function tokenProblems(sent, expectedLength) {
+  if (!sent.length) return ['No token arrived: the request had no Authorization or X-API-Key header.'];
+  return sent.map(({ header, value }) => {
+    const name = header === 'authorization' ? 'Authorization' : header === 'x-api-key' ? 'X-API-Key' : header;
+    const variable = /^\{\{\s*([\w.-]{1,60})\s*\}\}$/.exec(value);
+    if (variable) return `${name} contains the Postman variable {{${variable[1]}}}, which has no value: set "${variable[1]}" to the sandbox access token in your Postman environment or collection variables.`;
+    if (/^\{\{/.test(value)) return `${name} contains an unfilled Postman variable: give it the sandbox access token as its value.`;
+    const want = expectedLength ? ` Our access tokens are ${expectedLength} characters long.` : '';
+    return `${name} has a ${value.length}-character value that is not our access token.${want}`;
+  });
+}
 
 // environments: { production: { token, merchantId, api }, sandbox: { ... } } where api is
 // createGokwikApi()'s result (null when GoKwik's keys are not set).
@@ -141,7 +158,7 @@ export function createHandler({ db, environments, webhookKey, cronSecret, checkP
   async function logRefusedToken(req, route, ref) {
     const sent = await Promise.all(sentTokens(req).map(async ({ header, value }) => ({ header, length: value.length, fingerprint: await fingerprint(value) })));
     const expected = {};
-    for (const name of ENVIRONMENTS) expected[name] = await fingerprint(tokenOf(name));
+    for (const name of ENVIRONMENTS) expected[name] = { length: tokenOf(name).length, fingerprint: await fingerprint(tokenOf(name)) };
     const headers = [...req.headers.keys()].filter((name) => name !== 'cookie').slice(0, 40);
     log.warn(JSON.stringify({ event: 'token_refused', ref, route, method: req.method, sent, expected, headers, ip: callerAddress(req).ip, agent: (req.headers.get('user-agent') || '').slice(0, 80) }));
   }
@@ -367,7 +384,8 @@ export function createHandler({ db, environments, webhookKey, cronSecret, checkP
         environment = await environmentOf(req);
         if (!environment) {
           await logRefusedToken(req, route, ref);
-          return fail(401, TOKEN_HELP);
+          const lengths = [...new Set(ENVIRONMENTS.map((name) => tokenOf(name).length).filter(Boolean))];
+          return fail(401, TOKEN_HELP, { problems: tokenProblems(sentTokens(req), lengths.length === 1 ? lengths[0] : 0) });
         }
         if (!addressAllowed(req, route, environment)) return fail(403, 'not authorized');
       } else if (kind === 'webhook') {

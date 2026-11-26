@@ -4011,10 +4011,109 @@ grant execute on function public.admin_set_return_note(uuid, text) to authentica
 grant execute on function public.admin_return_overview() to authenticated;
 grant execute on function public.admin_receive_return(uuid) to authenticated;
 
+
+-- -----------------------------------------------------------------------------
+-- 9j. MOBILE NUMBER LOGIN (GoKwik KwikPass)
+-- -----------------------------------------------------------------------------
+-- A customer can log in with their mobile number: GoKwik's KwikPass sends the OTP and,
+-- once it is right, hands the website a sealed token holding the number. The `kwikpass`
+-- Edge Function opens that token with GoKwik's secret key and signs the customer in to
+-- the account this table names for the number (making a new account the first time).
+--
+-- Only numbers proven by an OTP are in here. The mobile number on a profile is typed by
+-- the customer and never checked, so it never decides which account someone logs in to.
+--
+-- environment: which of GoKwik's keys opened the token. The test shop uses GoKwik's
+-- sandbox and shares this database, and a sandbox OTP proves nothing about a real
+-- number, so sandbox logins only ever reach accounts made or linked in the sandbox.
+-- linked_via: 'otp_login'    the account was made by logging in with this number
+--             'account_link' a signed-in customer proved the number with an OTP (My Account)
+
+create table if not exists public.phone_logins (
+  environment text not null check (environment in ('production', 'sandbox')),
+  phone text not null check (phone ~ '^[6-9][0-9]{9}$'),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  linked_via text not null check (linked_via in ('otp_login', 'account_link')),
+  created_at timestamptz not null default now(),
+  primary key (environment, phone),
+  unique (environment, user_id)
+);
+
+alter table public.phone_logins enable row level security;
+revoke all on public.phone_logins from public, anon, authenticated;
+grant all on public.phone_logins to service_role;
+grant select on public.phone_logins to authenticated;
+
+-- A customer may see their own verified number; nobody may change rows from the website.
+drop policy if exists "Users view own phone login" on public.phone_logins;
+create policy "Users view own phone login" on public.phone_logins
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+-- The account a verified number logs in to (no row when the number is new).
+-- Edge Function only.
+create or replace function public.kwikpass_account(p_environment text, p_phone text)
+returns table (user_id uuid, email text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select l.user_id, u.email::text
+  from public.phone_logins l
+  join auth.users u on u.id = l.user_id
+  where l.environment = p_environment and l.phone = p_phone;
+$$;
+
+-- Records that p_user owns the verified number p_phone and returns the account that owns
+-- it afterwards: p_user, or the account that got the number first when two logins with
+-- a new number run at the same moment (the caller then drops the account it just made).
+-- A production number also fills an empty mobile number on the profile. Edge Function only.
+create or replace function public.kwikpass_link_phone(p_environment text, p_phone text, p_user uuid, p_via text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_owner uuid;
+begin
+  if p_environment is null or p_environment not in ('production', 'sandbox') then
+    raise exception 'unknown environment' using errcode = '22023';
+  end if;
+  if p_phone is null or p_phone !~ '^[6-9][0-9]{9}$' then
+    raise exception 'not a 10-digit mobile number' using errcode = '22023';
+  end if;
+  if p_via is null or p_via not in ('otp_login', 'account_link') then
+    raise exception 'unknown link type' using errcode = '22023';
+  end if;
+
+  insert into public.phone_logins (environment, phone, user_id, linked_via)
+  values (p_environment, p_phone, p_user, p_via)
+  on conflict do nothing;
+
+  select l.user_id into v_owner from public.phone_logins l
+  where l.environment = p_environment and l.phone = p_phone;
+  if v_owner is null then
+    raise exception 'this account already has a different verified mobile number' using errcode = '23505';
+  end if;
+
+  if p_environment = 'production' then
+    update public.users set phone = p_phone where id = v_owner and phone is null;
+  end if;
+  return v_owner;
+end;
+$$;
+
+revoke execute on function public.kwikpass_account(text, text) from public, anon, authenticated;
+revoke execute on function public.kwikpass_link_phone(text, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.kwikpass_account(text, text) to service_role;
+grant execute on function public.kwikpass_link_phone(text, text, uuid, text) to service_role;
+
 -- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: nineteen rows, all with
+-- The SQL Editor shows this table after the run. Expected: twenty rows, all with
 -- rls_enabled = true (integration_tokens, pincode_checks, rate_limits and
 -- checkout_carts have 0 policies on purpose: only the Edge Functions may touch them).
 select
@@ -4025,7 +4124,7 @@ from pg_tables t
 where t.schemaname = 'public'
   and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items',
     'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits',
-    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates', 'order_fulfilment', 'order_invoices', 'return_requests')
+    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates', 'order_fulfilment', 'order_invoices', 'return_requests', 'phone_logins')
 order by t.tablename;
 
 

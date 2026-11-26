@@ -274,6 +274,65 @@
   outline: none;
 }
 
+/* Log in with: mobile number or email (when mobile number login is on) */
+
+.auth-page .auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 0 0 1.5rem;
+  border-bottom: 1px solid var(--auth-line);
+}
+
+.auth-page .auth-tab {
+  height: 2.75rem;
+  margin-bottom: -1px;
+  padding: 0 0.75rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--auth-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.auth-page .auth-tab[aria-selected='true'] {
+  border-bottom-color: var(--auth-ink);
+  color: var(--auth-ink);
+}
+
+.auth-page .auth-tab:focus-visible {
+  outline: 3px solid var(--auth-ink);
+  outline-offset: -3px;
+}
+
+@media (hover: hover) {
+  .auth-page .auth-tab:hover {
+    color: var(--auth-ink);
+  }
+}
+
+.auth-page .otp-sent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--auth-body);
+  font-size: 0.875rem;
+}
+
+.auth-page .otp-sent .field-link {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
 /* Gender choice pills */
 
 .auth-page .choice-grid {
