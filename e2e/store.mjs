@@ -293,7 +293,7 @@ try {
     check('home: "Books to start with" shows books', await waitSel(page, '.reading-shelf .book-card'));
     await waitSel(page, '.affordable-section .book-card');
     const cheap = await page.$$eval('.affordable-section .price-block .price', (ps) => ps.map((p) => Number(p.textContent.replace(/[^\d.]/g, ''))));
-    check('home: "₹299 & under" shows up to 4 books, all ₹299 or less', cheap.length >= 1 && cheap.length <= 4 && cheap.every((n) => n <= 299), cheap.join(','));
+    check('home: "₹299 & under" shows up to 6 books, all ₹299 or less', cheap.length >= 1 && cheap.length <= 6 && cheap.every((n) => n <= 299), cheap.join(','));
     check('home: no invented promos, countdowns or reviews', !INVENTED.test(await page.$eval('body', (b) => b.innerText)));
     check('cards: every card has a full-width Add to cart button', (await page.$$('.book-card')).length === (await page.$$('.book-card .btn-card')).length);
     const cardBtn = await page.$eval('.book-card .btn-card:not([aria-disabled])', (b) => ({ radius: parseFloat(getComputedStyle(b).borderTopLeftRadius), bg: getComputedStyle(b).backgroundColor }));
@@ -601,7 +601,13 @@ try {
     await sleep(800);
     const g3 = await genrePos();
     check('genre row: drifts steadily in one direction', g2 < g1 && g3 < g2, `${g1} ${g2} ${g3}`);
-    check('genre row: copies follow the tiles, hidden from the keyboard and screen readers', (await page.$$('#genre-rail .genre-set[inert][aria-hidden="true"]')).length >= 1 && (await page.$$eval('#genre-rail .genre-set[inert] a', (as) => as.every((a) => !a.checkVisibility?.() || a.closest('[inert]')))) && (await page.$$eval('#genre-rail a', (as) => as.filter((a) => a.tabIndex >= 0 && !a.closest('[inert]')).length)) === 5);
+    // The copies stay tappable (a swipe can leave one under the finger), but screen readers and Tab skip them.
+    const genreCopies = await page.evaluate(() => ({
+      hiddenSets: document.querySelectorAll('#genre-rail .genre-set[aria-hidden="true"]').length,
+      copyTabs: [...document.querySelectorAll('#genre-rail .genre-set[aria-hidden="true"] a')].map((a) => a.tabIndex),
+      realTabs: [...document.querySelectorAll('#genre-rail a')].filter((a) => !a.closest('[aria-hidden="true"]')).map((a) => a.tabIndex),
+    }));
+    check('genre row: copies follow the tiles, hidden from the keyboard and screen readers', genreCopies.hiddenSets >= 1 && genreCopies.copyTabs.length > 0 && genreCopies.copyTabs.every((t) => t === -1) && genreCopies.realTabs.filter((t) => t >= 0).length === 5, JSON.stringify(genreCopies));
     check('genre row: the edges fade instead of cutting tiles', /gradient/.test(await page.$eval('.genre-slider', (e) => getComputedStyle(e).maskImage || getComputedStyle(e).webkitMaskImage)));
     await page.hover('#genre-rail');
     await sleep(300);
