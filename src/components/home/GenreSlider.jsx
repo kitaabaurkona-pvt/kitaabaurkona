@@ -111,6 +111,7 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
       holdForAWhile();
     };
     const cancel = () => {
+      if (!drag) return;
       drag = null;
       swallowClick = false;
       holdForAWhile();
@@ -143,8 +144,8 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
     // Tabbing to a tile pauses the row and brings that tile fully into view.
     const focusIn = (e) => {
       const tile = e.target.closest('.mood-tile');
-      focused = true;
-      if (tile?.matches(':focus-visible') && set.contains(tile) && animation) {
+      focused = !drag && Boolean(tile?.matches(':focus-visible'));
+      if (focused && set.contains(tile) && animation) {
         const d = duration();
         animation.currentTime = ((Math.max(0, tile.offsetLeft - 24) % width) / width) * d;
       }
