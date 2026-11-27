@@ -90,13 +90,13 @@
 .bottom-nav-count {
   position: absolute;
   top: -5px;
-  left: 14px;
+  right: -6px;
   min-width: 16px;
-  padding: 2px 3px;
+  padding: 1px 3px;
   border-radius: 999px;
   background: var(--c-accent);
   color: #101010;
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.2;
   text-align: center;
 }
@@ -133,7 +133,7 @@ body:has(.site[data-bottom-nav]) .toasts {
 
   .bottom-nav-item {
     flex-direction: row;
-    gap: 6px;
+    gap: 9px;
     padding-inline: 8px;
     border-radius: 999px;
     font-size: 12px;
