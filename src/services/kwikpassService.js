@@ -35,7 +35,7 @@ let sdkPromise = null;
 export function startKwikpass() {
   if (!kwikpassEnabled) return Promise.reject(new Error('Mobile number login is off on this site'));
   if (sdkPromise) return sdkPromise;
-  window.merchantInfo = { ...window.merchantInfo, environment: ENVIRONMENT, mid: MID, type: 'merchantInfo' };
+  window.merchantInfo = { ...window.merchantInfo, environment: ENVIRONMENT, mid: MID, type: 'merchantInfo', integrationType: 'CUSTOM_HEADLESS' };
   sdkPromise = new Promise((resolve, reject) => {
     const ready = instance();
     if (ready) {
@@ -102,7 +102,9 @@ export async function verifyLoginOtp(phone, otp) {
     return { ok: false, message: GENERIC };
   }
   try {
-    const answer = await sdk.kpVerifyOTP({ phone, otp });
+    // GoKwik's API wants the OTP as a number ({ phone: "8755512345", otp: 1234 } in its
+    // guide); a string OTP is refused. The number stays a string.
+    const answer = await sdk.kpVerifyOTP({ phone, otp: Number(otp) });
     // GoKwik's script answers nothing when its own call failed (it swallows the error).
     if (!answer || typeof answer !== 'object') return { ok: false, message: GENERIC };
     const result = outcome(answer);

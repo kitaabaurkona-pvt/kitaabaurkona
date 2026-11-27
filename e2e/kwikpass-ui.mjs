@@ -102,8 +102,10 @@ window.__KP_LOGIN_SDK_INSTANCE__ = {
   },
   async kpVerifyOTP(input) {
     window.__kp.verifies.push(input);
-    if (input.otp === '9999') return undefined;
-    if (input.otp !== '1234') return { status: 400, message: 'OTP is invalid. Please try again.' };
+    // Like GoKwik's API: the OTP must be a number (a string one is refused).
+    if (typeof input.otp !== 'number') return { status: 400, message: 'otp must be a number' };
+    if (input.otp === 9999) return undefined;
+    if (input.otp !== 1234) return { status: 400, message: 'OTP is invalid. Please try again.' };
     return { status: 200, body: { data: { email: '', token: 't', coreToken: 'c', kpToken: (window.__kpTokens || {})[input.phone] || '' } } };
   },
   handleKPLogout() { window.__kp.logouts += 1; },
@@ -206,7 +208,7 @@ try {
     check('...with the +91 number box', await waitSel(page, '#mobile'));
     check("GoKwik's production script is loaded on the live store build", await waitFor(page, () => window.__kp?.merchantInfoAtLoad, 8000) && sdkRequests[0] === 'https://pdp.gokwik.co/kwikpass/plugin/build/kp-custom-merchant.js', JSON.stringify(sdkRequests));
     const info = await page.evaluate(() => window.__kp.merchantInfoAtLoad);
-    check('merchant details are on the page before the script runs', info?.mid === MID && info?.environment === 'production' && info?.type === 'merchantInfo', JSON.stringify(info));
+    check('merchant details are on the page before the script runs', info?.mid === MID && info?.environment === 'production' && info?.type === 'merchantInfo' && info?.integrationType === 'CUSTOM_HEADLESS', JSON.stringify(info));
     await clickText(page, '.auth-tab', '^Email$');
     check('the Email tab shows the email form', (await waitSel(page, '#email', 3000)) && (await page.$('#mobile')) === null);
     await clickText(page, '.auth-tab', '^Mobile number$');
@@ -239,7 +241,7 @@ try {
     await sendOtp(page, '9812345678');
     await enterOtp(page, '1234');
     check('the right OTP logs in and leaves the sign-in page', await waitFor(page, () => location.pathname === '/', 10000));
-    check('GoKwik was asked to check the number and OTP as typed', JSON.stringify(await page.evaluate(() => window.__kp.verifies.at(-1))) === JSON.stringify({ phone: '9812345678', otp: '1234' }));
+    check('GoKwik was asked to check the number (text) and OTP (a number)', JSON.stringify(await page.evaluate(() => window.__kp.verifies.at(-1))) === JSON.stringify({ phone: '9812345678', otp: 1234 }));
     const row = await one(`select l.user_id::text, l.environment, u.phone from public.phone_logins l join public.users u on u.id = l.user_id where l.phone = '9812345678'`);
     userId = row?.user_id;
     check('a new account was made for the verified number (production)', row?.environment === 'production' && row?.phone === '9812345678', JSON.stringify(row));
