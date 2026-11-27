@@ -8,6 +8,8 @@ import ErrorBoundary from '../ErrorBoundary';
 import CartPanel from '../cart/CartPanel';
 import { useScrollMemory } from '../../hooks/useScrollMemory';
 import { useReduceMotion } from '../../hooks/useReduceMotion';
+import { trackPageView } from '../../services/kwikpassService';
+import { hasOwnPageView } from '../../utils/pageViews';
 import '../../styles/store.css';
 import '../../styles/reading-corner.css';
 import '../../styles/bento-shop.css';
@@ -34,6 +36,12 @@ function Layout() {
 
   // Back returns to the exact spot on the previous page; new pages open at the top.
   useScrollMemory();
+
+  // GoKwik KwikPass page view for every page that does not send its own (home, cart,
+  // account...). Only where mobile number login is on.
+  useEffect(() => {
+    if (!hasOwnPageView(pathname)) trackPageView('other');
+  }, [pathname]);
 
   function scrollToTop() {
     window.scrollTo({ top: 0, behavior: reduce ? 'instant' : 'smooth' });

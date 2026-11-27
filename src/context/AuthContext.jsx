@@ -1,6 +1,9 @@
-import { createContext, useState, useEffect, useMemo } from 'react';
+import { createContext, useState, useEffect, useMemo, useCallback } from 'react';
 import { loadSupabase } from '../clients/supabase';
 import * as authService from '../services/authService';
+import { needsDetails } from '../services/profileService';
+import { detailsSkippedBy, rememberDetailsSkipped } from '../utils/detailsSkip';
+import { SITE } from '../utils/release';
 
 export const AuthContext = createContext(null);
 
@@ -8,6 +11,11 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null);
   const [loading, setLoading] = useState(true);
+  // On the store: true while a signed-in customer has not saved their delivery details,
+  // so they are sent to "Your details" once (components/DetailsGate.jsx).
+  const [detailsMissing, setDetailsMissing] = useState(false);
+  // The customer chose "Skip for now": they browse freely, but checkout still asks.
+  const [detailsSkipped, setDetailsSkipped] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -16,10 +24,14 @@ export function AuthProvider({ children }) {
     async function applySession(session) {
       const current = ++latest;
       const nextUser = session?.user ?? null;
-      const nextRole = nextUser ? await authService.getUserRole(nextUser.id) : null;
+      const [nextRole, missing] = nextUser
+        ? await Promise.all([authService.getUserRole(nextUser.id), SITE === 'store' ? needsDetails(nextUser.id) : false])
+        : [null, false];
       if (!active || current !== latest) return;
       setUser(nextUser);
       setRole(nextRole);
+      setDetailsMissing(missing);
+      setDetailsSkipped(nextUser ? detailsSkippedBy(nextUser.id) : false);
       setLoading(false);
     }
 
@@ -51,11 +63,27 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
+  // Called after the customer saves their details, so the store lets them carry on.
+  const refreshDetails = useCallback(async () => {
+    if (!user || SITE !== 'store') return;
+    setDetailsMissing(await needsDetails(user.id));
+  }, [user]);
+
+  const skipDetails = useCallback(() => {
+    if (!user) return;
+    rememberDetailsSkipped(user.id);
+    setDetailsSkipped(true);
+  }, [user]);
+
   const value = useMemo(
     () => ({
       user,
       role,
       loading,
+      detailsMissing,
+      detailsSkipped,
+      skipDetails,
+      refreshDetails,
       isAuthenticated: !!user,
       signIn: authService.signIn,
       signUp: authService.signUp,
@@ -65,7 +93,7 @@ export function AuthProvider({ children }) {
       requestPasswordReset: authService.requestPasswordReset,
       updatePassword: authService.updatePassword,
     }),
-    [user, role, loading]
+    [user, role, loading, detailsMissing, detailsSkipped, skipDetails, refreshDetails]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

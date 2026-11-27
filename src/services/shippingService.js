@@ -80,6 +80,15 @@ export const carrierOf = (shipment) => (shipment?.carrier === 'delhivery' ? 'del
 // Moves a parcel that is not booked yet to the other carrier. checked: as for bookNow.
 export const setCarrier = (orderId, carrier, checked = false) => invoke('set_carrier', { order_id: orderId, carrier, ...(checked ? { checked: true } : {}) });
 // { url } of the parcel's label PDF (Delhivery makes it on request).
+// Whether a booked parcel has a label to print. Xpressbees labels are a saved link;
+// Delhivery makes one on request for a booked parcel.
+const LABEL_STATES = ['booked', 'in_transit', 'out_for_delivery', 'exception'];
+export function hasLabel(shipment) {
+  if (!shipment) return false;
+  if (carrierOf(shipment) === 'delhivery') return Boolean(shipment.awb_number) && LABEL_STATES.includes(shipment.status);
+  return Boolean(shipment.label_url);
+}
+
 export const getLabel = (orderId, kind = 'forward') => invoke('label', { order_id: orderId, kind });
 // Registers the saved pickup address with Delhivery under the saved Delhivery warehouse
 // name: { name, created } (created false = Delhivery already had it).
@@ -92,13 +101,29 @@ export const listNdr = () => invoke('ndr_list');
 export const actOnNdr = (items) => invoke('ndr_action', { items });
 export const bookReturnPickup = (orderId) => invoke('return_pickup', { order_id: orderId });
 
+// Books a return pickup; resolves to the courier's refusal (a message), or null once booked.
+export async function tryReturnPickup(orderId) {
+  try {
+    await bookReturnPickup(orderId);
+    return null;
+  } catch (err) {
+    return err?.message || 'The return pickup could not be booked.';
+  }
+}
+
+// The courier's public tracking page for a parcel.
+export const trackingUrl = (parcel) =>
+  carrierOf(parcel) === 'delhivery'
+    ? `https://www.delhivery.com/track-v2/package/${parcel.awb_number}`
+    : `https://www.xpressbees.com/shipment/tracking?awbNo=${parcel.awb_number}`;
+
 export async function getShippingSettings() {
   const supabase = await loadSupabase();
   const { data } = unwrap(await supabase.from('shipping_settings').select('*').limit(1));
   return data?.[0] ?? null;
 }
 
-const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone', 'pickup_email'];
+const SETTING_FIELDS = ['auto_book', 'default_carrier', 'delhivery_warehouse_name', 'skip_couriers', 'warehouse_name', 'pickup_name', 'pickup_address', 'pickup_city', 'pickup_state', 'pickup_pincode', 'pickup_phone', 'pickup_email', 'invoice_business_name', 'invoice_address', 'invoice_phone', 'invoice_gstin', 'invoice_pan', 'invoice_state'];
 
 export async function updateShippingSettings(patch) {
   const supabase = await loadSupabase();

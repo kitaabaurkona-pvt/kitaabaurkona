@@ -175,7 +175,24 @@ try {
     const refused = await call('/get-cart', { cart_id: cartA }, { token: 'y'.repeat(36), headers: { 'user-agent': 'PostmanRuntime/2.11.0' } });
     const line = logs.find((l) => l.includes('token_refused')) ?? '';
     check('a refused token answers how to send it', refused.status === 401 && /Authorization: Bearer <token>/.test(refused.json?.error ?? '') && /X-API-Key/.test(refused.json?.error ?? ''), JSON.stringify(refused.json));
-    check('a refused token is logged with length and fingerprint, never the token', /"length":36/.test(line) && /"fingerprint":"[0-9a-f]{8}"/.test(line) && /"sandbox":"[0-9a-f]{8}"/.test(line) && /PostmanRuntime/.test(line) && !line.includes('y'.repeat(36)) && !line.includes(SANDBOX_TOKEN) && !line.includes(PROD_TOKEN), line);
+    check('a refused token is logged with length and fingerprint, never the token', /"length":36/.test(line) && /"fingerprint":"[0-9a-f]{8}"/.test(line) && /"sandbox":\{"length":\d+,"fingerprint":"[0-9a-f]{8}"\}/.test(line) && /PostmanRuntime/.test(line) && !line.includes('y'.repeat(36)) && !line.includes(SANDBOX_TOKEN) && !line.includes(PROD_TOKEN), line);
+  }
+  {
+    // GoKwik's validator sent an unfilled Postman variable and a long key of its own (18 Nov).
+    const r = await call('/get-cart', { cart_id: cartA }, { token: null, headers: { authorization: 'Bearer {{access_token}}', 'x-api-key': 'k'.repeat(1088) } });
+    const problems = r.json?.problems ?? [];
+    check('a refused token says which Postman variable is empty', r.status === 401 && problems.some((p) => /Authorization contains the Postman variable \{\{access_token\}\}, which has no value/.test(p)), JSON.stringify(r.json));
+    check('...and that the other value is not our token, by length only', problems.some((p) => /X-API-Key has a 1088-character value/.test(p) && /are \d+ characters long/.test(p)) && !JSON.stringify(r.json).includes('kkkk'), JSON.stringify(problems));
+    const none = await call('/get-cart', { cart_id: cartA }, { token: null });
+    check('a request without any token says so', none.status === 401 && /No token arrived/.test((none.json?.problems ?? [])[0] ?? ''), JSON.stringify(none.json));
+    check('the reply never shows our tokens', !JSON.stringify(r.json).includes(SANDBOX_TOKEN) && !JSON.stringify(r.json).includes(PROD_TOKEN));
+  }
+  {
+    // A long access token (over 512 characters) must be compared whole, not cut short.
+    const LONG = `long-sandbox-token-${'z'.repeat(700)}`;
+    const longHandler = createHandler({ ...handlerOptions, environments: { ...handlerOptions.environments, sandbox: { ...handlerOptions.environments.sandbox, token: LONG } } });
+    check('a token longer than 512 characters is accepted', (await call('/get-cart', { cart_id: cartA }, { token: LONG, via: longHandler })).status === 200);
+    check('...but not when cut at 512 characters', (await call('/get-cart', { cart_id: cartA }, { token: LONG.slice(0, 512), via: longHandler })).status === 401);
   }
   {
     const viaGet = await call('/get-cart', null, { method: 'GET', query: `?cart_id=${cartA}` });

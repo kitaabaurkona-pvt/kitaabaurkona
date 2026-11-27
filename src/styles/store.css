@@ -621,6 +621,11 @@
   background: var(--c-surface);
 }
 
+/* GoKwik's one-tap login: no gap is kept for it until GoKwik draws the button. */
+.cart-panel-foot .kp-sso:empty {
+  display: none;
+}
+
 .cart-panel-sum {
   display: grid;
   gap: 4px;
@@ -3867,4 +3872,220 @@
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* ---------- Return or exchange (order page and its form) ---------- */
+
+.page-narrow {
+  max-width: 720px;
+}
+
+.return-form {
+  margin-top: 16px;
+}
+
+.return-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.return-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.return-option {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--c-line-strong);
+  border-radius: var(--radius-control);
+  background: var(--c-surface);
+  cursor: pointer;
+}
+
+.return-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.return-option[data-checked] {
+  border-color: var(--c-ink);
+  box-shadow: inset 0 0 0 1px var(--c-ink);
+}
+
+.return-option:has(input:focus-visible) {
+  outline: 2px solid var(--c-ink);
+  outline-offset: 2px;
+}
+
+.return-option-title {
+  font-weight: 600;
+}
+
+.return-lines {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.return-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--radius-control);
+}
+
+.return-line[data-checked] {
+  border-color: var(--c-ink);
+}
+
+.return-line-pick {
+  display: flex;
+  flex: 1 1 240px;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.return-line-pick input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--c-ink);
+}
+
+.return-line-cover {
+  flex: none;
+  width: 44px;
+}
+
+.return-line-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.return-line-title {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.return-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.return-photo,
+.return-photo-add {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  overflow: hidden;
+  border: 1px solid var(--c-line-strong);
+  border-radius: var(--radius-control);
+  background: var(--c-surface-alt);
+}
+
+.return-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.return-photo .spinner {
+  position: absolute;
+}
+
+.return-photo-add {
+  border-style: dashed;
+  color: var(--c-ink);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.return-photo-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--c-carbon);
+  color: var(--c-on-carbon);
+  cursor: pointer;
+}
+
+.return-value {
+  margin: 0;
+  font-weight: 600;
+}
+
+.return-summary {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.return-status[data-tone='ok'] {
+  border-color: var(--c-ok);
+  color: var(--c-ok-ink);
+}
+
+.return-status[data-tone='danger'] {
+  border-color: var(--c-danger);
+  color: var(--c-danger-ink);
+}
+
+.return-status[data-tone='warn'] {
+  border-color: var(--c-gold-deep);
+  color: var(--c-gold-deep);
+}
+
+.return-status[data-tone='muted'] {
+  color: var(--c-muted);
+}
+
+@media (max-width: 420px) {
+  .return-choice {
+    grid-template-columns: 1fr;
+  }
+}
+
+.return-withdraw {
+  justify-items: start;
+}
+
+/* My Account: mobile number login (GoKwik KwikPass) */
+.mobile-login-state,
+.mobile-otp-sent {
+  margin: 0;
+}
+
+/* "Your details" (pages/Details.jsx): one form, then Sign out under it. */
+.details-page .details-form {
+  max-width: 720px;
+}
+
+.details-page .details-sign-out {
+  margin-top: 1rem;
 }

@@ -14,6 +14,17 @@ import { CartLinesProvider } from './context/CartLinesProvider';
 import { WishlistProvider } from './context/WishlistContext';
 import { ToastProvider } from './context/ToastProvider';
 import App from './App.jsx';
+import { kwikpassEnabled, startKwikpass } from './services/kwikpassService';
+
+// GoKwik's login script (mobile number login) belongs on every page, but the first screen
+// never waits for it: it loads once the browser is idle. Off unless the build has a
+// KwikPass merchant id.
+function startKwikpassWhenIdle() {
+  if (!kwikpassEnabled) return;
+  const begin = () => startKwikpass().catch(() => {});
+  if ('requestIdleCallback' in window) window.requestIdleCallback(begin, { timeout: 4000 });
+  else window.setTimeout(begin, 2000);
+}
 
 function start() {
   captureAuthRedirectError();
@@ -45,6 +56,7 @@ function start() {
       </BrowserRouter>
     </StrictMode>,
   );
+  startKwikpassWhenIdle();
 }
 
 // The live store belongs on www.kitaabaurkona.com and the test site on

@@ -15,7 +15,18 @@ const SECTIONS = [
   { to: '/admin', label: 'Home', Icon: House, end: true },
   { to: '/admin/books', label: 'Books', Icon: Books },
   { to: '/admin/bulk-upload', label: 'Bulk upload', Icon: UploadSimple },
-  { to: '/admin/orders', label: 'Orders', Icon: Receipt },
+  {
+    label: 'Orders',
+    Icon: Receipt,
+    children: [
+      { to: '/admin/orders', label: 'Process orders', end: true },
+      { to: '/admin/orders/failed-deliveries', label: 'Non-delivery report (NDR)' },
+      { to: '/admin/orders/return-requests', label: 'Return/Exchange requests' },
+      { to: '/admin/orders/returns', label: 'RTO & returns' },
+      { to: '/admin/orders/track', label: 'Track orders' },
+      { to: '/admin/orders/new', label: 'Place order' },
+    ],
+  },
   { to: '/admin/shipping', label: 'Shipping', Icon: Truck },
 ];
 
@@ -32,12 +43,26 @@ function Menu({ email, leaving, onSignOut, onNavigate }) {
   return (
     <>
       <nav className="ap-nav" aria-label="Admin sections">
-        {SECTIONS.map(({ to, label, Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className="ap-nav-link" onClick={onNavigate}>
-            <Icon size={22} aria-hidden="true" />
-            {label}
-          </NavLink>
-        ))}
+        {SECTIONS.map(({ to, label, Icon, end, children }) =>
+          children ? (
+            <div key={label} className="ap-nav-group" role="group" aria-label={label}>
+              <span className="ap-nav-link ap-nav-heading" aria-hidden="true">
+                <Icon size={22} aria-hidden="true" />
+                {label}
+              </span>
+              {children.map((child) => (
+                <NavLink key={child.to} to={child.to} end={child.end} className="ap-nav-link ap-nav-sub" onClick={onNavigate}>
+                  {child.label}
+                </NavLink>
+              ))}
+            </div>
+          ) : (
+            <NavLink key={to} to={to} end={end} className="ap-nav-link" onClick={onNavigate}>
+              <Icon size={22} aria-hidden="true" />
+              {label}
+            </NavLink>
+          ),
+        )}
       </nav>
       <div className="ap-side-foot">
         {email && <span className="ap-user">{email}</span>}

@@ -440,7 +440,7 @@ function Checkout() {
             Online payment could not be opened. You can still order with cash on delivery.
           </p>
         )}
-        <CheckoutForm initial={{ name: p.full_name ?? '', phone: p.phone ?? '', address: p.address ?? '', city: '', state: '', pincode: '' }} {...order} />
+        <CheckoutForm initial={{ name: p.full_name ?? '', phone: p.phone ?? '', address: p.address ?? '', city: p.city ?? '', state: p.state ?? '', pincode: p.pincode ?? '' }} {...order} />
       </>
     );
   }

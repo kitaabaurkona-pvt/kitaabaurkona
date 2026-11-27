@@ -4,16 +4,13 @@ import { useAsync } from '../../hooks/useAsync';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useToast } from '../../hooks/useToast';
 import {
-  actOnNdr,
   ADMIN_SHIPMENT_LABELS,
   CARRIER_NAMES,
   carrierOf,
   countDelhiveryAwaitingPickup,
   getShippingSettings,
-  listNdr,
   listProblemShipments,
   registerDelhiveryWarehouse,
-  requestDelhiveryPickup,
   updateShippingSettings,
 } from '../../services/shippingService';
 import { adminErrorMessage } from '../../services/adminService';
@@ -22,9 +19,7 @@ import { INDIAN_STATES } from '../../utils/storeForm';
 import { LoadError, StateBlock } from '../../components/store/States';
 import { LinesSkeleton } from '../../components/store/Skeletons';
 import PageHead from '../../components/admin/PageHead';
-
-// Today's date in India, as YYYY-MM-DD.
-const indiaToday = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+import DelhiveryPickup from '../../components/admin/DelhiveryPickup';
 
 const FIELDS = [
   ['warehouse_name', 'Xpressbees warehouse name (exactly as in your Xpressbees panel)', 100],
@@ -36,6 +31,9 @@ const FIELDS = [
   ['pickup_phone', 'Mobile number', 10],
   ['pickup_email', 'Contact email', 120],
 ];
+
+// The invoice details have their own form (below), so this one never sends them.
+const withoutInvoice = (form) => Object.fromEntries(Object.entries(form).filter(([key]) => !key.startsWith('invoice_')));
 
 function SettingsForm({ initial }) {
   const [form, setForm] = useState(initial);
@@ -69,7 +67,7 @@ function SettingsForm({ initial }) {
     setSaving('save');
     setError(null);
     try {
-      const saved = await updateShippingSettings(form);
+      const saved = await updateShippingSettings(withoutInvoice(form));
       if (saved) setForm(saved);
       show({ message: 'Shipping settings saved' });
     } catch (err) {
@@ -90,7 +88,7 @@ function SettingsForm({ initial }) {
     setSaving('register');
     setError(null);
     try {
-      const saved = await updateShippingSettings(form);
+      const saved = await updateShippingSettings(withoutInvoice(form));
       if (saved) setForm(saved);
     } catch (err) {
       setError(adminErrorMessage(err));
@@ -209,143 +207,74 @@ function SettingsForm({ initial }) {
   );
 }
 
-function NdrRow({ item, onDone }) {
-  const carrierName = CARRIER_NAMES[carrierOf(item)];
-  const [mode, setMode] = useState(null);
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [address, setAddress] = useState({ name: item.customer, address_1: '', address_2: '' });
-  const [phone, setPhone] = useState('');
-  const [working, setWorking] = useState(false);
-  const [error, setError] = useState(null);
+const INVOICE_FIELDS = [
+  ['invoice_business_name', 'Business name (as on invoices)', 100, 'span-2'],
+  ['invoice_address', 'Business address', 200, 'span-2'],
+  ['invoice_phone', 'Phone number', 10],
+  ['invoice_gstin', 'GSTIN', 15],
+  ['invoice_pan', 'PAN', 10],
+];
 
-  async function submit() {
-    if (working) return;
-    let action_data;
-    if (mode === 're-attempt') action_data = { re_attempt_date: date };
-    if (mode === 'change_address') action_data = { name: address.name, address_1: address.address_1, address_2: address.address_2 };
-    if (mode === 'change_phone') action_data = { phone };
-    setWorking(true);
-    setError(null);
-    try {
-      const { results } = await actOnNdr([{ awb: item.awb, action: mode, action_data }]);
-      if (results[0] && !results[0].ok) throw new Error(results[0].message || `${carrierName} refused that action.`);
-      onDone(`Sent to ${carrierName} for AWB ${item.awb}`);
-      setMode(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setWorking(false);
-    }
-  }
-
-  return (
-    <li className="ndr-row stack-sm">
-      <p>
-        <Link to={`/admin/orders`}>Order {item.order_number}</Link> · {carrierName} AWB {item.awb} · {item.customer}
-      </p>
-      <p className="page-meta">
-        {[item.remarks, item.date, item.attempts != null && `${item.attempts} attempt${item.attempts === 1 ? '' : 's'}`].filter(Boolean).join(' · ')}
-      </p>
-      <div className="inline-actions">
-        <button type="button" className="chip" aria-pressed={mode === 're-attempt'} onClick={() => setMode('re-attempt')}>Re-attempt</button>
-        <button type="button" className="chip" aria-pressed={mode === 'change_address'} onClick={() => setMode('change_address')}>Change address</button>
-        <button type="button" className="chip" aria-pressed={mode === 'change_phone'} onClick={() => setMode('change_phone')}>Change phone</button>
-      </div>
-      {mode && (
-        <div className="stack-sm">
-          {mode === 're-attempt' && (
-            <div>
-              <label className="label" htmlFor={`ndr-date-${item.awb}`}>Re-attempt on</label>
-              <input id={`ndr-date-${item.awb}`} className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-            </div>
-          )}
-          {mode === 'change_address' && (
-            <div className="form-grid">
-              <div>
-                <label className="label" htmlFor={`ndr-name-${item.awb}`}>Name</label>
-                <input id={`ndr-name-${item.awb}`} className="input" maxLength={80} value={address.name} onChange={(e) => setAddress((a) => ({ ...a, name: e.target.value }))} />
-              </div>
-              <div>
-                <label className="label" htmlFor={`ndr-a1-${item.awb}`}>Address line 1</label>
-                <input id={`ndr-a1-${item.awb}`} className="input" maxLength={200} value={address.address_1} onChange={(e) => setAddress((a) => ({ ...a, address_1: e.target.value }))} />
-              </div>
-              <div>
-                <label className="label" htmlFor={`ndr-a2-${item.awb}`}>Address line 2</label>
-                <input id={`ndr-a2-${item.awb}`} className="input" maxLength={200} value={address.address_2} onChange={(e) => setAddress((a) => ({ ...a, address_2: e.target.value }))} />
-              </div>
-            </div>
-          )}
-          {mode === 'change_phone' && (
-            <div>
-              <label className="label" htmlFor={`ndr-phone-${item.awb}`}>New mobile number</label>
-              <input id={`ndr-phone-${item.awb}`} className="input" inputMode="numeric" maxLength={10} value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))} />
-            </div>
-          )}
-          <div className="inline-actions">
-            <button type="button" className="btn btn-dark btn-sm" aria-busy={working} onClick={submit}>
-              {working && <span className="spinner" aria-hidden="true" />}
-              Send to {carrierName}
-            </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => setMode(null)}>Close</button>
-          </div>
-          {error && <p className="notice" data-tone="error" role="alert">{error}</p>}
-        </div>
-      )}
-    </li>
-  );
-}
-
-// Delhivery collects parcels only when asked: a date, a time and how many parcels.
-function DelhiveryPickup({ waiting }) {
-  const [date, setDate] = useState(indiaToday);
-  const [time, setTime] = useState('14:00');
-  const [count, setCount] = useState(() => String(Math.max(1, waiting)));
-  const [working, setWorking] = useState(false);
+// The seller details printed on tax invoices ("Sold by").
+function InvoiceDetailsForm({ initial }) {
+  const [form, setForm] = useState(() => Object.fromEntries([...INVOICE_FIELDS.map(([key]) => [key, initial[key] ?? '']), ['invoice_state', initial.invoice_state || 'Rajasthan']]));
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const { show } = useToast();
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
 
-  async function submit(event) {
+  async function save(event) {
     event.preventDefault();
-    if (working) return;
-    const n = Number(count);
-    if (!Number.isInteger(n) || n < 1 || n > 500) return setError('Enter how many parcels (1 to 500).');
-    if (!/^\d{2}:\d{2}$/.test(time)) return setError('Choose a pickup time.');
-    setWorking(true);
+    if (saving) return;
+    const clean = {
+      invoice_business_name: form.invoice_business_name.trim().replace(/\s+/g, ' '),
+      invoice_address: form.invoice_address.trim().replace(/\s+/g, ' '),
+      invoice_phone: form.invoice_phone.replace(/\D/g, ''),
+      invoice_gstin: form.invoice_gstin.trim().toUpperCase(),
+      invoice_pan: form.invoice_pan.trim().toUpperCase(),
+      invoice_state: form.invoice_state,
+    };
+    if (clean.invoice_phone && !/^[0-9]{10}$/.test(clean.invoice_phone)) return setError('Enter a 10-digit phone number.');
+    if (clean.invoice_gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(clean.invoice_gstin)) return setError('Enter the 15-character GSTIN exactly as registered.');
+    if (clean.invoice_pan && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(clean.invoice_pan)) return setError('Enter the 10-character PAN.');
+    setSaving(true);
     setError(null);
     try {
-      const r = await requestDelhiveryPickup({ date, time, count: n });
-      show({ message: `Delhivery pickup ${r.pickup_id} requested for ${r.date} at ${r.time}` });
+      const saved = await updateShippingSettings(clean);
+      if (saved) setForm((f) => ({ ...f, ...Object.fromEntries(Object.keys(clean).map((k) => [k, saved[k] ?? ''])) }));
+      show({ message: 'Invoice details saved' });
     } catch (err) {
-      setError(err.message);
+      setError(adminErrorMessage(err));
     } finally {
-      setWorking(false);
+      setSaving(false);
     }
   }
 
   return (
-    <form className="panel stack-sm" onSubmit={submit} noValidate aria-labelledby="dl-pickup-heading">
-      <h2 id="dl-pickup-heading" className="panel-title">
-        Delhivery pickup
+    <form className="panel stack-sm" onSubmit={save} noValidate aria-labelledby="invoice-details-heading">
+      <h2 id="invoice-details-heading" className="panel-title">
+        Invoice details
       </h2>
-      <p className="page-meta">{waiting === 1 ? '1 Delhivery parcel is' : `${waiting} Delhivery parcels are`} booked and waiting to be collected.</p>
       <div className="form-grid form-grid-2">
+        {INVOICE_FIELDS.map(([key, label, max, span]) => (
+          <div key={key} className={span}>
+            <label className="label" htmlFor={`inv-${key}`}>
+              {label}
+            </label>
+            <input id={`inv-${key}`} className="input" maxLength={max} value={form[key]} onChange={(e) => set(key, e.target.value)} />
+          </div>
+        ))}
         <div>
-          <label className="label" htmlFor="dl-pickup-date">
-            Date
+          <label className="label" htmlFor="inv-invoice_state">
+            Business state
           </label>
-          <input id="dl-pickup-date" className="input" type="date" min={indiaToday()} value={date} onChange={(e) => setDate(e.target.value)} />
-        </div>
-        <div>
-          <label className="label" htmlFor="dl-pickup-time">
-            Time
-          </label>
-          <input id="dl-pickup-time" className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
-        </div>
-        <div>
-          <label className="label" htmlFor="dl-pickup-count">
-            Parcels
-          </label>
-          <input id="dl-pickup-count" className="input" inputMode="numeric" maxLength={3} value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, ''))} />
+          <select id="inv-invoice_state" className="select" value={form.invoice_state} onChange={(e) => set('invoice_state', e.target.value)}>
+            {INDIAN_STATES.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
       {error && (
@@ -353,10 +282,10 @@ function DelhiveryPickup({ waiting }) {
           {error}
         </p>
       )}
-      <div>
-        <button type="submit" className="btn btn-dark" aria-busy={working}>
-          {working && <span className="spinner" aria-hidden="true" />}
-          Request Delhivery pickup
+      <div className="inline-actions">
+        <button type="submit" className="btn btn-dark" aria-busy={saving}>
+          {saving && <span className="spinner" aria-hidden="true" />}
+          Save invoice details
         </button>
       </div>
     </form>
@@ -367,9 +296,7 @@ function AdminShipping() {
   useDocumentTitle('Shipping');
   const settings = useAsync(() => getShippingSettings(), []);
   const problems = useAsync(() => listProblemShipments(), []);
-  const ndr = useAsync(() => listNdr(), []);
   const waiting = useAsync(() => countDelhiveryAwaitingPickup(), []);
-  const { show } = useToast();
 
   return (
     <div className="stack">
@@ -377,6 +304,7 @@ function AdminShipping() {
       {settings.loading && !settings.data && <LinesSkeleton count={2} label="Loading shipping settings…" />}
       {settings.error && <LoadError onRetry={settings.retry} what="shipping settings" />}
       {settings.data && <SettingsForm initial={settings.data} />}
+      {settings.data && <InvoiceDetailsForm initial={settings.data} />}
       {settings.data?.delhivery_warehouse_name && waiting.data != null && <DelhiveryPickup key={waiting.data} waiting={waiting.data} />}
 
       <section className="panel stack-sm" aria-labelledby="problems-heading">
@@ -403,31 +331,6 @@ function AdminShipping() {
         <Link to="/admin/orders" className="section-link">Open orders to retry or cancel</Link>
       </section>
 
-      <section className="panel stack-sm" aria-labelledby="ndr-heading">
-        <h2 id="ndr-heading" className="panel-title">Failed delivery attempts</h2>
-        {ndr.loading && !ndr.data && <LinesSkeleton count={2} label="Asking the couriers for failed deliveries…" />}
-        {ndr.error && <LoadError onRetry={ndr.retry} what="failed deliveries" />}
-        {ndr.data?.unavailable?.length > 0 && (
-          <p className="notice" data-tone="error">
-            {ndr.data.unavailable.join(' and ')} could not be reached, so its failed deliveries are missing here.
-          </p>
-        )}
-        {ndr.data && ndr.data.items.length === 0 && <StateBlock title="No failed delivery attempts." />}
-        {ndr.data && ndr.data.items.length > 0 && (
-          <ul className="line-list">
-            {ndr.data.items.map((item) => (
-              <NdrRow
-                key={item.awb}
-                item={item}
-                onDone={(message) => {
-                  show({ message });
-                  ndr.retry();
-                }}
-              />
-            ))}
-          </ul>
-        )}
-      </section>
     </div>
   );
 }

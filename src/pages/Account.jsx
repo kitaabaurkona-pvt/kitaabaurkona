@@ -10,15 +10,23 @@ import { listOrders } from '../services/orderService';
 import { formatCount } from '../utils/format';
 import { useToast } from '../hooks/useToast';
 import { GENDER_OPTIONS, normalizeName } from '../utils/authForm';
+import { isMobileLoginEmail } from '../utils/mobileLogin';
+import MobileLoginSection from '../components/account/MobileLoginSection';
+import { KWIKPASS_ENVIRONMENT, kwikpassEnabled } from '../services/kwikpassService';
+import { INDIAN_STATES } from '../utils/storeForm';
 import { LoadError } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 
 const GENDER_LABELS = Object.fromEntries(GENDER_OPTIONS.map((o) => [o.value, o.label]));
 
+// The same rules as "Your details": these are what checkout delivers to.
 function validateProfile(p) {
-  if (p.full_name && (p.full_name.length < 2 || p.full_name.length > 80)) return { field: 'acc-name', message: 'Enter your full name (2-80 characters).' };
-  if (p.phone && !/^[6-9][0-9]{9}$/.test(p.phone)) return { field: 'acc-phone', message: 'Enter a valid 10-digit mobile number.' };
-  if (p.address && p.address.length > 300) return { field: 'acc-address', message: 'Address must be at most 300 characters.' };
+  if (!p.full_name || p.full_name.length < 2 || p.full_name.length > 80) return { field: 'acc-name', message: 'Enter your full name (2-80 characters).' };
+  if (!p.phone || !/^[6-9][0-9]{9}$/.test(p.phone)) return { field: 'acc-phone', message: 'Enter a valid 10-digit mobile number.' };
+  if (!p.address || p.address.length < 5 || p.address.length > 300) return { field: 'acc-address', message: 'Enter the house, street and area (5-300 characters).' };
+  if (!p.city || p.city.length < 2 || p.city.length > 60) return { field: 'acc-city', message: 'Enter the city.' };
+  if (!INDIAN_STATES.includes(p.state)) return { field: 'acc-state', message: 'Choose a state.' };
+  if (!/^[1-9][0-9]{5}$/.test(p.pincode ?? '')) return { field: 'acc-pincode', message: 'Enter a valid 6-digit PIN code.' };
   return null;
 }
 
@@ -28,6 +36,9 @@ function EditProfile({ userId, profile, onSaved, onCancel }) {
     phone: profile.phone ?? '',
     gender: profile.gender ?? '',
     address: profile.address ?? '',
+    city: profile.city ?? '',
+    state: profile.state ?? '',
+    pincode: profile.pincode ?? '',
   });
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -43,6 +54,9 @@ function EditProfile({ userId, profile, onSaved, onCancel }) {
       phone: form.phone.replace(/\D/g, '') || null,
       gender: form.gender || null,
       address: form.address.trim() || null,
+      city: form.city.trim().replace(/s+/g, ' ') || null,
+      state: form.state || null,
+      pincode: form.pincode || null,
     };
     const problem = validateProfile(values);
     if (problem) {
@@ -93,6 +107,26 @@ function EditProfile({ userId, profile, onSaved, onCancel }) {
           <textarea id="acc-address" className="textarea" rows={3} maxLength={300} autoComplete="street-address" value={form.address} onChange={set('address')} aria-invalid={msg('acc-address') ? 'true' : undefined} />
           {msg('acc-address') && <p className="field-message" role="alert">{msg('acc-address')}</p>}
         </div>
+        <div>
+          <label className="label" htmlFor="acc-city">City</label>
+          <input id="acc-city" className="input" autoComplete="address-level2" maxLength={60} value={form.city} onChange={set('city')} aria-invalid={msg('acc-city') ? 'true' : undefined} />
+          {msg('acc-city') && <p className="field-message" role="alert">{msg('acc-city')}</p>}
+        </div>
+        <div>
+          <label className="label" htmlFor="acc-state">State</label>
+          <select id="acc-state" className="select" autoComplete="address-level1" value={form.state} onChange={set('state')} aria-invalid={msg('acc-state') ? 'true' : undefined}>
+            <option value="">Choose a state</option>
+            {INDIAN_STATES.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          {msg('acc-state') && <p className="field-message" role="alert">{msg('acc-state')}</p>}
+        </div>
+        <div>
+          <label className="label" htmlFor="acc-pincode">PIN code</label>
+          <input id="acc-pincode" className="input" inputMode="numeric" autoComplete="postal-code" maxLength={6} value={form.pincode} onChange={(e) => setForm((c) => ({ ...c, pincode: e.target.value.replace(/D/g, '').slice(0, 6) }))} aria-invalid={msg('acc-pincode') ? 'true' : undefined} />
+          {msg('acc-pincode') && <p className="field-message" role="alert">{msg('acc-pincode')}</p>}
+        </div>
       </div>
       {error && !error.field && <p className="notice" data-tone="error" role="alert">{error.message}</p>}
       <div className="inline-actions">
@@ -111,7 +145,7 @@ function EditProfile({ userId, profile, onSaved, onCancel }) {
 function Account() {
   useDocumentTitle('Account');
   const navigate = useNavigate();
-  const { user, role, signOut } = useAuth();
+  const { user, role, signOut, refreshDetails } = useAuth();
   const { count: savedCount } = useWishlist();
   const profile = useAsync(() => getProfile(user.id), [user.id]);
   const orders = useAsync(() => listOrders(), []);
@@ -133,12 +167,14 @@ function Account() {
   }
 
   const p = profile.data ?? {};
+  // An account made by mobile number login has a made-up email address: never show it.
+  const email = p.email ?? user.email;
   const details = [
     ['Name', p.full_name],
-    ['Email', p.email ?? user.email],
+    ...(isMobileLoginEmail(email) ? [] : [['Email', email]]),
     ['Mobile number', p.phone],
     ['Gender', GENDER_LABELS[p.gender]],
-    ['Delivery address', p.address],
+    ['Delivery address', [p.address, p.city, [p.state, p.pincode].filter(Boolean).join(' ')].filter(Boolean).join(', ')],
   ];
 
   return (
@@ -194,8 +230,20 @@ function Account() {
             onCancel={() => setEditing(false)}
             onSaved={(saved) => {
               profile.setData(saved);
+              refreshDetails();
               setEditing(false);
               show({ message: 'Your details were saved.' });
+            }}
+          />
+        )}
+
+        {kwikpassEnabled && profile.data !== undefined && !editing && (
+          <MobileLoginSection
+            profilePhone={p.phone}
+            onVerified={(phone) => {
+              // The live store saves a verified number on the profile too (the kwikpass function).
+              if (KWIKPASS_ENVIRONMENT === 'production') profile.setData({ ...p, phone });
+              show({ message: 'Your mobile number is verified. You can now log in with it.' });
             }}
           />
         )}

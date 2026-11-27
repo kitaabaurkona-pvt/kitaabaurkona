@@ -11,6 +11,7 @@ import OrderStatus from '../components/store/OrderStatus';
 import { LoadError, StateBlock } from '../components/store/States';
 import { LinesSkeleton } from '../components/store/Skeletons';
 import ShipmentCard from '../components/store/ShipmentCard';
+import ReturnPanel from '../components/store/ReturnPanel';
 
 function CancelOrder({ orderId, onCancelled }) {
   const [confirming, setConfirming] = useState(false);
@@ -195,6 +196,8 @@ function OrderDetail() {
           </section>
 
           {showParcel && <ShipmentCard orderId={order.id} placedAt={order.created_at} onMoved={retry} />}
+
+          {order.status === 'delivered' && <ReturnPanel order={order} />}
         </div>
 
         <aside className="stack-sm">

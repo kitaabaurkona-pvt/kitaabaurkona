@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import TestShopBar from './components/layout/TestShopBar';
 import ProtectedRoute from './components/ProtectedRoute';
+import DetailsGate from './components/DetailsGate';
 import Home from './pages/Home';
 // The sign-in pages have their own look and style sheet, so they are loaded only when opened.
 const SignIn = lazyPage(() => import('./pages/SignIn'));
@@ -17,8 +18,10 @@ const Cart = lazyPage(() => import('./pages/Cart'));
 const Checkout = lazyPage(() => import('./pages/Checkout'));
 const Orders = lazyPage(() => import('./pages/Orders'));
 const OrderDetail = lazyPage(() => import('./pages/OrderDetail'));
+const ReturnRequest = lazyPage(() => import('./pages/ReturnRequest'));
 const Wishlist = lazyPage(() => import('./pages/Wishlist'));
 const Account = lazyPage(() => import('./pages/Account'));
+const Details = lazyPage(() => import('./pages/Details'));
 const NotFound = lazyPage(() => import('./pages/NotFound'));
 
 // Pages most shoppers never open are split into their own files and loaded on demand.
@@ -39,6 +42,7 @@ function App() {
       <TestShopBar />
       {/* While a sign-in page loads, the page being left stays on screen. */}
       <Suspense fallback={null}>
+      <DetailsGate>
       <Routes>
         {/* Auth pages render their own shell instead of the store layout */}
         <Route path="/sign-in" element={<SignIn />} />
@@ -64,8 +68,10 @@ function App() {
             <Route path="/checkout" element={<Checkout />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/orders/:id" element={<OrderDetail />} />
+            <Route path="/orders/:id/return" element={<ReturnRequest />} />
             <Route path="/wishlist" element={<Wishlist />} />
             <Route path="/account" element={<Account />} />
+            <Route path="/details" element={<Details />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
 
@@ -78,6 +84,7 @@ function App() {
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
+      </DetailsGate>
       </Suspense>
     </>
   );

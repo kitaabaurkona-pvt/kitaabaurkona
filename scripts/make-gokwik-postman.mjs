@@ -88,7 +88,7 @@ async function run(route, body, { auth = true, query = '' } = {}) {
 const STATUS = { 200: 'OK', 400: 'Bad Request', 401: 'Unauthorized' };
 const json = (value) => JSON.stringify(value, null, 2);
 // Our example values in the answers become the collection's variables.
-const vars = (text) => text.split(cartId).join('{{cart_id}}').split(TOKEN).join('{{sandbox_token}}').split(WEBHOOK_KEY).join('{{webhook_key}}');
+const vars = (text) => text.split(cartId).join('{{cart_id}}').split(TOKEN).join('{{access_token}}').split(WEBHOOK_KEY).join('{{webhook_key}}');
 
 function request(route, body, { auth = true, webhook = false } = {}) {
   const pathParts = route.split('/').filter(Boolean);
@@ -102,7 +102,7 @@ function request(route, body, { auth = true, webhook = false } = {}) {
   // auth, which older Postman versions (PostmanRuntime 2.x) do not send at all.
   return {
     method: 'POST',
-    header: [{ key: 'Content-Type', value: 'application/json' }, ...(auth ? [{ key: 'Authorization', value: 'Bearer {{sandbox_token}}' }] : [])],
+    header: [{ key: 'Content-Type', value: 'application/json' }, ...(auth ? [{ key: 'Authorization', value: 'Bearer {{access_token}}' }] : [])],
     auth: { type: 'noauth' },
     body: { mode: 'raw', raw: vars(json(body)), options: { raw: { language: 'json' } } },
     url,
@@ -190,7 +190,7 @@ const collection = {
     description: [
       'Merchant APIs of Kitaab Aur Kona for GoKwik Custom Checkout, with example requests and real example answers.',
       '',
-      'Base URL: `{{base_url}}`. Every merchant API takes the header `Authorization: Bearer {{sandbox_token}}` (already on each request: put the sandbox access token we gave you into the `sandbox_token` variable, without the word Bearer). `X-API-Key: <token>` is accepted too. Sandbox orders are test orders: never shipped, no effect on live stock.',
+      'Base URL: `{{base_url}}`. Every merchant API takes the header `Authorization: Bearer {{access_token}}` (already on each request: put the sandbox access token we gave you into the `access_token` variable, without the word Bearer). `X-API-Key: <token>` is accepted too. Sandbox orders are test orders: never shipped, no effect on live stock.',
       '',
       `Staging storefront: ${STAGING} (sandbox merchant id). A real \`cart_id\` comes from there: sign in, add a book, open checkout and press "Continue to payment"; the id is passed to the SDK as \`merchantParams.merchantCheckoutId\`, and the customer's account id as \`merchantParams.customerToken\`.`,
       '',
@@ -200,7 +200,7 @@ const collection = {
   },
   variable: [
     { key: 'base_url', value: BASE_URL, type: 'string' },
-    { key: 'sandbox_token', value: 'PASTE_THE_SANDBOX_ACCESS_TOKEN', type: 'string' },
+    { key: 'access_token', value: 'PASTE_THE_SANDBOX_ACCESS_TOKEN', type: 'string' },
     { key: 'webhook_key', value: 'PASTE_THE_WEBHOOK_KEY', type: 'string' },
     { key: 'cart_id', value: 'PASTE_A_CART_ID_FROM_THE_STAGING_SITE', type: 'string' },
   ],

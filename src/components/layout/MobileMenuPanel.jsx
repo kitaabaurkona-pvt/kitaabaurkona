@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { ADMIN_ORIGIN } from '../../utils/release';
+import { isMobileLoginEmail } from '../../utils/mobileLogin';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AnimatePresence, m } from 'motion/react';
 import { useAuth } from '../../hooks/useAuth';
@@ -54,6 +55,8 @@ function MobileMenuPanel({ open, setOpen, pointerOpen, menuButton }) {
   }
 
   const name = user?.user_metadata?.full_name;
+  // Mobile number login accounts have a made-up email address: show the number instead.
+  const contact = isMobileLoginEmail(user?.email) ? (user?.user_metadata?.phone ? `+91 ${user.user_metadata.phone}` : null) : user?.email;
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -108,7 +111,7 @@ function MobileMenuPanel({ open, setOpen, pointerOpen, menuButton }) {
                 {isAuthenticated && (
                   <p className="drawer-user">
                     {name && <strong>{name}</strong>}
-                    {user?.email}
+                    {contact}
                   </p>
                 )}
 

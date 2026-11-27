@@ -45,3 +45,6 @@ e2e/shots/
 # Postman collection for GoKwik (made by scripts/make-gokwik-postman.mjs)
 /gokwik-postman-collection.json
 dist-test-site
+
+# GoKwik guides (contain sandbox secret keys)
+Kwik Login Integration Guide*.pdf

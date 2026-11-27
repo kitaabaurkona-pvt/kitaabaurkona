@@ -27,6 +27,7 @@ const RELATIONS = {
   orders: {
     order_items: { many: true, local: 'id', remote: 'order_id' },
     shipments: { many: true, local: 'id', remote: 'order_id' },
+    order_fulfilment: { many: false, local: 'id', remote: 'order_id' },
   },
   wishlist_items: { books: { many: false, local: 'book_id', remote: 'id' } },
 };
@@ -132,6 +133,12 @@ export async function createBackend({ schemaPath, books }) {
     await db.query('insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)', [u.id, email, u.meta]);
   }
   await db.query(`update public.users set role = 'admin' where id = $1`, [USERS['admin@example.com'].id]);
+  // Both test accounts have saved their delivery details ("Your details"), like a
+  // returning customer; e2e/details.mjs makes new customers who have not.
+  await db.query(
+    `update public.users set city = 'Udaipur', state = 'Rajasthan', pincode = '313001',
+       phone = coalesce(phone, '9000000001'), address = coalesce(address, '1 Lake Palace Road')`,
+  );
   const payload = books.map((b) => ({
     product_code: b.product_code,
     sku: b.sku,
@@ -421,6 +428,78 @@ export async function handleRest(db, { method, url, headers, body }) {
 }
 
 // ---------- Auth emulation ----------
+
+// A session for any account in auth.users (accounts made during a test run, such as those
+// made by mobile number login, are not in USERS).
+function sessionForAccount({ id, email, meta = {} }) {
+  const exp = Math.floor(Date.now() / 1000) + 3600;
+  return {
+    access_token: `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: id, role: 'authenticated', email, exp })}.sig`,
+    token_type: 'bearer',
+    expires_in: 3600,
+    expires_at: exp,
+    refresh_token: `refresh-${id}`,
+    user: { id, aud: 'authenticated', role: 'authenticated', email, app_metadata: { provider: 'email' }, user_metadata: meta, created_at: new Date().toISOString() },
+  };
+}
+
+// Supabase Auth's admin API (service role only) and one-time sign-in codes, as used by the
+// kwikpass Edge Function: create and delete accounts, make a magic-link code, and
+// exchange that code for a session (verifyOtp with token_hash). Answers null for any other
+// address, so callers fall back to handleAuth. Codes work once and are kept in memory.
+const signInCodes = new Map();
+export const authAdminCalls = [];
+export async function handleAuthAdmin(db, { method, url, headers, body }) {
+  const json = (status, value) => ({ status, body: JSON.stringify(value) });
+  const fail = (status, code, msg) => json(status, { code: status, error_code: code, msg });
+  const p = url.pathname;
+  const input = body ? JSON.parse(body) : {};
+  const account = async (where, value) =>
+    (await db.query(`select id::text, email, raw_user_meta_data as meta from auth.users where ${where} = $1`, [value])).rows[0];
+  const userJson = (u) => ({ id: u.id, aud: 'authenticated', role: 'authenticated', email: u.email, user_metadata: u.meta ?? {}, app_metadata: {}, created_at: new Date().toISOString() });
+
+  if (p === '/auth/v1/verify' && method === 'POST') {
+    const entry = signInCodes.get(input.token_hash);
+    if (!entry || input.type !== 'email') return fail(403, 'otp_expired', 'Email link is invalid or has expired');
+    signInCodes.delete(input.token_hash);
+    const u = await account('id::text', entry.userId);
+    return u ? json(200, sessionForAccount(u)) : fail(404, 'user_not_found', 'User not found');
+  }
+  if (p === '/auth/v1/user' && method === 'GET') {
+    // Any account in auth.users (handleAuth only knows the seeded ones).
+    const { sub } = claimsFrom(headers);
+    const u = sub ? await account('id::text', sub) : null;
+    return u ? json(200, userJson(u)) : fail(401, 'bad_jwt', 'invalid JWT');
+  }
+  if (!p.startsWith('/auth/v1/admin/')) return null;
+  authAdminCalls.push({ method, path: p, body: input });
+  if (claimsFrom(headers).role !== 'service_role') return fail(403, 'not_admin', 'User not allowed');
+
+  if (p === '/auth/v1/admin/users' && method === 'POST') {
+    const email = String(input.email || '').toLowerCase();
+    if (!email) return fail(400, 'validation_failed', 'email is required');
+    if (await account('lower(email)', email)) return fail(422, 'email_exists', 'A user with this email address has already been registered');
+    const id = crypto.randomUUID();
+    await db.query('insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)', [id, email, input.user_metadata ?? {}]);
+    return json(200, userJson(await account('id::text', id)));
+  }
+  const one = /^\/auth\/v1\/admin\/users\/([0-9a-f-]{36})$/.exec(p);
+  if (one && method === 'DELETE') {
+    const u = await account('id::text', one[1]);
+    if (!u) return fail(404, 'user_not_found', 'User not found');
+    await db.query('delete from auth.users where id = $1', [one[1]]);
+    return json(200, userJson(u));
+  }
+  if (p === '/auth/v1/admin/generate_link' && method === 'POST') {
+    if (input.type !== 'magiclink') return fail(400, 'validation_failed', 'unsupported link type in this fake');
+    const u = await account('lower(email)', String(input.email || '').toLowerCase());
+    if (!u) return fail(404, 'user_not_found', 'User not found');
+    const hash = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
+    signInCodes.set(hash, { userId: u.id });
+    return json(200, { ...userJson(u), action_link: `http://fake/verify?token=${hash}`, email_otp: '000000', hashed_token: hash, redirect_to: '', verification_type: 'magiclink' });
+  }
+  return fail(404, 'not_found', 'Not found');
+}
 
 export function handleAuth({ url, headers, body }) {
   const json = (status, value) => ({ status, body: JSON.stringify(value) });

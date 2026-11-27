@@ -1,4 +1,7 @@
+import { useEffect } from 'react';
 import { bookDisplay } from '../utils/bookDisplay';
+import { bookPageView } from '../utils/pageViews';
+import { trackPageView } from '../services/kwikpassService';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getBook } from '../services/bookService';
 import { useAsync } from '../hooks/useAsync';
@@ -34,6 +37,11 @@ function specRows(book) {
 
 function BookView({ book }) {
   useDocumentTitle(book.title);
+  // GoKwik KwikPass page view (only where mobile number login is on).
+  useEffect(() => {
+    const view = bookPageView(book);
+    trackPageView(view.type, view.data);
+  }, [book]);
   const navigate = useNavigate();
   const { add, quantityOf } = useCart();
   const images = book.image_urls ?? [];

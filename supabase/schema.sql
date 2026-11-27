@@ -88,6 +88,24 @@ alter table public.users drop constraint if exists users_address_length;
 alter table public.users add constraint users_address_length
   check (address is null or char_length(address) <= 300);
 
+-- The rest of the delivery address, so a customer fills it in once ("Your details" page)
+-- and checkout starts from it. Same limits as an order's delivery details.
+alter table public.users add column if not exists city text;
+alter table public.users add column if not exists state text;
+alter table public.users add column if not exists pincode text;
+
+alter table public.users drop constraint if exists users_city_length;
+alter table public.users add constraint users_city_length
+  check (city is null or char_length(city) between 2 and 60);
+
+alter table public.users drop constraint if exists users_state_length;
+alter table public.users add constraint users_state_length
+  check (state is null or char_length(state) between 2 and 60);
+
+alter table public.users drop constraint if exists users_pincode_format;
+alter table public.users add constraint users_pincode_format
+  check (pincode is null or pincode ~ '^[1-9][0-9]{5}$');
+
 alter table public.users enable row level security;
 
 -- A signed-in user can read only their own row (the website reads it to learn the role).
@@ -103,12 +121,12 @@ create policy "Users update own record" on public.users
   using ((select auth.uid()) = id)
   with check ((select auth.uid()) = id);
 
--- ...and only these four columns. RLS decides WHICH rows; these grants decide WHICH
+-- ...and only these profile columns. RLS decides WHICH rows; these grants decide WHICH
 -- columns. Without them a user could set their own role to 'admin'.
 -- Nobody can insert or delete users rows from the website at all.
 revoke all on public.users from anon, authenticated;
 grant select on public.users to authenticated;
-grant update (full_name, phone, gender, address) on public.users to authenticated;
+grant update (full_name, phone, gender, address, city, state, pincode) on public.users to authenticated;
 
 -- Keeps updated_at current on every change (used by users, books, book_internal).
 create or replace function public.set_updated_at()
@@ -1258,6 +1276,7 @@ begin
       package_length_cm = (p ->> 'package_length_cm')::numeric,
       package_breadth_cm = (p ->> 'package_breadth_cm')::numeric,
       package_height_cm = (p ->> 'package_height_cm')::numeric,
+      routing_code = left(p ->> 'routing_code', 60),
       last_error = null,
       next_attempt_at = null,
       needs_check = false
@@ -2320,9 +2339,1799 @@ commit;
 
 
 -- -----------------------------------------------------------------------------
+-- 9d. PROCESS ORDERS (admin: Print -> Pack -> Handover, notes, address fixes)
+-- -----------------------------------------------------------------------------
+-- Where each order still to ship stands in the packing workflow, and the admins' own
+-- note about it. Kept apart from orders, which customers can read, so a customer never
+-- sees the note. The website only reads this table; the functions below change it.
+--   Print        label not printed yet       (label_printed_at is null)
+--   Pack         label printed, not packed   (packed_at is null)
+--   Handover     packed, not handed over     (handed_over_at is null)
+--   Handed over  given to the courier, waiting for the pickup scan
+create table if not exists public.order_fulfilment (
+  order_id uuid primary key references public.orders (id) on delete cascade,
+  label_printed_at timestamptz,
+  packed_at timestamptz,
+  handed_over_at timestamptz,
+  note text check (char_length(note) <= 500),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.order_fulfilment enable row level security;
+
+drop policy if exists "Admins view order fulfilment" on public.order_fulfilment;
+create policy "Admins view order fulfilment" on public.order_fulfilment
+  for select to authenticated
+  using ((select public.is_admin()));
+
+revoke all on public.order_fulfilment from anon, authenticated;
+grant select on public.order_fulfilment to authenticated;
+
+-- The first time this runs, orders whose parcel is already booked start at Pack (their
+-- label was most likely printed already); every other order to ship starts at Print.
+do $$
+begin
+  if not exists (select 1 from public.order_fulfilment) then
+    insert into public.order_fulfilment (order_id, label_printed_at)
+    select o.id, now()
+    from public.orders o
+    where o.status in ('confirmed', 'paid')
+      and exists (
+        select 1 from public.shipments s
+        where s.order_id = o.id and s.kind = 'forward' and s.status = 'booked'
+      );
+  end if;
+end $$;
+
+-- A parcel booked again (a new AWB, or a new parcel after switching carrier) needs a
+-- new label: its order goes back to Print.
+create or replace function public.reset_fulfilment_on_new_awb()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.kind = 'forward' and (tg_op = 'INSERT' or old.awb_number is distinct from new.awb_number) then
+    update public.order_fulfilment
+    set label_printed_at = null, handed_over_at = null, updated_at = now()
+    where order_id = new.order_id and (label_printed_at is not null or handed_over_at is not null);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists shipments_reset_fulfilment on public.shipments;
+create trigger shipments_reset_fulfilment
+  after insert or update of awb_number on public.shipments
+  for each row execute function public.reset_fulfilment_on_new_awb();
+
+-- Order ids from a JSON array of 1 to 500 ids.
+create or replace function public.order_ids_from_json(p_ids jsonb)
+returns uuid[]
+language plpgsql
+immutable
+set search_path = ''
+as $$
+declare
+  v_ids uuid[];
+begin
+  if jsonb_typeof(p_ids) is distinct from 'array' or jsonb_array_length(p_ids) not between 1 and 500 then
+    raise exception 'Choose 1 to 500 orders' using errcode = '22023';
+  end if;
+  select array_agg(distinct value::uuid) into v_ids from jsonb_array_elements_text(p_ids);
+  return v_ids;
+end;
+$$;
+
+-- Moves orders to a step: 'print', 'pack', 'handover' or 'handed_over'. Only orders
+-- still to ship (order placed or paid) move. Returns how many moved.
+create or replace function public.admin_set_fulfilment_stage(p_orders jsonb, p_stage text)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_ids uuid[];
+  v_count integer;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if p_stage is null or p_stage not in ('print', 'pack', 'handover', 'handed_over') then
+    raise exception 'Unknown step' using errcode = '22023';
+  end if;
+  v_ids := public.order_ids_from_json(p_orders);
+
+  insert into public.order_fulfilment (order_id)
+  select o.id from public.orders o
+  where o.id = any(v_ids) and o.status in ('confirmed', 'paid')
+  on conflict (order_id) do nothing;
+
+  update public.order_fulfilment f
+  set label_printed_at = case when p_stage = 'print' then null else coalesce(f.label_printed_at, now()) end,
+      packed_at = case when p_stage in ('print', 'pack') then null else coalesce(f.packed_at, now()) end,
+      handed_over_at = case when p_stage = 'handed_over' then coalesce(f.handed_over_at, now()) else null end,
+      updated_at = now()
+  from public.orders o
+  where f.order_id = o.id and o.id = any(v_ids) and o.status in ('confirmed', 'paid');
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- The admins' note on an order (empty removes it).
+create or replace function public.admin_set_order_note(p_order uuid, p_note text)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_note text := nullif(btrim(coalesce(p_note, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if char_length(v_note) > 500 then
+    raise exception 'Keep the note under 500 characters' using errcode = '22023', hint = 'note';
+  end if;
+  if not exists (select 1 from public.orders where id = p_order) then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  insert into public.order_fulfilment (order_id, note) values (p_order, v_note)
+  on conflict (order_id) do update set note = excluded.note, updated_at = now();
+  return v_note;
+end;
+$$;
+
+-- Corrects the delivery address while the parcel is not booked yet. The courier is
+-- given the address when it books, so a booked parcel keeps the old one.
+create or replace function public.admin_update_order_address(p_order uuid, p_address jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_status text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  select status into v_status from public.orders where id = p_order for update;
+  if v_status is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  if v_status not in ('pending_payment', 'confirmed', 'paid')
+     or exists (
+       select 1 from public.shipments
+       where order_id = p_order and kind = 'forward'
+         and (status not in ('queued', 'failed', 'cancelled') or (status = 'failed' and needs_check))
+     ) then
+    raise exception 'The parcel is booked, so the address cannot change' using errcode = 'P0001', hint = 'booked';
+  end if;
+  update public.orders
+  set shipping_name = btrim(p_address ->> 'name'),
+      shipping_phone = btrim(p_address ->> 'phone'),
+      shipping_address = btrim(p_address ->> 'address'),
+      shipping_city = btrim(p_address ->> 'city'),
+      shipping_state = btrim(p_address ->> 'state'),
+      shipping_pincode = btrim(p_address ->> 'pincode')
+  where id = p_order;
+end;
+$$;
+
+-- Orders to ship at one step, for the Print / Pack / Handover lists.
+create or replace function public.admin_fulfilment_order_ids(p_stage text)
+returns table (order_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.id
+  from public.orders o
+  left join public.order_fulfilment f on f.order_id = o.id
+  where public.is_admin()
+    and o.status in ('confirmed', 'paid')
+    and case p_stage
+      when 'print' then f.label_printed_at is null
+      when 'pack' then f.label_printed_at is not null and f.packed_at is null
+      when 'handover' then f.packed_at is not null and f.handed_over_at is null
+      when 'handed_over' then f.handed_over_at is not null
+      else false
+    end
+$$;
+
+-- How many orders to ship are at each step.
+create or replace function public.admin_fulfilment_counts()
+returns json
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select json_build_object(
+    'print', count(*) filter (where f.label_printed_at is null),
+    'pack', count(*) filter (where f.label_printed_at is not null and f.packed_at is null),
+    'handover', count(*) filter (where f.packed_at is not null and f.handed_over_at is null),
+    'handed_over', count(*) filter (where f.handed_over_at is not null)
+  )
+  from public.orders o
+  left join public.order_fulfilment f on f.order_id = o.id
+  where public.is_admin() and o.status in ('confirmed', 'paid')
+$$;
+
+-- Orders to ship whose mobile number placed another order within 3 days: possibly the
+-- same order twice.
+create or replace function public.admin_duplicate_order_ids()
+returns table (order_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.id
+  from public.orders o
+  where public.is_admin()
+    and o.status in ('confirmed', 'paid')
+    and exists (
+      select 1 from public.orders d
+      where d.id <> o.id
+        and d.shipping_phone = o.shipping_phone
+        and d.status not in ('pending_payment', 'cancelled')
+        and d.created_at between o.created_at - interval '3 days' and o.created_at + interval '3 days'
+    )
+$$;
+
+-- How many orders (not unpaid, not cancelled) each mobile number has placed: one means
+-- a new customer.
+create or replace function public.admin_phone_order_counts(p_phones jsonb)
+returns table (phone text, orders integer)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select o.shipping_phone, count(*)::integer
+  from public.orders o
+  where public.is_admin()
+    and jsonb_typeof(p_phones) = 'array'
+    and o.shipping_phone in (select value from jsonb_array_elements_text(p_phones) limit 100)
+    and o.status not in ('pending_payment', 'cancelled')
+  group by o.shipping_phone
+$$;
+
+revoke execute on function public.reset_fulfilment_on_new_awb() from public, anon, authenticated;
+revoke execute on function public.order_ids_from_json(jsonb) from public, anon;
+revoke execute on function public.admin_set_fulfilment_stage(jsonb, text) from public, anon;
+revoke execute on function public.admin_set_order_note(uuid, text) from public, anon;
+revoke execute on function public.admin_update_order_address(uuid, jsonb) from public, anon;
+revoke execute on function public.admin_fulfilment_order_ids(text) from public, anon;
+revoke execute on function public.admin_fulfilment_counts() from public, anon;
+revoke execute on function public.admin_duplicate_order_ids() from public, anon;
+revoke execute on function public.admin_phone_order_counts(jsonb) from public, anon;
+grant execute on function public.admin_set_fulfilment_stage(jsonb, text) to authenticated;
+grant execute on function public.admin_set_order_note(uuid, text) to authenticated;
+grant execute on function public.admin_update_order_address(uuid, jsonb) to authenticated;
+grant execute on function public.admin_fulfilment_order_ids(text) to authenticated;
+grant execute on function public.admin_fulfilment_counts() to authenticated;
+grant execute on function public.admin_duplicate_order_ids() to authenticated;
+grant execute on function public.admin_phone_order_counts(jsonb) to authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 9e. ORDER DOCUMENTS (admin: tax invoices, label routing code)
+-- -----------------------------------------------------------------------------
+-- Each order gets one tax invoice number, the first time its label or invoice is
+-- printed: KAK/26-27/00001, a running number that starts again every 1 April (the
+-- Indian financial year). Numbers are never reused or changed.
+create table if not exists public.order_invoices (
+  order_id uuid primary key references public.orders (id) on delete restrict,
+  financial_year text not null check (financial_year ~ '^[0-9]{2}-[0-9]{2}$'),
+  serial integer not null check (serial > 0),
+  invoice_number text not null unique,
+  issued_at timestamptz not null default now(),
+  unique (financial_year, serial)
+);
+
+alter table public.order_invoices enable row level security;
+
+drop policy if exists "Admins view invoices" on public.order_invoices;
+create policy "Admins view invoices" on public.order_invoices
+  for select to authenticated
+  using ((select public.is_admin()));
+
+revoke all on public.order_invoices from anon, authenticated;
+grant select on public.order_invoices to authenticated;
+
+-- The courier's sorting code for the parcel (Delhivery's sort code), printed on our own
+-- label. Saved by the shipping function when it books.
+alter table public.shipments add column if not exists routing_code text check (char_length(routing_code) <= 60);
+
+-- The seller details printed on invoices ("Sold by"). Typed once by an admin in Admin >
+-- Shipping > Invoice details; empty until then. The state decides IGST (another state)
+-- or CGST + SGST (the same state).
+alter table public.shipping_settings add column if not exists invoice_business_name text not null default ''
+  check (char_length(invoice_business_name) <= 100);
+alter table public.shipping_settings add column if not exists invoice_address text not null default ''
+  check (char_length(invoice_address) <= 200);
+alter table public.shipping_settings add column if not exists invoice_phone text not null default ''
+  check (invoice_phone = '' or invoice_phone ~ '^[0-9]{10}$');
+alter table public.shipping_settings add column if not exists invoice_gstin text not null default ''
+  check (invoice_gstin = '' or invoice_gstin ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$');
+alter table public.shipping_settings add column if not exists invoice_pan text not null default ''
+  check (invoice_pan = '' or invoice_pan ~ '^[A-Z]{5}[0-9]{4}[A-Z]$');
+alter table public.shipping_settings add column if not exists invoice_state text not null default 'Rajasthan'
+  check (char_length(invoice_state) <= 60);
+
+-- Gives invoice numbers to the orders that have none yet and returns every order's
+-- number and date. Unpaid and cancelled orders get none.
+create or replace function public.admin_issue_invoices(p_orders jsonb)
+returns table (order_id uuid, invoice_number text, issued_at timestamptz)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+#variable_conflict use_column
+declare
+  v_ids uuid[];
+  v_now timestamp := (now() at time zone 'Asia/Kolkata');
+  v_start integer;
+  v_fy text;
+  v_next integer;
+  v_order uuid;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can make invoices' using errcode = '42501';
+  end if;
+  v_ids := public.order_ids_from_json(p_orders);
+  v_start := extract(year from v_now)::integer - case when extract(month from v_now) < 4 then 1 else 0 end;
+  v_fy := lpad((v_start % 100)::text, 2, '0') || '-' || lpad(((v_start + 1) % 100)::text, 2, '0');
+
+  -- One numbering at a time, so two admins never get the same number.
+  perform pg_advisory_xact_lock(hashtext('public.order_invoices'));
+  select coalesce(max(i.serial), 0) into v_next from public.order_invoices i where i.financial_year = v_fy;
+
+  for v_order in
+    select o.id from public.orders o
+    where o.id = any(v_ids)
+      and o.status not in ('pending_payment', 'cancelled')
+      and not exists (select 1 from public.order_invoices i where i.order_id = o.id)
+    order by o.order_number
+  loop
+    v_next := v_next + 1;
+    insert into public.order_invoices (order_id, financial_year, serial, invoice_number)
+    values (v_order, v_fy, v_next, 'KAK/' || v_fy || '/' || lpad(v_next::text, 5, '0'));
+  end loop;
+
+  return query
+    select i.order_id, i.invoice_number, i.issued_at
+    from public.order_invoices i
+    where i.order_id = any(v_ids);
+end;
+$$;
+
+revoke execute on function public.admin_issue_invoices(jsonb) from public, anon;
+grant execute on function public.admin_issue_invoices(jsonb) to authenticated;
+
+-- A customer's return pickup that reached the shop: when it was checked in. Its books
+-- go back into stock once (the order itself stays Delivered).
+alter table public.order_fulfilment add column if not exists return_received_at timestamptz;
+
+create or replace function public.admin_receive_return(p_order uuid)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_test boolean;
+  v_at timestamptz;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  select is_test into v_test from public.orders where id = p_order for update;
+  if v_test is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  if not exists (select 1 from public.shipments where order_id = p_order and kind = 'reverse' and status <> 'cancelled') then
+    raise exception 'This order has no return pickup' using errcode = 'P0001', hint = 'no_return';
+  end if;
+  select return_received_at into v_at from public.order_fulfilment where order_id = p_order;
+  if v_at is not null then
+    return v_at;
+  end if;
+  insert into public.order_fulfilment (order_id, return_received_at) values (p_order, now())
+  on conflict (order_id) do update set return_received_at = now(), updated_at = now();
+  if not v_test then
+    update public.books b
+    set stock_quantity = b.stock_quantity + i.quantity
+    from public.order_items i
+    where i.order_id = p_order and b.id = i.book_id;
+  end if;
+  return now();
+end;
+$$;
+
+revoke execute on function public.admin_receive_return(uuid) from public, anon;
+grant execute on function public.admin_receive_return(uuid) to authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 9f. CANCELLED ORDERS (admin: when, by whom, from which step)
+-- -----------------------------------------------------------------------------
+-- Every cancellation records when it happened, who did it and where the order was at
+-- the time (Process orders > Cancelled, as on ShopDeck):
+--   cancelled_by   'seller' (an admin), 'customer' (on the website) or 'system'
+--                  (GoKwik's automatic refund, the courier worker). Null for orders
+--                  cancelled before this was added.
+--   cancelled_from 'payment_pending', 'print', 'pack', 'handover', 'handed_over',
+--                  'shipped' (a parcel that came back) or 'delivered'.
+alter table public.orders add column if not exists cancelled_at timestamptz;
+alter table public.orders add column if not exists cancelled_by text;
+alter table public.orders add column if not exists cancelled_from text;
+alter table public.orders drop constraint if exists orders_cancelled_by_check;
+alter table public.orders add constraint orders_cancelled_by_check
+  check (cancelled_by is null or cancelled_by in ('seller', 'customer', 'system'));
+alter table public.orders drop constraint if exists orders_cancelled_from_check;
+alter table public.orders add constraint orders_cancelled_from_check
+  check (cancelled_from is null or cancelled_from in ('payment_pending', 'print', 'pack', 'handover', 'handed_over', 'shipped', 'delivered'));
+create index if not exists orders_cancelled_at_idx on public.orders (cancelled_at) where cancelled_at is not null;
+
+create or replace function public.orders_record_cancel()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.status = 'cancelled' and old.status <> 'cancelled' then
+    new.cancelled_at := now();
+    new.cancelled_by := case
+      when public.is_admin() then 'seller'
+      when auth.uid() is not null and auth.uid() = new.user_id then 'customer'
+      else 'system'
+    end;
+    new.cancelled_from := case old.status
+      when 'pending_payment' then 'payment_pending'
+      when 'shipped' then 'shipped'
+      when 'delivered' then 'delivered'
+      else coalesce(
+        (select case
+            when f.handed_over_at is not null then 'handed_over'
+            when f.packed_at is not null then 'handover'
+            when f.label_printed_at is not null then 'pack'
+          end
+         from public.order_fulfilment f where f.order_id = new.id),
+        'print')
+    end;
+  end if;
+  return new;
+end;
+$$;
+
+revoke execute on function public.orders_record_cancel() from public, anon, authenticated;
+
+drop trigger if exists orders_record_cancel on public.orders;
+create trigger orders_record_cancel
+  before update of status on public.orders
+  for each row execute function public.orders_record_cancel();
+
+-- Orders cancelled before this section existed: their last change is the best guess
+-- of when (who and from where stay unknown). Runs once; later runs find nothing.
+update public.orders set cancelled_at = updated_at
+where status = 'cancelled' and cancelled_at is null;
+
+-- -----------------------------------------------------------------------------
+-- 9g. PLACE ORDER (admin: orders taken by phone or WhatsApp)
+-- -----------------------------------------------------------------------------
+-- An admin can place an order for a customer (Orders > Place order, as on ShopDeck).
+--   origin      'website' (the customer ordered on the site) or 'admin' (placed here)
+--   placed_by   the admin who placed it
+--   alt_phone   a second mobile number for the courier, optional
+-- Such an order belongs to the customer's account when exactly one account has that
+-- mobile number (they then see it under My orders); otherwise to no account, so
+-- user_id may be empty for orders placed by an admin.
+alter table public.orders alter column user_id drop not null;
+alter table public.orders add column if not exists origin text not null default 'website';
+alter table public.orders drop constraint if exists orders_origin_check;
+alter table public.orders add constraint orders_origin_check check (origin in ('website', 'admin'));
+alter table public.orders add column if not exists placed_by uuid references auth.users (id) on delete set null;
+alter table public.orders add column if not exists alt_phone text;
+alter table public.orders drop constraint if exists orders_alt_phone_check;
+alter table public.orders add constraint orders_alt_phone_check check (alt_phone is null or alt_phone ~ '^[6-9][0-9]{9}$');
+alter table public.orders drop constraint if exists orders_user_or_admin_check;
+alter table public.orders add constraint orders_user_or_admin_check check (user_id is not null or origin = 'admin');
+
+-- Places an order from the admin panel. items: [{ "book_id": uuid, "quantity": 1-10,
+-- "price": selling price per copy, optional, 0 to the MRP }] (1 to 50 different books).
+-- shipping: { name, phone, address, city, state, pincode }. payment: 'cod' (confirmed,
+-- cash collected on delivery) or 'online' (prepaid: the customer has already paid the
+-- shop, so it is marked paid). carrier: 'xpressbees' or 'delhivery' for its parcel, or
+-- null for the default. Books leave stock at once and the parcel is queued for booking
+-- like any confirmed order.
+create or replace function public.admin_place_order(
+  p_items jsonb, p_shipping jsonb, p_payment text, p_carrier text default null, p_alt_phone text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order uuid;
+  v_user uuid;
+  v_lines integer;
+  v_distinct integer;
+  v_unavailable integer;
+  v_bad_price integer;
+  v_phone text := btrim(coalesce(p_shipping ->> 'phone', ''));
+  v_alt text := nullif(btrim(coalesce(p_alt_phone, '')), '');
+  v_ship uuid;
+  v_ship_carrier text;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can place orders here' using errcode = '42501';
+  end if;
+  if p_payment is null or p_payment not in ('online', 'cod') then
+    raise exception 'Choose a payment mode' using errcode = '22023';
+  end if;
+  if p_carrier is not null and p_carrier not in ('xpressbees', 'delhivery') then
+    raise exception 'Unknown courier partner' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) not between 1 and 50 then
+    raise exception 'An order needs between 1 and 50 different books' using errcode = '22023';
+  end if;
+  if jsonb_typeof(p_shipping) is distinct from 'object' then
+    raise exception 'Customer details are missing' using errcode = '22023';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(p_items) as e
+    where coalesce(e ->> 'book_id', '') !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or coalesce(e ->> 'quantity', '') !~ '^[0-9]{1,2}$'
+       or (e ? 'price' and jsonb_typeof(e -> 'price') <> 'null' and (e ->> 'price') !~ '^[0-9]{1,7}(\.[0-9]{1,2})?$')
+  ) then
+    raise exception 'Some book lines are not valid' using errcode = '22023';
+  end if;
+
+  -- Lock the books so two orders cannot take the same last copy.
+  perform 1 from public.books b
+  where b.id in (select (e ->> 'book_id')::uuid from jsonb_array_elements(p_items) as e)
+  for update;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity,
+      nullif(e ->> 'price', '')::numeric as price
+    from jsonb_array_elements(p_items) as e
+  )
+  select
+    count(*),
+    count(distinct r.book_id),
+    count(*) filter (where b.id is null or r.quantity not between 1 and 10 or b.stock_quantity < r.quantity),
+    count(*) filter (where b.id is not null and r.price is not null and (r.price < 0 or r.price > b.mrp))
+  into v_lines, v_distinct, v_unavailable, v_bad_price
+  from req r
+  left join public.books b on b.id = r.book_id;
+
+  if v_distinct <> v_lines then
+    raise exception 'The same book appears twice' using errcode = '22023', hint = 'duplicate';
+  end if;
+  if v_unavailable > 0 then
+    raise exception 'Some books are not in stock in that quantity' using errcode = 'P0001', hint = 'unavailable';
+  end if;
+  if v_bad_price > 0 then
+    raise exception 'A selling price is above the MRP' using errcode = 'P0001', hint = 'price';
+  end if;
+
+  -- The customer's account, when exactly one account has this mobile number.
+  select case when count(*) = 1 then min(u.id::text)::uuid end into v_user
+  from public.users u where u.phone = v_phone;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity,
+      nullif(e ->> 'price', '')::numeric as price
+    from jsonb_array_elements(p_items) as e
+  )
+  insert into public.orders (
+    user_id, status, payment_method, item_count, subtotal, mrp_total, amount_paid,
+    shipping_name, shipping_phone, shipping_address, shipping_city, shipping_state, shipping_pincode,
+    origin, placed_by, alt_phone
+  )
+  select
+    v_user,
+    case when p_payment = 'cod' then 'confirmed' else 'paid' end,
+    p_payment,
+    sum(r.quantity),
+    sum(coalesce(r.price, b.price) * r.quantity),
+    sum(b.mrp * r.quantity),
+    case when p_payment = 'online' then sum(coalesce(r.price, b.price) * r.quantity) else 0 end,
+    btrim(p_shipping ->> 'name'), v_phone, btrim(p_shipping ->> 'address'),
+    btrim(p_shipping ->> 'city'), btrim(p_shipping ->> 'state'), btrim(p_shipping ->> 'pincode'),
+    'admin', auth.uid(), v_alt
+  from req r
+  join public.books b on b.id = r.book_id
+  returning id into v_order;
+
+  with req as (
+    select (e ->> 'book_id')::uuid as book_id, (e ->> 'quantity')::integer as quantity,
+      nullif(e ->> 'price', '')::numeric as price
+    from jsonb_array_elements(p_items) as e
+  )
+  insert into public.order_items (order_id, book_id, sku, title, image_url, unit_price, unit_mrp, quantity)
+  select v_order, b.id, b.sku, b.title, b.image_urls[1], coalesce(r.price, b.price), b.mrp, r.quantity
+  from req r
+  join public.books b on b.id = r.book_id;
+
+  update public.books b
+  set stock_quantity = b.stock_quantity - i.quantity
+  from public.order_items i
+  where i.order_id = v_order and b.id = i.book_id;
+
+  -- The parcel was queued with the default carrier when the order was saved.
+  if p_carrier is not null then
+    select id, carrier into v_ship, v_ship_carrier from public.shipments
+    where order_id = v_order and kind = 'forward' and status <> 'cancelled';
+    if v_ship is not null and v_ship_carrier <> p_carrier then
+      perform public.set_shipment_carrier(v_ship, p_carrier, auth.uid());
+    end if;
+  end if;
+
+  return v_order;
+end;
+$$;
+
+revoke execute on function public.admin_place_order(jsonb, jsonb, text, text, text) from public, anon;
+grant execute on function public.admin_place_order(jsonb, jsonb, text, text, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 9h. CALL STATUS AND CANCEL REASONS (admin only)
+-- -----------------------------------------------------------------------------
+-- As on ShopDeck: each order to ship has a customer call status and short remarks
+-- (the Edit link under the customer), and a cancellation by an admin records why
+-- (shared with the courier when needed). Kept in order_fulfilment, which only admins
+-- can read.
+alter table public.order_fulfilment add column if not exists call_status text not null default 'pending';
+alter table public.order_fulfilment drop constraint if exists order_fulfilment_call_status_check;
+alter table public.order_fulfilment add constraint order_fulfilment_call_status_check
+  check (call_status in ('pending', 'completed', 'hold', 'not_required'));
+alter table public.order_fulfilment add column if not exists call_remarks text;
+alter table public.order_fulfilment drop constraint if exists order_fulfilment_call_remarks_check;
+alter table public.order_fulfilment add constraint order_fulfilment_call_remarks_check
+  check (call_remarks is null or char_length(call_remarks) <= 100);
+alter table public.order_fulfilment add column if not exists cancel_reason text;
+alter table public.order_fulfilment add column if not exists cancel_customer_reason text;
+alter table public.order_fulfilment add column if not exists cancel_remarks text;
+alter table public.order_fulfilment drop constraint if exists order_fulfilment_cancel_text_check;
+alter table public.order_fulfilment add constraint order_fulfilment_cancel_text_check check (
+  (cancel_reason is null or char_length(cancel_reason) <= 100)
+  and (cancel_customer_reason is null or char_length(cancel_customer_reason) <= 100)
+  and (cancel_remarks is null or char_length(cancel_remarks) <= 100)
+);
+
+-- The reasons an admin picks from when cancelling (ShopDeck's "Select reason for
+-- cancellation"), and the customer's own reasons (ShopDeck's Settings > Order
+-- Cancellation). The admin panel shows the same lists.
+create or replace function public.order_cancel_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array[
+    'Product out of stock', 'Customer cancelled the order', 'RTO risk',
+    'Duplicate order', 'Shipped via another courier', 'Delivery time is high',
+    'Shipping charges are high', 'Pickup did not happen on time', 'Order not confirmed by the customer',
+    'Incomplete or unclear customer address', 'Other'
+  ]
+$$;
+
+create or replace function public.order_customer_cancel_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array[
+    'Found a better product offline', 'Found a better product on another website/marketplace',
+    'Delivery time was longer than expected', 'Found better quality for the same product',
+    'Found better price for the same product', 'Ordered the wrong size/colour/design',
+    'Ordered by Mistake', 'Unavailable to receive the order at the given address',
+    'Changed my mind, don''t want the product anymore', 'I did not place this order',
+    'Product price has reduced', 'Incorrect payment method selected',
+    'Wrong address/details mentioned in order', 'Other'
+  ]
+$$;
+
+-- Saves the customer call status and remarks (the Edit pop-up under the customer).
+create or replace function public.admin_set_call_status(p_order uuid, p_status text, p_remarks text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_remarks text := nullif(btrim(coalesce(p_remarks, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if p_status is null or p_status not in ('pending', 'completed', 'hold', 'not_required') then
+    raise exception 'Choose a call status' using errcode = '22023';
+  end if;
+  if char_length(v_remarks) > 100 then
+    raise exception 'Keep the remarks under 100 characters' using errcode = '22023', hint = 'remarks';
+  end if;
+  if not exists (select 1 from public.orders where id = p_order) then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  insert into public.order_fulfilment (order_id, call_status, call_remarks) values (p_order, p_status, v_remarks)
+  on conflict (order_id) do update set call_status = excluded.call_status, call_remarks = excluded.call_remarks, updated_at = now();
+end;
+$$;
+
+-- Cancels an order from the admin panel with its reason. p_customer_reason is needed
+-- when the customer asked for it; p_remarks when the reason is Other.
+create or replace function public.admin_cancel_order(p_order uuid, p_reason text, p_customer_reason text default null, p_remarks text default null)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_customer text := nullif(btrim(coalesce(p_customer_reason, '')), '');
+  v_remarks text := nullif(btrim(coalesce(p_remarks, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  if p_reason is null or not (p_reason = any (public.order_cancel_reasons())) then
+    raise exception 'Choose a reason for cancelling' using errcode = '22023', hint = 'cancel_reason';
+  end if;
+  if p_reason = 'Customer cancelled the order' and (v_customer is null or not (v_customer = any (public.order_customer_cancel_reasons()))) then
+    raise exception 'Choose the customer''s reason' using errcode = '22023', hint = 'cancel_reason';
+  end if;
+  if p_reason <> 'Customer cancelled the order' then
+    v_customer := null;
+  end if;
+  if char_length(v_remarks) > 100 then
+    raise exception 'Keep the remarks under 100 characters' using errcode = '22023', hint = 'remarks';
+  end if;
+  if v_remarks is null and (p_reason = 'Other' or v_customer = 'Other') then
+    raise exception 'Write what happened in the remarks' using errcode = '22023', hint = 'cancel_remarks';
+  end if;
+  -- Changes the status (stock back, parcel cancelled with the courier) or refuses.
+  perform public.admin_set_order_status(p_order, 'cancelled');
+  insert into public.order_fulfilment (order_id, cancel_reason, cancel_customer_reason, cancel_remarks)
+  values (p_order, p_reason, v_customer, v_remarks)
+  on conflict (order_id) do update
+  set cancel_reason = excluded.cancel_reason, cancel_customer_reason = excluded.cancel_customer_reason,
+      cancel_remarks = excluded.cancel_remarks, updated_at = now();
+  return 'cancelled';
+end;
+$$;
+
+revoke execute on function public.admin_set_call_status(uuid, text, text) from public, anon;
+revoke execute on function public.admin_cancel_order(uuid, text, text, text) from public, anon;
+grant execute on function public.admin_set_call_status(uuid, text, text) to authenticated;
+grant execute on function public.admin_cancel_order(uuid, text, text, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 9i. RETURN AND EXCHANGE REQUESTS (customers ask, admins decide)
+-- -----------------------------------------------------------------------------
+-- As on ShopDeck's Orders > Return/Exchange Requests. Within 3 days of delivery a
+-- customer asks to return books (money back) or exchange them (the same books sent
+-- again), with a reason, a remark and photos. An admin approves or rejects it:
+--   new                 waiting for the admin
+--   ongoing             approved: the return pickup is booked (an exchange also gets
+--                       a replacement order, which goes through Process orders)
+--   pickup_failed       the courier could not pick it up (closed after 7 days)
+--   settlement_pending  picked up; the refund is still to be sent (returns)
+--   closed              rejected, withdrawn by the customer, refunded, replaced, or
+--                       closed by an admin
+-- The stage follows the return pickup, the replacement order and the GoKwik refund by
+-- itself (return_request_refresh below).
+
+-- When an order was delivered (the 3-day window starts there).
+alter table public.orders add column if not exists delivered_at timestamptz;
+update public.orders set delivered_at = updated_at where status = 'delivered' and delivered_at is null;
+
+create or replace function public.orders_record_delivered()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.status = 'delivered' and old.status is distinct from 'delivered' then
+    new.delivered_at := coalesce(new.delivered_at, now());
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists orders_record_delivered on public.orders;
+create trigger orders_record_delivered
+  before update of status on public.orders
+  for each row execute function public.orders_record_delivered();
+
+-- A replacement sent for an exchange is an order of its own ('exchange'), free of charge.
+alter table public.orders drop constraint if exists orders_origin_check;
+alter table public.orders add constraint orders_origin_check check (origin in ('website', 'admin', 'exchange'));
+alter table public.orders drop constraint if exists orders_user_or_admin_check;
+alter table public.orders add constraint orders_user_or_admin_check check (user_id is not null or origin in ('admin', 'exchange'));
+
+create table if not exists public.return_requests (
+  id uuid primary key default gen_random_uuid(),
+  request_number bigint generated always as identity unique,
+  order_id uuid not null references public.orders (id) on delete cascade,
+  -- Copied from the order so the list can be searched without a join.
+  order_number bigint not null,
+  phone text not null,
+  user_id uuid references auth.users (id) on delete set null,
+  kind text not null check (kind in ('return', 'exchange')),
+  -- [{ sku, book_id, title, image_url, quantity, unit_price, unit_mrp }]
+  items jsonb not null check (jsonb_typeof(items) = 'array' and jsonb_array_length(items) between 1 and 50),
+  amount numeric(12, 2) not null check (amount >= 0),
+  reason text not null check (char_length(reason) <= 100),
+  remark text check (char_length(remark) <= 300),
+  -- Paths in the private return-photos bucket: <customer id>/<name>.<jpg|png|webp>
+  photos text[] not null default '{}' check (cardinality(photos) <= 5),
+  -- Where a cash-on-delivery customer wants the money back (UPI ID), optional.
+  refund_upi text check (refund_upi is null or refund_upi ~ '^[A-Za-z0-9._-]{2,200}@[A-Za-z0-9]{2,64}$'),
+  source text not null default 'website' check (source in ('website', 'admin')),
+  created_by uuid references auth.users (id) on delete set null,
+  stage text not null default 'new'
+    check (stage in ('new', 'ongoing', 'pickup_failed', 'settlement_pending', 'closed')),
+  decision text check (decision in ('approved', 'rejected', 'withdrawn')),
+  decided_at timestamptz,
+  decided_by uuid references auth.users (id) on delete set null,
+  reject_reason text check (char_length(reject_reason) <= 100),
+  reject_remarks text check (char_length(reject_remarks) <= 100),
+  pickup_failed_at timestamptz,
+  outcome text check (outcome in ('passed', 'failed')),
+  fail_reason text check (char_length(fail_reason) <= 100),
+  fail_remarks text check (char_length(fail_remarks) <= 100),
+  closed_at timestamptz,
+  replacement_order_id uuid references public.orders (id) on delete set null,
+  refund_mode text check (refund_mode in ('gokwik', 'offline')),
+  refund_amount numeric(12, 2) check (refund_amount is null or refund_amount > 0),
+  refund_ref text check (char_length(refund_ref) <= 60),
+  refunded_at timestamptz,
+  note text check (char_length(note) <= 500),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- One open request per order at a time.
+create unique index if not exists return_requests_one_open
+  on public.return_requests (order_id) where stage <> 'closed';
+create index if not exists return_requests_stage_idx on public.return_requests (stage, created_at desc);
+create index if not exists return_requests_user_idx on public.return_requests (user_id, created_at desc);
+create index if not exists return_requests_replacement_idx on public.return_requests (replacement_order_id);
+
+drop trigger if exists return_requests_set_updated_at on public.return_requests;
+create trigger return_requests_set_updated_at
+  before update on public.return_requests
+  for each row execute function public.set_updated_at();
+
+alter table public.return_requests enable row level security;
+
+drop policy if exists "Customers view own return requests" on public.return_requests;
+create policy "Customers view own return requests" on public.return_requests
+  for select to authenticated
+  using ((select auth.uid()) = user_id or (select public.is_admin()));
+
+revoke all on public.return_requests from anon, authenticated;
+grant select on public.return_requests to authenticated;
+
+-- Customer photos: a private bucket. A customer adds photos to their own folder only;
+-- the customer and admins can see them. (Skipped where Supabase Storage is not
+-- installed, such as the local test database.)
+do $storage$
+begin
+  if to_regclass('storage.buckets') is null or to_regclass('storage.objects') is null then
+    return;
+  end if;
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('return-photos', 'return-photos', false, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+  on conflict (id) do update
+  set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
+
+  execute 'drop policy if exists "Customers add own return photos" on storage.objects';
+  execute $p$create policy "Customers add own return photos" on storage.objects
+    for insert to authenticated
+    with check (bucket_id = 'return-photos' and (storage.foldername(name))[1] = (select auth.uid())::text)$p$;
+  execute 'drop policy if exists "Customers and admins view return photos" on storage.objects';
+  execute $p$create policy "Customers and admins view return photos" on storage.objects
+    for select to authenticated
+    using (bucket_id = 'return-photos' and ((storage.foldername(name))[1] = (select auth.uid())::text or (select public.is_admin())))$p$;
+end;
+$storage$;
+
+-- The lists shown in the store and the admin panel (the same text in both).
+create or replace function public.return_window_days()
+returns integer
+language sql
+immutable
+set search_path = ''
+as $$ select 3 $$;
+
+create or replace function public.return_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array[
+    'Wrong Product Received', 'Damaged Product', 'Defective product (pages missing or misprinted)',
+    'Missing item/Quantity', 'Doesn''t match description or photo', 'Quality not up to expectation',
+    'Found better price for same product', 'Other'
+  ]
+$$;
+
+-- Reasons that need at least one photo.
+create or replace function public.return_photo_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array['Wrong Product Received', 'Damaged Product', 'Defective product (pages missing or misprinted)', 'Doesn''t match description or photo']
+$$;
+
+create or replace function public.return_reject_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array[
+    'Request raised after the return window', 'Photos do not show the problem',
+    'Book is used or damaged by the customer', 'Wrong book was not sent', 'Duplicate request', 'Other'
+  ]
+$$;
+
+create or replace function public.return_close_reasons()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array['Cancelled by customer', 'Cancelled by logistics partner', 'Quality check failed', 'Other']
+$$;
+
+-- Checks and prices the books asked about: p_items [{ sku, quantity }] must be books of
+-- the order, each at most the quantity ordered. Returns the saved form of the items.
+create or replace function public.return_items_of(p_order uuid, p_items jsonb)
+returns jsonb
+language plpgsql
+stable
+set search_path = ''
+as $$
+declare
+  v_lines integer;
+  v_distinct integer;
+  v_bad integer;
+  v_items jsonb;
+begin
+  if jsonb_typeof(p_items) is distinct from 'array' or jsonb_array_length(p_items) not between 1 and 50 then
+    raise exception 'Choose the books to send back' using errcode = '22023', hint = 'return_items';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(p_items) as e
+    where jsonb_typeof(e) <> 'object' or coalesce(e ->> 'sku', '') = '' or coalesce(e ->> 'quantity', '') !~ '^[0-9]{1,2}$'
+  ) then
+    raise exception 'Choose the books to send back' using errcode = '22023', hint = 'return_items';
+  end if;
+  with req as (
+    select e ->> 'sku' as sku, (e ->> 'quantity')::integer as quantity from jsonb_array_elements(p_items) as e
+  )
+  select count(*), count(distinct r.sku),
+    count(*) filter (where i.sku is null or r.quantity < 1 or r.quantity > i.quantity)
+  into v_lines, v_distinct, v_bad
+  from req r
+  left join public.order_items i on i.order_id = p_order and i.sku = r.sku;
+  if v_distinct <> v_lines or v_bad > 0 then
+    raise exception 'Choose the books to send back' using errcode = '22023', hint = 'return_items';
+  end if;
+  with req as (
+    select e ->> 'sku' as sku, (e ->> 'quantity')::integer as quantity from jsonb_array_elements(p_items) as e
+  )
+  select jsonb_agg(jsonb_build_object(
+    'sku', i.sku, 'book_id', i.book_id, 'title', i.title, 'image_url', i.image_url,
+    'quantity', r.quantity, 'unit_price', i.unit_price, 'unit_mrp', i.unit_mrp
+  ) order by i.title)
+  into v_items
+  from req r
+  join public.order_items i on i.order_id = p_order and i.sku = r.sku;
+  return v_items;
+end;
+$$;
+
+-- Saves a request after the common checks (used by the two functions below).
+create or replace function public.return_request_insert(
+  p_order uuid, p_kind text, p_items jsonb, p_reason text, p_remark text, p_photos jsonb,
+  p_refund_upi text, p_source text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_order public.orders%rowtype;
+  v_items jsonb;
+  v_remark text := nullif(btrim(coalesce(p_remark, '')), '');
+  v_upi text := nullif(btrim(coalesce(p_refund_upi, '')), '');
+  v_photos text[] := '{}';
+  v_id uuid;
+begin
+  if p_kind is null or p_kind not in ('return', 'exchange') then
+    raise exception 'Choose return or exchange' using errcode = '22023', hint = 'return_kind';
+  end if;
+  if p_reason is null or not (p_reason = any (public.return_reasons())) then
+    raise exception 'Choose a reason' using errcode = '22023', hint = 'return_reason';
+  end if;
+  if char_length(v_remark) > 300 then
+    raise exception 'Keep the remark under 300 characters' using errcode = '22023', hint = 'return_remark';
+  end if;
+  if v_remark is null and p_reason = 'Other' then
+    raise exception 'Tell us what is wrong' using errcode = '22023', hint = 'return_remark';
+  end if;
+  if v_upi is not null and v_upi !~ '^[A-Za-z0-9._-]{2,200}@[A-Za-z0-9]{2,64}$' then
+    raise exception 'That UPI ID does not look right' using errcode = '22023', hint = 'return_upi';
+  end if;
+  if p_photos is not null and jsonb_typeof(p_photos) = 'array' then
+    if jsonb_array_length(p_photos) > 5 then
+      raise exception 'Add at most 5 photos' using errcode = '22023', hint = 'return_photos';
+    end if;
+    select coalesce(array_agg(value), '{}') into v_photos from jsonb_array_elements_text(p_photos);
+  elsif p_photos is not null and jsonb_typeof(p_photos) <> 'null' then
+    raise exception 'Photos are not valid' using errcode = '22023', hint = 'return_photos';
+  end if;
+
+  select * into v_order from public.orders where id = p_order for update;
+  if v_order.id is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  if p_source = 'website' then
+    if v_order.user_id is distinct from auth.uid() then
+      raise exception 'Order not found' using errcode = 'P0002';
+    end if;
+    -- Photos must be the customer's own uploads.
+    if exists (
+      select 1 from unnest(v_photos) as p
+      where p !~ ('^' || auth.uid()::text || '/[A-Za-z0-9_-]{8,64}\.(jpg|png|webp)$')
+    ) then
+      raise exception 'Photos are not valid' using errcode = '22023', hint = 'return_photos';
+    end if;
+    if p_reason = any (public.return_photo_reasons()) and cardinality(v_photos) = 0 then
+      raise exception 'Add a photo of the problem' using errcode = '22023', hint = 'return_photos';
+    end if;
+  else
+    v_photos := '{}';
+  end if;
+  if v_order.status <> 'delivered' then
+    raise exception 'Only a delivered order can be returned' using errcode = 'P0001', hint = 'return_not_delivered';
+  end if;
+  if v_order.origin = 'exchange' then
+    raise exception 'A replacement cannot be returned again here' using errcode = 'P0001', hint = 'return_replacement';
+  end if;
+  if p_source = 'website' and coalesce(v_order.delivered_at, v_order.updated_at) + make_interval(days => public.return_window_days()) < now() then
+    raise exception 'The return window has closed' using errcode = 'P0001', hint = 'return_window';
+  end if;
+  if exists (select 1 from public.return_requests where order_id = p_order and stage <> 'closed') then
+    raise exception 'This order already has an open request' using errcode = 'P0001', hint = 'return_open';
+  end if;
+  if exists (select 1 from public.return_requests where order_id = p_order and outcome = 'passed') then
+    raise exception 'This order was already returned or exchanged' using errcode = 'P0001', hint = 'return_done';
+  end if;
+
+  v_items := public.return_items_of(p_order, p_items);
+  insert into public.return_requests (
+    order_id, order_number, phone, user_id, kind, items, amount, reason, remark, photos,
+    refund_upi, source, created_by
+  )
+  values (
+    p_order, v_order.order_number, v_order.shipping_phone, v_order.user_id, p_kind, v_items,
+    (select coalesce(sum((e ->> 'unit_price')::numeric * (e ->> 'quantity')::integer), 0) from jsonb_array_elements(v_items) as e),
+    p_reason, v_remark, v_photos, case when p_kind = 'return' then v_upi end, p_source, auth.uid()
+  )
+  returning id into v_id;
+  return v_id;
+end;
+$$;
+
+-- A customer's request from their order page.
+create or replace function public.request_return(
+  p_order uuid, p_kind text, p_items jsonb, p_reason text, p_remark text default null,
+  p_photos jsonb default '[]'::jsonb, p_refund_upi text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in first' using errcode = '42501';
+  end if;
+  return public.return_request_insert(p_order, p_kind, p_items, p_reason, p_remark, p_photos, p_refund_upi, 'website');
+end;
+$$;
+
+-- An admin records a request a customer made by phone (ShopDeck's "Dashboard" source).
+-- The 3-day window does not apply.
+create or replace function public.admin_create_return_request(
+  p_order uuid, p_kind text, p_items jsonb, p_reason text, p_remark text default null, p_refund_upi text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can do this' using errcode = '42501';
+  end if;
+  return public.return_request_insert(p_order, p_kind, p_items, p_reason, p_remark, null, p_refund_upi, 'admin');
+end;
+$$;
+
+-- A customer withdraws a request the shop has not looked at yet.
+create or replace function public.withdraw_return_request(p_request uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.return_requests
+  set stage = 'closed', decision = 'withdrawn', decided_at = now(), decided_by = auth.uid(), closed_at = now()
+  where id = p_request and user_id = auth.uid() and stage = 'new';
+  if not found then
+    raise exception 'This request can no longer be withdrawn' using errcode = 'P0001', hint = 'return_locked';
+  end if;
+end;
+$$;
+
+-- Works out where an approved request is from its return pickup, its replacement order
+-- and its refund. Called by the triggers below and by the admin functions.
+create or replace function public.return_request_refresh(p_request uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r public.return_requests%rowtype;
+  v_rev text;
+  v_picked boolean;
+  v_replacement text;
+  v_refund text;
+  v_stage text;
+begin
+  select * into r from public.return_requests where id = p_request for update;
+  if r.id is null or r.decision is distinct from 'approved' or r.stage = 'closed' then
+    return;
+  end if;
+  select s.status into v_rev from public.shipments s
+  where s.order_id = r.order_id and s.kind = 'reverse' and s.created_at >= r.decided_at
+  order by s.created_at desc limit 1;
+  v_picked := coalesce(v_rev in ('in_transit', 'out_for_delivery', 'delivered'), false)
+    or exists (select 1 from public.order_fulfilment f where f.order_id = r.order_id and f.return_received_at >= r.decided_at);
+
+  if v_picked and r.kind = 'return' then
+    select refund_status into v_refund from public.order_payments where order_id = r.order_id;
+    if r.refund_mode = 'offline' or (r.refund_mode = 'gokwik' and v_refund = 'successful') then
+      update public.return_requests
+      set stage = 'closed', outcome = 'passed', closed_at = coalesce(closed_at, now()), pickup_failed_at = null,
+          refunded_at = coalesce(refunded_at, now())
+      where id = r.id;
+      return;
+    end if;
+    v_stage := 'settlement_pending';
+  elsif v_picked then
+    select status into v_replacement from public.orders where id = r.replacement_order_id;
+    if v_replacement = 'delivered' then
+      update public.return_requests
+      set stage = 'closed', outcome = 'passed', closed_at = coalesce(closed_at, now()), pickup_failed_at = null
+      where id = r.id;
+      return;
+    end if;
+    v_stage := 'ongoing';
+  elsif v_rev = 'cancelled' then
+    v_stage := 'pickup_failed';
+  else
+    v_stage := 'ongoing';
+  end if;
+
+  update public.return_requests
+  set stage = v_stage,
+      pickup_failed_at = case when v_stage = 'pickup_failed' then coalesce(pickup_failed_at, now()) end
+  where id = r.id and (stage is distinct from v_stage or (v_stage <> 'pickup_failed' and pickup_failed_at is not null));
+end;
+$$;
+
+-- Requests touched by a change to this order (the returned order or its replacement).
+create or replace function public.return_requests_touch(p_order uuid)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id uuid;
+begin
+  for v_id in
+    select id from public.return_requests
+    where (order_id = p_order or replacement_order_id = p_order) and decision = 'approved' and stage <> 'closed'
+  loop
+    perform public.return_request_refresh(v_id);
+  end loop;
+end;
+$$;
+
+create or replace function public.return_requests_on_shipment()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if tg_op = 'INSERT' or old.status is distinct from new.status then
+    perform public.return_requests_touch(new.order_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists shipments_return_requests on public.shipments;
+create trigger shipments_return_requests
+  after insert or update of status on public.shipments
+  for each row execute function public.return_requests_on_shipment();
+
+create or replace function public.return_requests_on_order()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if new.origin = 'exchange' and old.status is distinct from new.status then
+    perform public.return_requests_touch(new.id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists orders_return_requests on public.orders;
+create trigger orders_return_requests
+  after update of status on public.orders
+  for each row execute function public.return_requests_on_order();
+
+create or replace function public.return_requests_on_refund()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if old.refund_status is distinct from new.refund_status then
+    perform public.return_requests_touch(new.order_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists order_payments_return_requests on public.order_payments;
+create trigger order_payments_return_requests
+  after update of refund_status on public.order_payments
+  for each row execute function public.return_requests_on_refund();
+
+-- Approve or reject a new request. Approving an exchange places the replacement order
+-- at once (free of charge, the same books, into Process orders); the return pickup is
+-- then booked by the admin panel through the shipping function. Rejecting needs a
+-- reason (and remarks for Other). Returns the replacement order's id, if any.
+create or replace function public.admin_decide_return(p_request uuid, p_decision text, p_reason text default null, p_remarks text default null)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r public.return_requests%rowtype;
+  o public.orders%rowtype;
+  v_remarks text := nullif(btrim(coalesce(p_remarks, '')), '');
+  v_short integer;
+  v_new uuid;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can do this' using errcode = '42501';
+  end if;
+  select * into r from public.return_requests where id = p_request for update;
+  if r.id is null then
+    raise exception 'Request not found' using errcode = 'P0002';
+  end if;
+  if r.stage <> 'new' then
+    raise exception 'This request was already decided' using errcode = 'P0001', hint = 'return_locked';
+  end if;
+  if char_length(v_remarks) > 100 then
+    raise exception 'Keep the remarks under 100 characters' using errcode = '22023', hint = 'remarks';
+  end if;
+
+  if p_decision = 'rejected' then
+    if p_reason is null or not (p_reason = any (public.return_reject_reasons())) then
+      raise exception 'Choose a reason for rejecting' using errcode = '22023', hint = 'return_reason';
+    end if;
+    if p_reason = 'Other' and v_remarks is null then
+      raise exception 'Write what happened in the remarks' using errcode = '22023', hint = 'cancel_remarks';
+    end if;
+    update public.return_requests
+    set stage = 'closed', decision = 'rejected', decided_at = now(), decided_by = auth.uid(),
+        reject_reason = p_reason, reject_remarks = v_remarks, closed_at = now()
+    where id = r.id;
+    return null;
+  end if;
+
+  if p_decision is distinct from 'approved' then
+    raise exception 'Approve or reject' using errcode = '22023';
+  end if;
+
+  select * into o from public.orders where id = r.order_id for update;
+  if o.status <> 'delivered' then
+    raise exception 'Only a delivered order can be returned' using errcode = 'P0001', hint = 'return_not_delivered';
+  end if;
+
+  if r.kind = 'exchange' then
+    perform 1 from public.books b
+    where b.id in (select (e ->> 'book_id')::uuid from jsonb_array_elements(r.items) as e where e ->> 'book_id' is not null)
+    for update;
+    select count(*) into v_short
+    from jsonb_array_elements(r.items) as e
+    left join public.books b on b.id = (e ->> 'book_id')::uuid
+    where b.id is null or (not o.is_test and b.stock_quantity < (e ->> 'quantity')::integer);
+    if v_short > 0 then
+      raise exception 'Some books are not in stock for the replacement' using errcode = 'P0001', hint = 'unavailable';
+    end if;
+
+    insert into public.orders (
+      user_id, status, payment_method, item_count, subtotal, mrp_total, amount_paid,
+      shipping_name, shipping_phone, shipping_address, shipping_city, shipping_state, shipping_pincode,
+      origin, placed_by, alt_phone, is_test
+    )
+    select
+      o.user_id, 'paid', 'online',
+      sum((e ->> 'quantity')::integer), 0, sum((e ->> 'unit_mrp')::numeric * (e ->> 'quantity')::integer), 0,
+      o.shipping_name, o.shipping_phone, o.shipping_address, o.shipping_city, o.shipping_state, o.shipping_pincode,
+      'exchange', auth.uid(), o.alt_phone, o.is_test
+    from jsonb_array_elements(r.items) as e
+    returning id into v_new;
+
+    insert into public.order_items (order_id, book_id, sku, title, image_url, unit_price, unit_mrp, quantity)
+    select v_new, (e ->> 'book_id')::uuid, e ->> 'sku', e ->> 'title', e ->> 'image_url', 0, (e ->> 'unit_mrp')::numeric, (e ->> 'quantity')::integer
+    from jsonb_array_elements(r.items) as e;
+
+    if not o.is_test then
+      update public.books b
+      set stock_quantity = b.stock_quantity - i.quantity
+      from public.order_items i
+      where i.order_id = v_new and b.id = i.book_id;
+    end if;
+  end if;
+
+  update public.return_requests
+  set stage = 'ongoing', decision = 'approved', decided_at = now(), decided_by = auth.uid(),
+      replacement_order_id = v_new
+  where id = r.id;
+  return v_new;
+end;
+$$;
+
+-- Ends an approved request that will not go through (ShopDeck's "Failed" with a reason).
+create or replace function public.admin_close_return_request(p_request uuid, p_reason text, p_remarks text default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_remarks text := nullif(btrim(coalesce(p_remarks, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can do this' using errcode = '42501';
+  end if;
+  if p_reason is null or not (p_reason = any (public.return_close_reasons())) then
+    raise exception 'Choose a reason' using errcode = '22023', hint = 'return_reason';
+  end if;
+  if char_length(v_remarks) > 100 then
+    raise exception 'Keep the remarks under 100 characters' using errcode = '22023', hint = 'remarks';
+  end if;
+  if p_reason = 'Other' and v_remarks is null then
+    raise exception 'Write what happened in the remarks' using errcode = '22023', hint = 'cancel_remarks';
+  end if;
+  update public.return_requests
+  set stage = 'closed', outcome = 'failed', fail_reason = p_reason, fail_remarks = v_remarks, closed_at = now()
+  where id = p_request and decision = 'approved' and stage in ('ongoing', 'pickup_failed', 'settlement_pending');
+  if not found then
+    raise exception 'This request is already closed' using errcode = 'P0001', hint = 'return_locked';
+  end if;
+end;
+$$;
+
+-- Settles a picked-up return: 'gokwik' asks GoKwik to refund the money paid online
+-- (only for orders paid through GoKwik, at most what is left to refund); 'offline'
+-- records money sent by hand (UPI or bank) with its reference.
+create or replace function public.admin_settle_return(p_request uuid, p_mode text, p_amount numeric, p_ref text default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r public.return_requests%rowtype;
+  v_pay public.order_payments%rowtype;
+  v_paid numeric;
+  v_ref text := nullif(btrim(coalesce(p_ref, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can do this' using errcode = '42501';
+  end if;
+  select * into r from public.return_requests where id = p_request for update;
+  if r.id is null then
+    raise exception 'Request not found' using errcode = 'P0002';
+  end if;
+  if r.kind <> 'return' or r.stage <> 'settlement_pending' then
+    raise exception 'This request is not waiting for a refund' using errcode = 'P0001', hint = 'return_locked';
+  end if;
+  if p_amount is null or p_amount <= 0 or p_amount > r.amount then
+    raise exception 'The refund must be more than 0 and at most the value of the books' using errcode = '22023', hint = 'return_amount';
+  end if;
+  if char_length(v_ref) > 60 then
+    raise exception 'Keep the reference under 60 characters' using errcode = '22023', hint = 'return_ref';
+  end if;
+
+  if p_mode = 'gokwik' then
+    select * into v_pay from public.order_payments where order_id = r.order_id for update;
+    select amount_paid into v_paid from public.orders where id = r.order_id;
+    if v_pay.order_id is null or v_paid <= 0 then
+      raise exception 'This order was not paid through GoKwik' using errcode = 'P0001', hint = 'return_no_gokwik';
+    end if;
+    if v_pay.refund_status in ('requested', 'initiated', 'pending', 'auto_refund') then
+      raise exception 'A refund for this order is already under way' using errcode = 'P0001', hint = 'return_refund_busy';
+    end if;
+    if p_amount > v_paid - v_pay.refunded_amount then
+      raise exception 'More than what is left to refund' using errcode = '22023', hint = 'return_amount';
+    end if;
+    insert into public.gokwik_order_updates (order_id, environment, order_status, order_note, refund_amount)
+    values (r.order_id, v_pay.environment, 'Confirmed', left('Return R-' || r.request_number || ': ' || r.reason, 200), p_amount);
+    update public.order_payments set refund_status = 'requested' where order_id = r.order_id;
+    update public.return_requests set refund_mode = 'gokwik', refund_amount = p_amount, refund_ref = null where id = r.id;
+    perform public.gokwik_wake();
+  elsif p_mode = 'offline' then
+    if v_ref is null then
+      raise exception 'Write the UTR or payment reference' using errcode = '22023', hint = 'return_ref';
+    end if;
+    update public.return_requests
+    set refund_mode = 'offline', refund_amount = p_amount, refund_ref = v_ref, refunded_at = now()
+    where id = r.id;
+  else
+    raise exception 'Choose how the money was refunded' using errcode = '22023';
+  end if;
+  perform public.return_request_refresh(r.id);
+end;
+$$;
+
+create or replace function public.admin_set_return_note(p_request uuid, p_note text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_note text := nullif(btrim(coalesce(p_note, '')), '');
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can do this' using errcode = '42501';
+  end if;
+  if char_length(v_note) > 500 then
+    raise exception 'Keep the note under 500 characters' using errcode = '22023', hint = 'note';
+  end if;
+  update public.return_requests set note = v_note where id = p_request;
+  if not found then
+    raise exception 'Request not found' using errcode = 'P0002';
+  end if;
+end;
+$$;
+
+-- The numbers at the top of the page and on its tabs. Pickups that failed more than 7
+-- days ago are closed first (ShopDeck moves them to Closed Requests after 7 days).
+create or replace function public.admin_return_overview()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_since timestamptz := now() - interval '30 days';
+  v_requests integer;
+  v_new integer;
+  v_approved integer;
+  v_decided integer;
+  v_delivered integer;
+  v_sales numeric;
+  v_refunded numeric;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can do this' using errcode = '42501';
+  end if;
+  update public.return_requests
+  set stage = 'closed', outcome = 'failed', fail_reason = 'Pickup failed', closed_at = now()
+  where stage = 'pickup_failed' and pickup_failed_at < now() - interval '7 days';
+
+  select count(*), count(*) filter (where stage = 'new'),
+    count(*) filter (where decision = 'approved'), count(*) filter (where decision in ('approved', 'rejected'))
+  into v_requests, v_new, v_approved, v_decided
+  from public.return_requests where created_at >= v_since;
+  select count(*), coalesce(sum(total), 0) into v_delivered, v_sales
+  from public.orders where status = 'delivered' and delivered_at >= v_since and origin <> 'exchange' and not is_test;
+  select coalesce(sum(refund_amount), 0) into v_refunded
+  from public.return_requests where refund_amount is not null and updated_at >= v_since;
+
+  return jsonb_build_object(
+    'requests', v_requests,
+    'return_rate', case when v_delivered > 0 then round(100.0 * v_requests / v_delivered) else 0 end,
+    'unprocessed_rate', case when v_requests > 0 then round(100.0 * v_new / v_requests) else 0 end,
+    'approval_rate', case when v_decided > 0 then round(100.0 * v_approved / v_decided) else 0 end,
+    'impact_rate', case when v_sales > 0 then round(100.0 * v_refunded / v_sales, 1) else 0 end,
+    'tabs', (
+      select jsonb_build_object(
+        'new', count(*) filter (where stage = 'new'),
+        'ongoing', count(*) filter (where stage = 'ongoing'),
+        'pickup_failed', count(*) filter (where stage = 'pickup_failed'),
+        'settlement_pending', count(*) filter (where stage = 'settlement_pending'),
+        'closed', count(*) filter (where stage = 'closed')
+      )
+      from public.return_requests
+    )
+  );
+end;
+$$;
+
+-- The return pickup carries only the books being returned (not the whole order).
+create or replace function public.shipment_booking_data(p_shipment uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select jsonb_build_object(
+    'shipment', to_jsonb(s),
+    'order', jsonb_build_object(
+      'id', o.id, 'order_number', o.order_number, 'status', o.status,
+      'payment_method', o.payment_method, 'subtotal', o.subtotal,
+      -- What the parcel is worth, and the cash the courier collects (0 once paid online).
+      'total', o.total,
+      'cod_amount', case when o.payment_method = 'cod' then o.total - o.amount_paid else 0 end,
+      'name', o.shipping_name, 'phone', o.shipping_phone, 'address', o.shipping_address,
+      'city', o.shipping_city, 'state', o.shipping_state, 'pincode', o.shipping_pincode
+    ),
+    'items', coalesce(
+      case when s.kind = 'reverse' then (
+        select jsonb_agg(jsonb_build_object(
+          'title', e ->> 'title', 'sku', e ->> 'sku', 'quantity', (e ->> 'quantity')::integer, 'unit_price', (e ->> 'unit_price')::numeric,
+          'weight_kg', b.weight_kg, 'length_cm', b.length_cm, 'breadth_cm', b.breadth_cm, 'height_cm', b.height_cm
+        ) order by e ->> 'title')
+        from public.return_requests rr
+        cross join lateral jsonb_array_elements(rr.items) as e
+        left join public.books b on b.id = (e ->> 'book_id')::uuid
+        where rr.order_id = o.id and rr.decision = 'approved' and rr.stage <> 'closed'
+      ) end,
+      (
+        select jsonb_agg(jsonb_build_object(
+          'title', i.title, 'sku', i.sku, 'quantity', i.quantity, 'unit_price', i.unit_price,
+          'weight_kg', b.weight_kg, 'length_cm', b.length_cm, 'breadth_cm', b.breadth_cm, 'height_cm', b.height_cm
+        ) order by i.title)
+        from public.order_items i
+        left join public.books b on b.id = i.book_id
+        where i.order_id = o.id
+      ),
+      '[]'::jsonb
+    ),
+    'settings', (select to_jsonb(st) from public.shipping_settings st where st.id)
+  )
+  from public.shipments s
+  join public.orders o on o.id = s.order_id
+  where s.id = p_shipment;
+$$;
+
+-- Receiving a customer's return puts back only the books of its request (all of the
+-- order when there is no request), and moves the request on.
+create or replace function public.admin_receive_return(p_order uuid)
+returns timestamptz
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_test boolean;
+  v_at timestamptz;
+  v_items jsonb;
+begin
+  if not public.is_admin() then
+    raise exception 'Only admins can change orders' using errcode = '42501';
+  end if;
+  select is_test into v_test from public.orders where id = p_order for update;
+  if v_test is null then
+    raise exception 'Order not found' using errcode = 'P0002';
+  end if;
+  if not exists (select 1 from public.shipments where order_id = p_order and kind = 'reverse' and status <> 'cancelled') then
+    raise exception 'This order has no return pickup' using errcode = 'P0001', hint = 'no_return';
+  end if;
+  select return_received_at into v_at from public.order_fulfilment where order_id = p_order;
+  if v_at is not null then
+    return v_at;
+  end if;
+  insert into public.order_fulfilment (order_id, return_received_at) values (p_order, now())
+  on conflict (order_id) do update set return_received_at = now(), updated_at = now();
+  select items into v_items from public.return_requests
+  where order_id = p_order and decision = 'approved' order by decided_at desc limit 1;
+  if not v_test then
+    if v_items is not null then
+      update public.books b
+      set stock_quantity = b.stock_quantity + x.quantity
+      from (
+        select (e ->> 'book_id')::uuid as book_id, sum((e ->> 'quantity')::integer) as quantity
+        from jsonb_array_elements(v_items) as e group by 1
+      ) x
+      where b.id = x.book_id;
+    else
+      update public.books b
+      set stock_quantity = b.stock_quantity + i.quantity
+      from public.order_items i
+      where i.order_id = p_order and b.id = i.book_id;
+    end if;
+  end if;
+  perform public.return_requests_touch(p_order);
+  return now();
+end;
+$$;
+
+revoke execute on function public.orders_record_delivered() from public, anon, authenticated;
+revoke execute on function public.return_items_of(uuid, jsonb) from public, anon, authenticated;
+revoke execute on function public.return_request_insert(uuid, text, jsonb, text, text, jsonb, text, text) from public, anon, authenticated;
+revoke execute on function public.return_request_refresh(uuid) from public, anon, authenticated;
+revoke execute on function public.return_requests_touch(uuid) from public, anon, authenticated;
+revoke execute on function public.return_requests_on_shipment() from public, anon, authenticated;
+revoke execute on function public.return_requests_on_order() from public, anon, authenticated;
+revoke execute on function public.return_requests_on_refund() from public, anon, authenticated;
+revoke execute on function public.shipment_booking_data(uuid) from public, anon, authenticated;
+grant execute on function public.shipment_booking_data(uuid) to service_role;
+revoke execute on function public.request_return(uuid, text, jsonb, text, text, jsonb, text) from public, anon;
+revoke execute on function public.withdraw_return_request(uuid) from public, anon;
+revoke execute on function public.admin_create_return_request(uuid, text, jsonb, text, text, text) from public, anon;
+revoke execute on function public.admin_decide_return(uuid, text, text, text) from public, anon;
+revoke execute on function public.admin_close_return_request(uuid, text, text) from public, anon;
+revoke execute on function public.admin_settle_return(uuid, text, numeric, text) from public, anon;
+revoke execute on function public.admin_set_return_note(uuid, text) from public, anon;
+revoke execute on function public.admin_return_overview() from public, anon;
+grant execute on function public.request_return(uuid, text, jsonb, text, text, jsonb, text) to authenticated;
+grant execute on function public.withdraw_return_request(uuid) to authenticated;
+grant execute on function public.admin_create_return_request(uuid, text, jsonb, text, text, text) to authenticated;
+grant execute on function public.admin_decide_return(uuid, text, text, text) to authenticated;
+grant execute on function public.admin_close_return_request(uuid, text, text) to authenticated;
+grant execute on function public.admin_settle_return(uuid, text, numeric, text) to authenticated;
+grant execute on function public.admin_set_return_note(uuid, text) to authenticated;
+grant execute on function public.admin_return_overview() to authenticated;
+grant execute on function public.admin_receive_return(uuid) to authenticated;
+
+
+-- -----------------------------------------------------------------------------
+-- 9j. MOBILE NUMBER LOGIN (GoKwik KwikPass)
+-- -----------------------------------------------------------------------------
+-- A customer can log in with their mobile number: GoKwik's KwikPass sends the OTP and,
+-- once it is right, hands the website a sealed token holding the number. The `kwikpass`
+-- Edge Function opens that token with GoKwik's secret key and signs the customer in to
+-- the account this table names for the number (making a new account the first time).
+--
+-- Only numbers proven by an OTP are in here. The mobile number on a profile is typed by
+-- the customer and never checked, so it never decides which account someone logs in to.
+--
+-- environment: which of GoKwik's keys opened the token. The test shop uses GoKwik's
+-- sandbox and shares this database, and a sandbox OTP proves nothing about a real
+-- number, so sandbox logins only ever reach accounts made or linked in the sandbox.
+-- linked_via: 'otp_login'    the account was made by logging in with this number
+--             'account_link' a signed-in customer proved the number with an OTP (My Account)
+
+create table if not exists public.phone_logins (
+  environment text not null check (environment in ('production', 'sandbox')),
+  phone text not null check (phone ~ '^[6-9][0-9]{9}$'),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  linked_via text not null check (linked_via in ('otp_login', 'account_link')),
+  created_at timestamptz not null default now(),
+  primary key (environment, phone),
+  unique (environment, user_id)
+);
+
+alter table public.phone_logins enable row level security;
+revoke all on public.phone_logins from public, anon, authenticated;
+grant all on public.phone_logins to service_role;
+grant select on public.phone_logins to authenticated;
+
+-- A customer may see their own verified number; nobody may change rows from the website.
+drop policy if exists "Users view own phone login" on public.phone_logins;
+create policy "Users view own phone login" on public.phone_logins
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+-- The account a verified number logs in to (no row when the number is new).
+-- Edge Function only.
+create or replace function public.kwikpass_account(p_environment text, p_phone text)
+returns table (user_id uuid, email text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select l.user_id, u.email::text
+  from public.phone_logins l
+  join auth.users u on u.id = l.user_id
+  where l.environment = p_environment and l.phone = p_phone;
+$$;
+
+-- Records that p_user owns the verified number p_phone and returns the account that owns
+-- it afterwards: p_user, or the account that got the number first when two logins with
+-- a new number run at the same moment (the caller then drops the account it just made).
+-- A production number also fills an empty mobile number on the profile. Edge Function only.
+create or replace function public.kwikpass_link_phone(p_environment text, p_phone text, p_user uuid, p_via text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_owner uuid;
+begin
+  if p_environment is null or p_environment not in ('production', 'sandbox') then
+    raise exception 'unknown environment' using errcode = '22023';
+  end if;
+  if p_phone is null or p_phone !~ '^[6-9][0-9]{9}$' then
+    raise exception 'not a 10-digit mobile number' using errcode = '22023';
+  end if;
+  if p_via is null or p_via not in ('otp_login', 'account_link') then
+    raise exception 'unknown link type' using errcode = '22023';
+  end if;
+
+  insert into public.phone_logins (environment, phone, user_id, linked_via)
+  values (p_environment, p_phone, p_user, p_via)
+  on conflict do nothing;
+
+  select l.user_id into v_owner from public.phone_logins l
+  where l.environment = p_environment and l.phone = p_phone;
+  if v_owner is null then
+    raise exception 'this account already has a different verified mobile number' using errcode = '23505';
+  end if;
+
+  if p_environment = 'production' then
+    update public.users set phone = p_phone where id = v_owner and phone is null;
+  end if;
+  return v_owner;
+end;
+$$;
+
+revoke execute on function public.kwikpass_account(text, text) from public, anon, authenticated;
+revoke execute on function public.kwikpass_link_phone(text, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.kwikpass_account(text, text) to service_role;
+grant execute on function public.kwikpass_link_phone(text, text, uuid, text) to service_role;
+
+-- -----------------------------------------------------------------------------
 -- 10. CHECK THE RESULT
 -- -----------------------------------------------------------------------------
--- The SQL Editor shows this table after the run. Expected: sixteen rows, all with
+-- The SQL Editor shows this table after the run. Expected: twenty rows, all with
 -- rls_enabled = true (integration_tokens, pincode_checks, rate_limits and
 -- checkout_carts have 0 policies on purpose: only the Edge Functions may touch them).
 select
@@ -2333,7 +4142,7 @@ from pg_tables t
 where t.schemaname = 'public'
   and t.tablename in ('users', 'books', 'book_internal', 'wishlist_items', 'orders', 'order_items',
     'shipping_settings', 'shipments', 'shipment_events', 'integration_tokens', 'pincode_checks', 'rate_limits',
-    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates')
+    'checkout_carts', 'order_payments', 'payment_events', 'gokwik_order_updates', 'order_fulfilment', 'order_invoices', 'return_requests', 'phone_logins')
 order by t.tablename;
 
 

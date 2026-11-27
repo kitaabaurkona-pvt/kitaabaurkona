@@ -18,6 +18,10 @@ const AdminOrders = lazyPage(() => import('../pages/admin/AdminOrders'));
 const BookEditor = lazyPage(() => import('../pages/admin/BookEditor'));
 const BulkUpload = lazyPage(() => import('../pages/admin/BulkUpload'));
 const AdminShipping = lazyPage(() => import('../pages/admin/AdminShipping'));
+const AdminFailedDeliveries = lazyPage(() => import('../pages/admin/AdminFailedDeliveries'));
+const AdminReturns = lazyPage(() => import('../pages/admin/AdminReturns'));
+const AdminReturnRequests = lazyPage(() => import('../pages/admin/AdminReturnRequests'));
+const AdminPlaceOrder = lazyPage(() => import('../pages/admin/AdminPlaceOrder'));
 
 function AdminApp() {
   return (
@@ -34,7 +38,12 @@ function AdminApp() {
             <Route path="books" element={<AdminBooks />} />
             <Route path="books/new" element={<BookEditor />} />
             <Route path="books/:id" element={<BookEditor />} />
-            <Route path="orders" element={<AdminOrders />} />
+            <Route path="orders" element={<AdminOrders key="process" view="process" />} />
+            <Route path="orders/track" element={<AdminOrders key="track" view="track" />} />
+            <Route path="orders/failed-deliveries" element={<AdminFailedDeliveries />} />
+            <Route path="orders/return-requests" element={<AdminReturnRequests />} />
+            <Route path="orders/returns" element={<AdminReturns />} />
+            <Route path="orders/new" element={<AdminPlaceOrder />} />
             <Route path="bulk-upload" element={<BulkUpload />} />
             <Route path="shipping" element={<AdminShipping />} />
           </Route>
