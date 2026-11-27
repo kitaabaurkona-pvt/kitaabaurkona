@@ -110,51 +110,9 @@ body:has(.site[data-bottom-nav]) .toasts {
 }
 
 @media (min-width: 768px) {
-  .site[data-store-nav] {
-    padding-bottom: calc(var(--bottom-nav-height) + 20px);
-  }
-
-  .site[data-store-nav] .bottom-nav {
-    inset: auto 24px 20px auto;
-    width: 420px;
-    height: 48px;
-    grid-template-columns: auto auto auto auto auto;
-    padding: 3px 5px;
-    background: color-mix(in srgb, var(--c-surface) 93%, var(--c-ink));
-    border: 1px solid var(--c-line-strong);
-    border-radius: 999px;
-    box-shadow: 0 6px 24px rgb(0 0 0 / .16);
-    visibility: visible;
-    pointer-events: auto;
-    opacity: 1;
-    transform: none;
-    transition: none;
-  }
-
-  .bottom-nav-item {
-    flex-direction: row;
-    gap: 9px;
-    padding-inline: 8px;
-    border-radius: 999px;
-    font-size: 12px;
-  }
-
-  .bottom-nav-item svg {
-    width: 17px;
-    height: 17px;
-  }
-
-  .bottom-nav-item:is(:hover, [aria-current='page'], [aria-expanded='true']) {
-    background: var(--c-surface-alt);
-  }
-
-  .bottom-nav-item::before {
-    display: none;
-  }
-
-  body:has(.site[data-store-nav]) .toasts {
-    transform: translateY(-56px);
-  }
+  .site[data-store-nav] { padding-bottom: 0; }
+  .site[data-store-nav] .bottom-nav { display: none; }
+  body:has(.site[data-store-nav]) .toasts { transform: none; }
 }
 
 @media (max-width: 767px) {
