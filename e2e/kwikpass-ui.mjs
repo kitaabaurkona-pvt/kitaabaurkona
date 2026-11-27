@@ -240,7 +240,15 @@ try {
     await goto(page, '/sign-in');
     await sendOtp(page, '9812345678');
     await enterOtp(page, '1234');
-    check('the right OTP logs in and leaves the sign-in page', await waitFor(page, () => location.pathname === '/', 10000));
+    check('the right OTP logs in, and a new customer is asked for their details', await waitFor(page, () => location.pathname === '/details' && !!document.querySelector('#ship-phone'), 10000));
+    check('...with the number they logged in with already filled in', (await page.$eval('#ship-phone', (e) => e.value)) === '9812345678');
+    await typeInto(page, '#ship-name', 'Kiran Mehta');
+    await typeInto(page, '#ship-address', '14 Chetak Circle, Near Town Hall');
+    await typeInto(page, '#ship-city', 'Udaipur');
+    await page.select('#ship-state', 'Rajasthan');
+    await typeInto(page, '#ship-pincode', '313001');
+    await page.click('.details-form button[type=submit]');
+    check('saving the details opens the store', await waitFor(page, () => location.pathname === '/', 10000));
     check('GoKwik was asked to check the number (text) and OTP (a number)', JSON.stringify(await page.evaluate(() => window.__kp.verifies.at(-1))) === JSON.stringify({ phone: '9812345678', otp: 1234 }));
     const row = await one(`select l.user_id::text, l.environment, u.phone from public.phone_logins l join public.users u on u.id = l.user_id where l.phone = '9812345678'`);
     userId = row?.user_id;

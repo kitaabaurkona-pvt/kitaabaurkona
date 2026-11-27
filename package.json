@@ -16,7 +16,8 @@
     "test:shipping": "node e2e/shipping-db.mjs && node e2e/shipping-fn.mjs",
     "test:gokwik": "node e2e/gokwik-fn.mjs",
     "covers": "node scripts/make-covers.mjs",
-    "test:kwikpass": "node e2e/kwikpass-fn.mjs && node e2e/kwikpass-ui.mjs"
+    "test:kwikpass": "node e2e/kwikpass-fn.mjs && node e2e/kwikpass-ui.mjs",
+    "test:details": "node e2e/details.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",

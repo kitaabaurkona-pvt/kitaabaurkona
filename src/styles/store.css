@@ -4080,3 +4080,12 @@
 .mobile-otp-sent {
   margin: 0;
 }
+
+/* "Your details" (pages/Details.jsx): one form, then Sign out under it. */
+.details-page .details-form {
+  max-width: 720px;
+}
+
+.details-page .details-sign-out {
+  margin-top: 1rem;
+}

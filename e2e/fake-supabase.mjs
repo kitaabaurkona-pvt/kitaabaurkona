@@ -133,6 +133,12 @@ export async function createBackend({ schemaPath, books }) {
     await db.query('insert into auth.users (id, email, raw_user_meta_data) values ($1, $2, $3)', [u.id, email, u.meta]);
   }
   await db.query(`update public.users set role = 'admin' where id = $1`, [USERS['admin@example.com'].id]);
+  // Both test accounts have saved their delivery details ("Your details"), like a
+  // returning customer; e2e/details.mjs makes new customers who have not.
+  await db.query(
+    `update public.users set city = 'Udaipur', state = 'Rajasthan', pincode = '313001',
+       phone = coalesce(phone, '9000000001'), address = coalesce(address, '1 Lake Palace Road')`,
+  );
   const payload = books.map((b) => ({
     product_code: b.product_code,
     sku: b.sku,

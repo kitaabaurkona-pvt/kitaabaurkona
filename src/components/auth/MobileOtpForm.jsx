@@ -1,12 +1,19 @@
 import { PhoneField, SubmitButton, TextField } from './fields';
 import { OTP_LENGTH, useMobileOtp } from '../../hooks/useMobileOtp';
 import { signInWithKpToken } from '../../services/kwikpassService';
+import { rememberLoginPhone } from '../../utils/loginPhone';
 
 // Log in with a mobile number: GoKwik's KwikPass sends a 4-digit OTP and checks it, then
 // the kwikpass Edge Function signs the customer in (making an account the first time).
 // The page that shows this form moves on by itself once the session starts.
 export default function MobileOtpForm() {
-  const otp = useMobileOtp({ onVerified: (kpToken) => signInWithKpToken(kpToken) });
+  const otp = useMobileOtp({
+    onVerified: async (kpToken, phone) => {
+      // Remembered first: the session starting moves the page on straight away.
+      rememberLoginPhone(phone);
+      await signInWithKpToken(kpToken);
+    },
+  });
   const { otpRef } = otp;
   const formError = otp.formError && (
     <p className="auth-error" role="alert">

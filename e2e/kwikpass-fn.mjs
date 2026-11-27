@@ -260,9 +260,10 @@ try {
     const second = await link(await kpToken({ phone: '9300000002' }), readerSession);
     check('an account cannot link a second number', second.status === 409 && /already has a different verified mobile number/.test(second.json?.error), second.text);
     check('a number made by mobile login cannot be linked to someone else', (await link(await kpToken({ phone: '9812345678' }), adminSession)).status === 409);
-    const sandbox = await link(await kpToken({ phone: '9300000002' }, { key: SANDBOX_KEY }), adminSession, { origin: STAGING });
     const adminId = USERS['admin@example.com'].id;
-    check('a sandbox link stays in the sandbox and leaves the profile alone', sandbox.status === 200 && (await one(`select environment from public.phone_logins where phone = '9300000002'`))?.environment === 'sandbox' && (await one('select phone from public.users where id = $1', [adminId])).phone === null, sandbox.text);
+    const adminPhone = (await one('select phone from public.users where id = $1', [adminId])).phone;
+    const sandbox = await link(await kpToken({ phone: '9300000002' }, { key: SANDBOX_KEY }), adminSession, { origin: STAGING });
+    check('a sandbox link stays in the sandbox and leaves the profile alone', sandbox.status === 200 && (await one(`select environment from public.phone_logins where phone = '9300000002'`))?.environment === 'sandbox' && (await one('select phone from public.users where id = $1', [adminId])).phone === adminPhone, sandbox.text);
     const sandboxLogin = await login(await kpToken({ phone: '9300000002' }, { key: SANDBOX_KEY }), { origin: STAGING });
     check('...a sandbox login with it opens that account on the test shop', (await exchange(sandboxLogin.json?.token_hash)).userId === adminId);
     const prodLogin = await login(await kpToken({ phone: '9300000002' }));

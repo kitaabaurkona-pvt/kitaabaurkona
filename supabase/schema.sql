@@ -88,6 +88,24 @@ alter table public.users drop constraint if exists users_address_length;
 alter table public.users add constraint users_address_length
   check (address is null or char_length(address) <= 300);
 
+-- The rest of the delivery address, so a customer fills it in once ("Your details" page)
+-- and checkout starts from it. Same limits as an order's delivery details.
+alter table public.users add column if not exists city text;
+alter table public.users add column if not exists state text;
+alter table public.users add column if not exists pincode text;
+
+alter table public.users drop constraint if exists users_city_length;
+alter table public.users add constraint users_city_length
+  check (city is null or char_length(city) between 2 and 60);
+
+alter table public.users drop constraint if exists users_state_length;
+alter table public.users add constraint users_state_length
+  check (state is null or char_length(state) between 2 and 60);
+
+alter table public.users drop constraint if exists users_pincode_format;
+alter table public.users add constraint users_pincode_format
+  check (pincode is null or pincode ~ '^[1-9][0-9]{5}$');
+
 alter table public.users enable row level security;
 
 -- A signed-in user can read only their own row (the website reads it to learn the role).
@@ -103,12 +121,12 @@ create policy "Users update own record" on public.users
   using ((select auth.uid()) = id)
   with check ((select auth.uid()) = id);
 
--- ...and only these four columns. RLS decides WHICH rows; these grants decide WHICH
+-- ...and only these profile columns. RLS decides WHICH rows; these grants decide WHICH
 -- columns. Without them a user could set their own role to 'admin'.
 -- Nobody can insert or delete users rows from the website at all.
 revoke all on public.users from anon, authenticated;
 grant select on public.users to authenticated;
-grant update (full_name, phone, gender, address) on public.users to authenticated;
+grant update (full_name, phone, gender, address, city, state, pincode) on public.users to authenticated;
 
 -- Keeps updated_at current on every change (used by users, books, book_internal).
 create or replace function public.set_updated_at()

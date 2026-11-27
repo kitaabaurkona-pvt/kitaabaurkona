@@ -893,8 +893,8 @@ check('book page: Order now sits above Add to cart', await page.evaluate(() => {
     await waitSel(page, '#ship-name');
     await page.waitForFunction(() => document.querySelector('#ship-name')?.value.length > 0, { timeout: 5000 }).catch(() => {});
     check('checkout: delivery details prefilled from the profile', (await page.$eval('#ship-name', (e) => e.value)) === 'Asha Rao');
-    await page.type('#ship-city', 'Udaipur');
-    await page.select('#ship-state', 'Rajasthan');
+    check('checkout: city, state and PIN code come from the saved details', JSON.stringify(await page.evaluate(() => ['#ship-city', '#ship-state', '#ship-pincode'].map((s) => document.querySelector(s).value))) === JSON.stringify(['Udaipur', 'Rajasthan', '313001']));
+    await page.$eval('#ship-pincode', (e) => e.select());
     await page.type('#ship-pincode', '799999');
     check('checkout: a PIN code the courier cannot serve is flagged', await waitSel(page, '.pin-check[data-state="no"]', 6000));
     check('checkout: Place order is blocked for that PIN', (await page.$$eval('main button[type=submit]', (bs) => bs.find((b) => /Place order/i.test(b.textContent))?.getAttribute('aria-disabled'))) === 'true');
@@ -983,9 +983,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
     await page.waitForFunction(() => document.querySelectorAll('.checkout-lines > div').length === 1, { timeout: 3000 }).catch(() => {});
     check('Order now: Remove takes it back out of the order', (await orderRows()).length === 1 && (await moreRows()).length === 1);
     check('Order now: checkout does not scroll sideways', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
-    await page.type('#ship-city', 'Udaipur');
-    await page.select('#ship-state', 'Rajasthan');
-    await page.type('#ship-pincode', '313001');
+    // City, state and PIN code are already filled in from the saved details.
     await waitSel(page, '.pin-check[data-state="ok"]', 6000);
     await page.screenshot({ path: path.join(SHOTS, 'checkout-order-now-light-1280.png'), fullPage: true });
     const ordersBefore = (await one('select count(*)::int as n from public.orders')).n;
