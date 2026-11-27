@@ -8,7 +8,7 @@ our main website for kitaabaurkona
 | `main` | https://www.kitaabaurkona.com | Vercel | The store customers use. It has no admin pages. |
 | `test` | https://kitaabaurkona.vercel.app | Vercel | The admin panel: a sign-in page and the panel, nothing else. Only admins get in. |
 | `staging` | https://kitaabaurkonastaging.bizwitheet.com | Vercel | The test shop for GoKwik's sandbox checkout ("Test shop" bar, no cash on delivery). |
-| `frontend_test` | Cloudflare domain | Cloudflare | The test site for store design work ("Test site" bar). |
+| `frontend_test` | https://knk-frontend-test.pages.dev | Cloudflare Pages | The test site for store design work ("Test site" bar). |
 
 Which branch gets what:
 
@@ -41,6 +41,17 @@ Which branch gets what:
 - Vercel addresses are marked `noindex`, so search engines only list the store.
 - Both sites use the same Supabase database.
 
+## Frontend test hosting
+
+Cloudflare Pages project `knk-frontend-test` deploys `frontend_test` to
+https://knk-frontend-test.pages.dev.
+
+- Production branch: `frontend_test`
+- Build command: `npm run build:test-site`
+- Build output directory: `dist-test-site`
+- Without Supabase environment variables, the site uses the bundled preview catalogue.
+  Sign-in and orders require `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+
 ## Running it locally
 
 | What | Command | Address |
@@ -57,5 +68,5 @@ Which branch gets what:
    admin panel, `git push origin test:main` (a fast-forward) updates the store. Only when
    the owner says to ship.
 3. To try store work before customers see it, push it to `frontend_test` and open the
-   test site on its Cloudflare domain.
+   test site at https://knk-frontend-test.pages.dev.
 4. Database changes (`supabase/schema.sql`)
