@@ -310,3 +310,10 @@
   transition-delay: var(--reveal-delay, 0s);
 }
 [data-reveal]:not([data-inview]) { opacity: 0; transform: translateY(16px); }
+
+/* Quiet shelf-like lines add texture to the black brand surfaces. */
+:is(.site-header, .checkout-masthead, .site-footer) {
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 47px, rgb(255 207 36 / .055) 47px 48px, transparent 48px 62px),
+    repeating-linear-gradient(0deg, transparent 0 79px, rgb(255 255 255 / .035) 79px 80px);
+}
