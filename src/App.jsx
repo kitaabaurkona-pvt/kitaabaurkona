@@ -4,8 +4,6 @@ import { Navigate, Route, Routes, useParams } from 'react-router-dom';
 import Layout from './components/layout/Layout';
 import TestShopBar from './components/layout/TestShopBar';
 import ProtectedRoute from './components/ProtectedRoute';
-import ComingSoonGate from './components/ComingSoonGate';
-import { COMING_SOON } from './utils/release';
 import Home from './pages/Home';
 // The sign-in pages have their own look and style sheet, so they are loaded only when opened.
 const SignIn = lazyPage(() => import('./pages/SignIn'));
@@ -42,12 +40,10 @@ function App() {
       <TestShopBar />
       {/* While a sign-in page loads, the page being left stays on screen. */}
       <Suspense fallback={null}>
-      <ComingSoonGate>
       <Routes>
         {/* Auth pages render their own shell instead of the store layout */}
         <Route path="/sign-in" element={<SignIn />} />
-        {/* Sign-up is closed while the store is "coming soon". */}
-        <Route path="/sign-up" element={COMING_SOON ? <Navigate to="/sign-in" replace /> : <SignUp />} />
+        <Route path="/sign-up" element={<SignUp />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
 
@@ -84,7 +80,6 @@ function App() {
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
-      </ComingSoonGate>
       </Suspense>
     </>
   );

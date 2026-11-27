@@ -14,7 +14,6 @@ import Splash from '../components/Splash';
 import MobileOtpForm from '../components/auth/MobileOtpForm';
 import KwikpassSsoButton from '../components/auth/KwikpassSsoButton';
 import { kwikpassEnabled } from '../services/kwikpassService';
-import { COMING_SOON } from '../utils/release';
 import {
   focusField,
   normalizeEmail,
@@ -140,12 +139,10 @@ function SignIn() {
       </div>
       <AuthDivider />
       <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
-      {!COMING_SOON && (
-        <p className="auth-switch">
-          New to Kitaab Aur Kona?
-          <Link to="/sign-up">Sign up</Link>
-        </p>
-      )}
+      <p className="auth-switch">
+        New to Kitaab Aur Kona?
+        <Link to="/sign-up">Sign up</Link>
+      </p>
     </AuthShell>
   );
 }
