@@ -16,10 +16,6 @@ export const STAGING_ORIGIN = 'https://kitaabaurkonastaging.bizwitheet.com';
 // The test shop: the store's pages for trying GoKwik's sandbox checkout. It shares the
 // live database, so it never offers the site's own cash-on-delivery checkout.
 export const STAGING = import.meta.env.VITE_STAGING === 'true';
-
-// The live store is "coming soon" until GoKwik checkout is ready: only accounts that
-// already exist can use it, and sign-up is closed (components/ComingSoonGate.jsx).
-export const COMING_SOON = import.meta.env.VITE_COMING_SOON === 'true';
 const ADMIN_HOST = new URL(ADMIN_ORIGIN).hostname;
 
 export const RELEASE = {
