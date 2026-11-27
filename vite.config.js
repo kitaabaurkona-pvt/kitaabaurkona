@@ -41,6 +41,30 @@ function preloadFonts() {
   }
 }
 
+// Meta (Facebook) pixel for ads, exactly as Meta gave it. Only the live store gets it
+// (Vercel production = branch main), so the admin panel, the test shops, local builds
+// and browser tests never send page views to Meta. The inline script's sha256 is allowed
+// in vercel.json's Content-Security-Policy: if this text changes, update that hash.
+// The pixel also counts in-app page changes itself (it watches the browser history).
+const META_PIXEL = `<!-- Meta Pixel Code -->
+<script>
+!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '1942397910075181');
+fbq('track', 'PageView');
+</script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=1942397910075181&ev=PageView&noscript=1"
+/></noscript>
+<!-- End Meta Pixel Code -->
+`
+
 // One codebase builds separate sites:
 //   store    the shop customers use (branch main, www.kitaabaurkona.com)
 //   admin    the admin panel, sign-in only (branch test, kitaabaurkona.vercel.app)
@@ -60,7 +84,9 @@ function siteEntry(site, staging) {
             .replace('<title>Kitaab Aur Kona</title>', '<title>Kitaab Aur Kona (test shop)</title>')
             .replace(/<meta name="description"[^>]*>/, '<meta name="robots" content="noindex, nofollow" />')
         }
-        if (site !== 'admin') return html
+        if (site !== 'admin') {
+          return process.env.VERCEL_ENV === 'production' ? html.replace('</head>', `${META_PIXEL}  </head>`) : html
+        }
         return html
           .replace('<html lang="en"', '<html lang="en" data-site="admin"')
           .replace('src="/src/main.jsx"', 'src="/src/admin/main.jsx"')
