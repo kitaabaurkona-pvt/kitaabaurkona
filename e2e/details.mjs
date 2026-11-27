@@ -48,7 +48,11 @@ for (let i = 0; i < 50; i++) {
 }
 
 // Two new customers who signed up with only a name (no mobile or address yet).
-const NEW = { 'new1@example.com': '33333333-3333-4333-8333-333333333333', 'new2@example.com': '44444444-4444-4444-8444-444444444444' };
+const NEW = {
+  'new1@example.com': '33333333-3333-4333-8333-333333333333',
+  'new2@example.com': '44444444-4444-4444-8444-444444444444',
+  'new3@example.com': '55555555-5555-4555-8555-555555555555',
+};
 const db = await createBackend({ schemaPath: path.join(ROOT, 'supabase', 'schema.sql'), books: await fetchPublicBooks(path.join(ROOT, '.env.local')) });
 // Added after the fake backend has given its own accounts saved details.
 for (const [email, id] of Object.entries(NEW)) {
@@ -166,6 +170,39 @@ try {
     check('is never sent to "Your details"', await at(page, '/'));
     await sleep(800);
     check('...even a moment later', await page.evaluate(() => location.pathname === '/'));
+    check('no script errors', errors.length === 0, errors.join(' | '));
+    await ctx.close();
+  }
+
+  section('Skipping, then checkout');
+  {
+    const { page, ctx, errors } = await newPage();
+    const id = NEW['new3@example.com'];
+    await logIn(page, 'new3@example.com', 'new-pass-1');
+    await at(page, '/details');
+    await waitSel(page, '#ship-name');
+    const skip = () => page.$$eval('.details-form button', (bs) => bs.some((b) => b.textContent === 'Skip for now'));
+    check('"Your details" offers Skip for now', await skip());
+    await page.$$eval('.details-form button', (bs) => bs.find((b) => b.textContent === 'Skip for now').click());
+    check('skipping goes on to the store', await at(page, '/'));
+    check('...and saves nothing', (await row(id)).city === null);
+    const book = (await db.query('select id::text from public.books where is_visible and stock_quantity > 2 order by id limit 1')).rows[0].id;
+    await goto(page, `/books/${book}`);
+    check('after skipping, other pages open without asking', (await waitFor(page, (b) => location.pathname === `/books/${b}` && [...document.querySelectorAll('main button')].some((x) => /Add to cart/.test(x.textContent)), 10000, book)));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await sleep(1500);
+    check('...even after a reload (the choice is remembered)', await page.evaluate((b) => location.pathname === `/books/${b}`, book));
+    await page.$$eval('main button', (bs) => bs.find((x) => /Add to cart/.test(x.textContent)).click());
+    await waitFor(page, () => /[1-9]/.test(document.querySelector('.cart-button')?.textContent ?? ''), 5000);
+    await goto(page, '/checkout');
+    check('checkout still asks for the details first', (await at(page, '/details')) && (await waitSel(page, '#ship-name')));
+    check('...with no Skip there', !(await skip()));
+    await fillDetails(page);
+    await page.click('.details-form button[type=submit]');
+    check('saving goes straight back to checkout', await at(page, '/checkout'));
+    check('...with the delivery details filled in', (await waitFor(page, () => document.querySelector('#ship-city')?.value === 'Udaipur' && document.querySelector('#ship-pincode')?.value === '313004' && document.querySelector('#ship-phone')?.value === '9812300001', 10000)));
+    check('...and saved on the account', (await row(id)).pincode === '313004');
+    await page.screenshot({ path: path.join(SHOTS, 'details-checkout-1280.png'), fullPage: true });
     check('no script errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
   }

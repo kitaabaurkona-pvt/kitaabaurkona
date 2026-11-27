@@ -29,7 +29,7 @@ function Field({ id, label, error, children }) {
 // "Your details": name, mobile and delivery address, filled in once and saved on the
 // customer's own account. New customers land here after logging in (DetailsGate); the
 // saved details then fill checkout and My Account.
-function DetailsForm({ userId, profile, onSaved }) {
+function DetailsForm({ userId, profile, onSaved, onSkip }) {
   const [form, setForm] = useState(() => ({
     name: profile.full_name ?? '',
     phone: profile.phone || loginPhone() || '',
@@ -113,17 +113,25 @@ function DetailsForm({ userId, profile, onSaved }) {
         {saving && <span className="spinner" aria-hidden="true" />}
         {saving ? 'Saving…' : 'Save and continue'}
       </button>
+      {onSkip && (
+        <button type="button" className="btn btn-outline btn-block" onClick={onSkip} disabled={saving}>
+          Skip for now
+        </button>
+      )}
     </form>
   );
 }
 
 function Details() {
   useDocumentTitle('Your details');
-  const { user, signOut, refreshDetails } = useAuth();
+  const { user, signOut, refreshDetails, skipDetails } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const profile = useAsync(() => getProfile(user.id), [user.id]);
   const [signingOut, setSigningOut] = useState(false);
+  const goingTo = safeRedirect(location.state?.from);
+  // Checkout needs the details, so it offers no skipping; anywhere else they can wait.
+  const forCheckout = goingTo === '/checkout' || goingTo.startsWith('/checkout?');
 
   async function handleSignOut() {
     if (signingOut) return;
@@ -149,8 +157,16 @@ function Details() {
           profile={profile.data ?? {}}
           onSaved={async () => {
             await refreshDetails();
-            navigate(safeRedirect(location.state?.from), { replace: true });
+            navigate(goingTo, { replace: true });
           }}
+          onSkip={
+            forCheckout
+              ? null
+              : () => {
+                  skipDetails();
+                  navigate(goingTo, { replace: true });
+                }
+          }
         />
       )}
       <button type="button" className="btn btn-outline details-sign-out" onClick={handleSignOut} aria-busy={signingOut}>

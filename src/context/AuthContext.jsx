@@ -2,6 +2,7 @@ import { createContext, useState, useEffect, useMemo, useCallback } from 'react'
 import { loadSupabase } from '../clients/supabase';
 import * as authService from '../services/authService';
 import { needsDetails } from '../services/profileService';
+import { detailsSkippedBy, rememberDetailsSkipped } from '../utils/detailsSkip';
 import { SITE } from '../utils/release';
 
 export const AuthContext = createContext(null);
@@ -13,6 +14,8 @@ export function AuthProvider({ children }) {
   // On the store: true while a signed-in customer has not saved their delivery details,
   // so they are sent to "Your details" once (components/DetailsGate.jsx).
   const [detailsMissing, setDetailsMissing] = useState(false);
+  // The customer chose "Skip for now": they browse freely, but checkout still asks.
+  const [detailsSkipped, setDetailsSkipped] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -28,6 +31,7 @@ export function AuthProvider({ children }) {
       setUser(nextUser);
       setRole(nextRole);
       setDetailsMissing(missing);
+      setDetailsSkipped(nextUser ? detailsSkippedBy(nextUser.id) : false);
       setLoading(false);
     }
 
@@ -65,12 +69,20 @@ export function AuthProvider({ children }) {
     setDetailsMissing(await needsDetails(user.id));
   }, [user]);
 
+  const skipDetails = useCallback(() => {
+    if (!user) return;
+    rememberDetailsSkipped(user.id);
+    setDetailsSkipped(true);
+  }, [user]);
+
   const value = useMemo(
     () => ({
       user,
       role,
       loading,
       detailsMissing,
+      detailsSkipped,
+      skipDetails,
       refreshDetails,
       isAuthenticated: !!user,
       signIn: authService.signIn,
@@ -81,7 +93,7 @@ export function AuthProvider({ children }) {
       requestPasswordReset: authService.requestPasswordReset,
       updatePassword: authService.updatePassword,
     }),
-    [user, role, loading, detailsMissing, refreshDetails]
+    [user, role, loading, detailsMissing, detailsSkipped, skipDetails, refreshDetails]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
