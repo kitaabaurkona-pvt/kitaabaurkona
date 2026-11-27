@@ -85,6 +85,7 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
 
     // Swiping (touch and pen) drags the row; a mouse can simply click the tiles.
     const down = (e) => {
+      swallowClick = false;
       if (e.pointerType === 'mouse') return;
       drag = { x: e.clientX, y: e.clientY, axis: null, moved: false };
       update();
@@ -107,6 +108,12 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
       if (!drag) return;
       swallowClick = drag.moved;
       drag = null;
+      holdForAWhile();
+    };
+    const cancel = () => {
+      if (!drag) return;
+      drag = null;
+      swallowClick = false;
       holdForAWhile();
     };
     // A swipe that ends on a tile must not open it.
@@ -137,8 +144,8 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
     // Tabbing to a tile pauses the row and brings that tile fully into view.
     const focusIn = (e) => {
       const tile = e.target.closest('.mood-tile');
-      focused = true;
-      if (tile && set.contains(tile) && animation) {
+      focused = !drag && Boolean(tile?.matches(':focus-visible'));
+      if (focused && set.contains(tile) && animation) {
         const d = duration();
         animation.currentTime = ((Math.max(0, tile.offsetLeft - 24) % width) / width) * d;
       }
@@ -163,7 +170,7 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
     node.addEventListener('pointerdown', down);
     window.addEventListener('pointermove', move, { passive: true });
     window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', up);
+    window.addEventListener('pointercancel', cancel);
     node.addEventListener('click', click, true);
     node.addEventListener('wheel', wheel, { passive: false });
     node.addEventListener('pointerenter', enter);
@@ -179,7 +186,7 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
       node.removeEventListener('pointerdown', down);
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', up);
+      window.removeEventListener('pointercancel', cancel);
       node.removeEventListener('click', click, true);
       node.removeEventListener('wheel', wheel);
       node.removeEventListener('pointerenter', enter);
@@ -191,7 +198,7 @@ export default function GenreSlider({ children, label = 'Browse by genre' }) {
   }, [reduce]);
 
   const copies = Array.from({ length: COPIES }, (_, i) => (
-    <div key={i} className="genre-set" aria-hidden="true" inert>
+    <div key={i} className="genre-set" aria-hidden="true">
       {Children.map(children, (child) => cloneElement(child, { tabIndex: -1 }))}
     </div>
   ));

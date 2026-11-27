@@ -62,7 +62,7 @@ function SignIn() {
   }
 
   return (
-    <AuthShell title="Log in" subtitle="Your saved books and orders, in one little corner." backTo="/" backLabel="Back to home">
+    <AuthShell title="Welcome back." playful backTo="/" backLabel="Back to home">
       {kwikpassEnabled && <KwikpassSsoButton errorClassName="auth-error auth-error--sso" />}
       {kwikpassEnabled && (
         <div className="auth-tabs" role="tablist" aria-label="Log in with">
@@ -106,7 +106,7 @@ function SignIn() {
               autoCapitalize="none"
               spellCheck={false}
               maxLength={254}
-              placeholder="Enter your email address"
+              placeholder="you@example.com"
               required
               value={email}
               onChange={(event) => setEmail(event.target.value)}
@@ -122,7 +122,6 @@ function SignIn() {
                 </Link>
               }
               maxLength={72}
-              placeholder="Enter your password"
               required
               value={password}
               onChange={(event) => setPassword(event.target.value)}
@@ -140,7 +139,7 @@ function SignIn() {
       <AuthDivider />
       <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
       <p className="auth-switch">
-        New to Kitaab Aur Kona?
+        New here?
         <Link to="/sign-up">Sign up</Link>
       </p>
     </AuthShell>

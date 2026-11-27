@@ -3,13 +3,13 @@ import { Link } from 'react-router-dom';
 import BrandLink from '../layout/BrandLink';
 import '../../styles/auth.css';
 
-function AuthShell({ title, subtitle, backTo, backLabel, children }) {
+function AuthShell({ title, subtitle, backTo, backLabel, playful = false, children }) {
   useEffect(() => {
     document.title = `${title} - Kitaab Aur Kona`;
   }, [title]);
 
   return (
-    <div className="auth-page">
+    <div className={playful ? "auth-page auth-page--login" : "auth-page"}>
       <header className="auth-header">
         {backTo && (
           <Link to={backTo} className="auth-back" aria-label={backLabel}>
@@ -22,6 +22,11 @@ function AuthShell({ title, subtitle, backTo, backLabel, children }) {
         <BrandLink />
       </header>
       <main className="auth-main">
+        {playful && <div className="login-books" aria-hidden="true">
+          <img src="/images/hero-dawn-of-onyx.webp" alt="" />
+          <img src="/images/hero-everything-about-love.webp" alt="" />
+          <img src="/images/hero-heartstopper.webp" alt="" />
+        </div>}
         <div className="auth-card">
           <h1 className="auth-title">{title}</h1>
           {subtitle && <p className="auth-subtitle">{subtitle}</p>}

@@ -634,3 +634,63 @@
 .auth-page .auth-switch a,.auth-page .field-link { color:var(--c-gold-deep); }
 @media(min-width:640px) { .auth-page .auth-main { align-items:center; } }
 @media(max-width:639px) { .auth-page .auth-main { padding:28px 16px 40px; } .auth-page .auth-card { padding:24px 22px; border-radius:24px; } .auth-page .auth-header { height:64px; } }
+
+
+/* A compact book jacket composition gives the login page its bookstore character. */
+.auth-page--login .auth-main {
+  position: relative;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-block: 24px 40px;
+}
+
+.login-books {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 132px;
+  margin-bottom: -18px;
+  pointer-events: none;
+}
+
+.login-books img {
+  width: 76px;
+  height: 112px;
+  object-fit: cover;
+  border-radius: 3px 7px 7px 3px;
+  box-shadow: 0 8px 18px #0002;
+}
+
+.login-books img:first-child { transform: translate(12px, 4px) rotate(-15deg); }
+.login-books img:nth-child(2) { z-index: 1; transform: translateY(-8px) rotate(2deg); }
+.login-books img:last-child { transform: translate(-12px, 4px) rotate(15deg); }
+
+.auth-page--login .auth-card {
+  position: relative;
+  max-width: 388px;
+  padding: 28px;
+}
+
+.auth-page--login .auth-title {
+  margin-bottom: 24px;
+  font-size: 30px;
+}
+
+.auth-page--login .auth-form { gap: 16px; }
+.auth-page--login .auth-divider { margin-block: 18px; }
+.auth-page--login .auth-switch { margin-top: 18px; }
+.auth-page--login .field-link { font-size: 12px; }
+
+@media (max-width: 639px) {
+  .auth-page--login .auth-main { padding: 18px 16px 32px; }
+  .auth-page--login .auth-card { padding: 24px; }
+  .login-books { height: 116px; }
+  .login-books img { width: 66px; height: 98px; }
+}
+
+.auth-page .auth-header {
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 47px, rgb(255 207 36 / .055) 47px 48px, transparent 48px 62px),
+    repeating-linear-gradient(0deg, transparent 0 79px, rgb(255 255 255 / .035) 79px 80px);
+}

@@ -243,7 +243,7 @@ const BLACK = 'rgb(0, 0, 0)';
 const cartLabel = (page) => page.$eval('.cart-button', (b) => b.getAttribute('aria-label')).catch(() => null);
 const waitCart = (page, n, ms = 3000) =>
   page
-    .waitForFunction((want) => [...document.querySelectorAll('.cart-button, .floating-cart')].some((b) => b.getAttribute('aria-label') === want), { timeout: ms }, `Cart, ${n} ${n === 1 ? 'item' : 'items'}`)
+    .waitForFunction((want) => [...document.querySelectorAll('.cart-button, .bottom-nav-cart')].some((b) => b.getAttribute('aria-label') === want), { timeout: ms }, `Cart, ${n} ${n === 1 ? 'item' : 'items'}`)
     .then(() => true)
     .catch(() => false);
 // Relative luminance of an rgb() colour, 0 (black) to 1 (white).
@@ -293,7 +293,7 @@ try {
     check('home: "Books to start with" shows books', await waitSel(page, '.reading-shelf .book-card'));
     await waitSel(page, '.affordable-section .book-card');
     const cheap = await page.$$eval('.affordable-section .price-block .price', (ps) => ps.map((p) => Number(p.textContent.replace(/[^\d.]/g, ''))));
-    check('home: "₹299 & under" shows up to 4 books, all ₹299 or less', cheap.length >= 1 && cheap.length <= 4 && cheap.every((n) => n <= 299), cheap.join(','));
+    check('home: "₹299 & under" shows up to 6 books, all ₹299 or less', cheap.length >= 1 && cheap.length <= 6 && cheap.every((n) => n <= 299), cheap.join(','));
     check('home: no invented promos, countdowns or reviews', !INVENTED.test(await page.$eval('body', (b) => b.innerText)));
     check('cards: every card has a full-width Add to cart button', (await page.$$('.book-card')).length === (await page.$$('.book-card .btn-card')).length);
     const cardBtn = await page.$eval('.book-card .btn-card:not([aria-disabled])', (b) => ({ radius: parseFloat(getComputedStyle(b).borderTopLeftRadius), bg: getComputedStyle(b).backgroundColor }));
@@ -329,7 +329,7 @@ try {
     await sleep(180);
     await page.screenshot({ path: path.join(SHOTS, 'flight-light-1280.png') });
     const landed = await page
-      .waitForFunction(() => !document.querySelector('.cart-flight') && [...document.querySelectorAll('.cart-button, .floating-cart')].some((b) => b.getAttribute('aria-label') === 'Cart, 1 item'), { timeout: 3000 })
+      .waitForFunction(() => !document.querySelector('.cart-flight') && [...document.querySelectorAll('.cart-button, .bottom-nav-cart')].some((b) => b.getAttribute('aria-label') === 'Cart, 1 item'), { timeout: 3000 })
       .then(() => true)
       .catch(() => false);
     check('add: it lands, disappears and the cart count becomes 1', landed);
@@ -390,34 +390,33 @@ try {
     await ctx.close();
   }
 
-  // ---------- Floating cart: wide screens, once the header has scrolled away ----------
+  // ---------- Bottom navigation ----------
   {
     const { page, ctx, errors } = await newPage();
     await goto(page, '/books?stock=1');
     await waitSel(page, '.book-grid .book-card');
-    check('floating cart: hidden while the header is on screen', (await page.$('.floating-cart')) === null);
+    check('desktop nav: visible while the header is on screen', await page.waitForSelector('.bottom-nav', { visible: true }).then(Boolean));
     await page.evaluate(() => window.scrollTo(0, 1400));
-    check('floating cart: appears once the header has scrolled away', await waitSel(page, '.floating-cart', 3000));
+    check('desktop nav: still visible after scrolling', await page.waitForSelector('.bottom-nav', { visible: true }).then(Boolean));
     const card = await page.evaluateHandle(() => [...document.querySelectorAll('.book-grid .book-card')].find((c) => { const t = c.getBoundingClientRect().top; return t > 120 && t < 520 && c.querySelector('.btn-card:not([aria-disabled])'); }));
     await card.$eval('.btn-card', (b) => b.click());
-    check('floating cart: the cover flies to it', await waitSel(page, '.cart-flight img', 300));
-    check('floating cart: its count waits for the cover, then shows 1', (await page.$eval('.floating-cart', (b) => b.getAttribute('aria-label'))) === 'Cart, 0 items' && (await page.waitForFunction(() => document.querySelector('.floating-cart')?.getAttribute('aria-label') === 'Cart, 1 item', { timeout: 3000 }).then(() => true).catch(() => false)));
+    check('desktop nav: the cover flies to it', await waitSel(page, '.cart-flight img', 300));
+    check('desktop nav: its count waits for the cover, then shows 1', (await page.$eval('.bottom-nav-cart', (b) => b.getAttribute('aria-label'))) === 'Cart, 0 items' && (await page.waitForFunction(() => document.querySelector('.bottom-nav-cart')?.getAttribute('aria-label') === 'Cart, 1 item', { timeout: 3000 }).then(() => true).catch(() => false)));
     await sleep(400);
-    await page.screenshot({ path: path.join(SHOTS, 'floating-cart-1280.png') });
-    await page.click('.floating-cart');
-    check('floating cart: opens the cart panel and steps aside', (await waitSel(page, '.cart-panel', 3000)) && (await gone(page, '.floating-cart')));
+    await page.screenshot({ path: path.join(SHOTS, 'bottom-nav-1280.png') });
+    await page.click('.bottom-nav-cart');
+    check('desktop nav: opens the cart panel', await waitSel(page, '.cart-panel', 3000));
     await page.keyboard.press('Escape');
     await gone(page, '.cart-panel');
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
-    check('floating cart: goes away when the header is back', await gone(page, '.floating-cart'));
-    check('floating cart: no console errors', errors.length === 0, errors.join(' | '));
+    check('desktop nav: no console errors', errors.length === 0, errors.join(' | '));
     await ctx.close();
     const phone = await newPage({ width: 390, height: 844, touch: true });
     await goto(phone.page, '/books');
     await waitSel(phone.page, '.book-grid .book-card');
     await phone.page.evaluate(() => window.scrollTo(0, 1600));
     await sleep(600);
-    check('phone: the header stays on screen, so no floating cart', (await phone.page.$eval('.site-header', (h) => Math.round(h.getBoundingClientRect().top))) === 0 && (await phone.page.$('.floating-cart')) === null);
+    check('phone: bottom nav appears after the header scrolls away', (await phone.page.$eval('.site-header', (h) => h.getBoundingClientRect().bottom)) < 0 && await phone.page.waitForSelector('.bottom-nav', { visible: true }).then(Boolean));
     await phone.ctx.close();
   }
 
@@ -477,15 +476,15 @@ try {
     await page.$eval('.affordable-section .book-card .btn-card:not([aria-disabled])', (b) => b.click());
     await waitCart(page, 1, 4000);
     const beforeCart = await page.evaluate(() => window.scrollY);
-    await page.$eval('.cart-button, .floating-cart', (b) => b.click());
+    await page.$eval('.cart-button, .bottom-nav-cart', (b) => b.click());
     await waitSel(page, '.cart-panel');
     await sleep(400);
     await page.$$eval('.cart-panel-links button', (bs) => bs.find((b) => /continue shopping/i.test(b.textContent))?.click());
     const panelGone = await gone(page, '.cart-panel');
     const afterPanel = await page.evaluate(() => window.scrollY);
     check('panel: Continue shopping closes it and keeps the place', panelGone && new URL(page.url()).pathname === '/' && Math.abs(afterPanel - beforeCart) <= 2, `gone=${panelGone} ${new URL(page.url()).pathname} ${afterPanel} vs ${beforeCart}`);
-    await page.waitForSelector('.cart-button, .floating-cart', { timeout: 3000 }).catch(() => {});
-    await page.$eval('.floating-cart', (b) => b.click()).catch(() => page.$eval('.cart-button', (b) => b.click()));
+    await page.waitForSelector('.cart-button, .bottom-nav-cart', { timeout: 3000 }).catch(() => {});
+    await page.$eval('.bottom-nav-cart', (b) => b.click()).catch(() => page.$eval('.cart-button', (b) => b.click()));
     await waitSel(page, '.cart-panel');
     await sleep(400);
     await page.$$eval('.cart-panel-links a', (as) => as.find((a) => a.getAttribute('href') === '/cart')?.click());
@@ -602,7 +601,13 @@ try {
     await sleep(800);
     const g3 = await genrePos();
     check('genre row: drifts steadily in one direction', g2 < g1 && g3 < g2, `${g1} ${g2} ${g3}`);
-    check('genre row: copies follow the tiles, hidden from the keyboard and screen readers', (await page.$$('#genre-rail .genre-set[inert][aria-hidden="true"]')).length >= 1 && (await page.$$eval('#genre-rail .genre-set[inert] a', (as) => as.every((a) => !a.checkVisibility?.() || a.closest('[inert]')))) && (await page.$$eval('#genre-rail a', (as) => as.filter((a) => a.tabIndex >= 0 && !a.closest('[inert]')).length)) === 5);
+    // The copies stay tappable (a swipe can leave one under the finger), but screen readers and Tab skip them.
+    const genreCopies = await page.evaluate(() => ({
+      hiddenSets: document.querySelectorAll('#genre-rail .genre-set[aria-hidden="true"]').length,
+      copyTabs: [...document.querySelectorAll('#genre-rail .genre-set[aria-hidden="true"] a')].map((a) => a.tabIndex),
+      realTabs: [...document.querySelectorAll('#genre-rail a')].filter((a) => !a.closest('[aria-hidden="true"]')).map((a) => a.tabIndex),
+    }));
+    check('genre row: copies follow the tiles, hidden from the keyboard and screen readers', genreCopies.hiddenSets >= 1 && genreCopies.copyTabs.length > 0 && genreCopies.copyTabs.every((t) => t === -1) && genreCopies.realTabs.filter((t) => t >= 0).length === 5, JSON.stringify(genreCopies));
     check('genre row: the edges fade instead of cutting tiles', /gradient/.test(await page.$eval('.genre-slider', (e) => getComputedStyle(e).maskImage || getComputedStyle(e).webkitMaskImage)));
     await page.hover('#genre-rail');
     await sleep(300);

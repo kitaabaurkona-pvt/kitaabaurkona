@@ -13,6 +13,7 @@ import CartLine from './CartLine';
 import KwikpassSsoButton from '../auth/KwikpassSsoButton';
 import { useAuth } from '../../hooks/useAuth';
 import { kwikpassEnabled } from '../../services/kwikpassService';
+import { visibleCartTrigger } from '../../utils/flyToCart';
 
 
 // Slide-out cart opened from the header (loaded by CartPanel.jsx when first needed).
@@ -53,10 +54,10 @@ function CartPanelDialog() {
                 }
               }}
               onCloseAutoFocus={(event) => {
-                // Return focus to what opened the panel, or to the header cart button when
+                // Return focus to what opened the panel, or to the visible cart button when
                 // that element is gone (for example a toast that has closed).
                 event.preventDefault();
-                const target = returnTo.current?.isConnected ? returnTo.current : document.querySelector('.cart-button');
+                const target = returnTo.current?.isConnected ? returnTo.current : visibleCartTrigger();
                 target?.focus();
               }}
             >
