@@ -76,12 +76,16 @@ export default defineConfig(({ mode }) => {
   const branch = process.env.VERCEL_GIT_COMMIT_REF
   const site = mode === 'admin' || branch === 'test' ? 'admin' : 'store'
   const staging = site === 'store' && (mode === 'staging' || branch === 'staging')
+  // The live store shows "coming soon" to everyone without an existing account, until
+  // GoKwik checkout is ready. Remove `branch === 'main'` here to open the store.
+  const comingSoon = site === 'store' && !staging && (mode === 'coming-soon' || branch === 'main')
   return {
     plugins: [react(), preloadFonts(), siteEntry(site, staging)],
     define: {
       ...release,
       'import.meta.env.VITE_SITE': JSON.stringify(site),
       'import.meta.env.VITE_STAGING': JSON.stringify(staging ? 'true' : ''),
+      'import.meta.env.VITE_COMING_SOON': JSON.stringify(comingSoon ? 'true' : ''),
     },
     preview: { headers: vercelHeaders() },
   }

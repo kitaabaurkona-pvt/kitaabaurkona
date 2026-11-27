@@ -11,6 +11,7 @@ import {
 } from '../components/auth/fields';
 import { useGoogleSignIn } from '../hooks/useGoogleSignIn';
 import Splash from '../components/Splash';
+import { COMING_SOON } from '../utils/release';
 import {
   focusField,
   normalizeEmail,
@@ -99,10 +100,12 @@ function SignIn() {
       </form>
       <AuthDivider />
       <GoogleButton busy={google.busy} onClick={google.start} error={google.error} />
-      <p className="auth-switch">
-        New to Kitaab Aur Kona?
-        <Link to="/sign-up">Sign up</Link>
-      </p>
+      {!COMING_SOON && (
+        <p className="auth-switch">
+          New to Kitaab Aur Kona?
+          <Link to="/sign-up">Sign up</Link>
+        </p>
+      )}
     </AuthShell>
   );
 }

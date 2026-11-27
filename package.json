@@ -15,7 +15,8 @@
     "e2e": "node e2e/store.mjs",
     "test:shipping": "node e2e/shipping-db.mjs && node e2e/shipping-fn.mjs",
     "test:gokwik": "node e2e/gokwik-fn.mjs",
-    "covers": "node scripts/make-covers.mjs"
+    "covers": "node scripts/make-covers.mjs",
+    "test:coming-soon": "node e2e/coming-soon.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
