@@ -2,9 +2,11 @@
 // shipping labels, tax invoices, a picking list and packing slips. Each builder takes
 // orders as the Orders page loads them and downloads one PDF.
 import { formatOrderNumber } from '../../utils/format';
-import { CARRIER_NAMES, carrierOf } from '../../services/shippingService';
+import qrcode from 'qrcode-generator';
+import { CARRIER_NAMES, carrierOf, trackingUrl } from '../../services/shippingService';
 import {
   A4,
+  BLACK,
   GREY,
   LINE,
   WASH,
@@ -40,124 +42,189 @@ export function missingInvoiceDetails(settings) {
   return missing;
 }
 
-// ---------- Shipping label ----------
+// ---------- Shipping label (4 x 6 inch) ----------
+// Laid out like a postal label: shop emblem | payment + order + tracking QR, the courier
+// and its service, from / ship date / weight, ship to, the courier's sort code above the
+// AWB barcode, then contents, invoice, the tamper note and handling marks. The AWB, the
+// courier and its sort / routing code come from the courier (courierData, fetched when
+// printing); everything else from the order.
 
-function drawLabel(page, fonts, image, order, invoice, settings) {
-  const parcel = forwardOf(order);
-  const x = 18;
-  const W = A4[0] - 36;
-  let top = 18;
+export const LABEL_4X6 = [288, 432];
 
-  // 1. To (the customer) and the shop's emblem.
-  const toHeight = 150;
-  box(page, { x, top, width: W, height: toHeight });
-  text(page, 'To:', { x: x + 10, top: top + 10, font: fonts.italic, size: 10 });
-  text(page, order.shipping_name, { x: x + 10, top: top + 26, font: fonts.boldItalic, size: 18 });
-  let y = top + 50;
-  for (const line of wrap(order.shipping_address, fonts.italic, 11, 360, 3)) {
-    text(page, line, { x: x + 10, top: y, font: fonts.italic, size: 11 });
-    y += 14;
-  }
-  text(page, `${order.shipping_city}, ${order.shipping_state}`, { x: x + 10, top: y, font: fonts.italic, size: 11 });
-  y += 15;
-  text(page, order.shipping_pincode, { x: x + 10, top: y, font: fonts.boldItalic, size: 13 });
-  y += 17;
-  text(page, `M.No. ${order.shipping_phone}`, { x: x + 10, top: y, font: fonts.italic, size: 11 });
-  logo(page, image, { x: x + W - 110, top: top + 25, size: 80 });
-  top += toHeight;
-
-  // 2. Parcel size and weight, the courier's sort code, the AWB barcode.
-  const awbHeight = 100;
-  box(page, { x, top, width: W, height: awbHeight });
-  const dims = [parcel?.package_length_cm, parcel?.package_breadth_cm, parcel?.package_height_cm];
-  if (dims.every((d) => Number(d) > 0)) text(page, `Dimensions: ${dims.map((d) => money(d)).join('*')} CM`, { x: x + 10, top: top + 30, font: fonts.regular, size: 10 });
-  if (Number(parcel?.package_weight_g) > 0) text(page, `Weight: ${(Number(parcel.package_weight_g) / 1000).toFixed(2)} KG`, { x: x + 10, top: top + 45, font: fonts.regular, size: 10 });
-  if (parcel?.routing_code) {
-    text(page, 'Sort code', { x: x + 10, top: top + 62, font: fonts.regular, size: 8, color: GREY });
-    text(page, parcel.routing_code, { x: x + 10, top: top + 72, font: fonts.bold, size: 14 });
-  }
-  text(page, `AWB: ${parcel.awb_number}`, { x: x + 250, top: top + 8, font: fonts.regular, size: 12, width: W - 260, align: 'center' });
-  barcode(page, parcel.awb_number, { x: x + 250, top: top + 25, width: W - 260, height: 66 });
-  top += awbHeight;
-
-  // 3. Payment and courier.
-  box(page, { x, top, width: W, height: 22, fill: WASH });
-  const cod = order.payment_method === 'cod';
-  text(page, cod ? 'COD' : 'PREPAID', { x: x + 8, top: top + 7, font: fonts.bold, size: 10 });
-  text(page, cod ? `(Collectable Value: Rs. ${money(toCollect(order))})` : '(Do not collect cash)', { x: x + (cod ? 38 : 60), top: top + 7, font: fonts.regular, size: 10 });
-  const courier = (parcel.courier_name || CARRIER_NAMES[carrierOf(parcel)]).toUpperCase();
-  text(page, courier, { x: x + 8, top: top + 7, font: fonts.bold, size: 10, width: W - 16, align: 'right' });
-  top += 22;
-
-  // 4. Counts and the order number.
-  const skus = order.order_items.length;
-  const quantity = order.order_items.reduce((sum, item) => sum + item.quantity, 0);
-  box(page, { x, top, width: W, height: 36 });
-  text(page, `Number of Skus: ${skus}`, { x: x + 8, top: top + 13, font: fonts.bold, size: 10 });
-  text(page, `Total Quantity: ${quantity}`, { x: x + 170, top: top + 13, font: fonts.bold, size: 10 });
-  text(page, 'Order Id:', { x: x + 8, top: top + 5, font: fonts.bold, size: 10, width: W - 16, align: 'right' });
-  text(page, formatOrderNumber(order.order_number), { x: x + 8, top: top + 19, font: fonts.bold, size: 11, width: W - 16, align: 'right' });
-  top += 36;
-
-  // 5. Invoice number barcode, then the books.
-  const tableTop = top;
-  const rowsMax = 8;
-  const items = order.order_items.slice(0, rowsMax);
-  const extra = order.order_items.length - items.length;
-  const columns = [
-    ['Product Name', 0, 300],
-    ['SKU ID', 300, 140],
-    ['Qty', 440, 36],
-    ['Total Price', 476, W - 12 - 476],
-  ];
-  const tableX = x + 6;
-  const tableW = W - 12;
-  let rowTop = tableTop + 70;
-  const rows = items.map((item) => ({
-    name: wrap(`${item.title}`, fonts.regular, 9.5, 290, 2),
-    sku: wrap(item.sku, fonts.regular, 9.5, 130, 2),
-    qty: String(item.quantity),
-    price: money(Number(item.unit_price) * item.quantity),
-  }));
-  const bodyHeight = rows.reduce((h, r) => h + Math.max(r.name.length, r.sku.length) * 12 + 8, 0) + (extra > 0 ? 18 : 0);
-  const sectionHeight = 70 + 26 + bodyHeight + 8;
-  box(page, { x, top, width: W, height: sectionHeight });
-  if (invoice) {
-    barcode(page, invoice.invoice_number, { x: x + W - 230, top: top + 8, width: 220, height: 30 });
-    text(page, `Invoice No.: ${invoice.invoice_number}`, { x: x + 8, top: top + 42, font: fonts.regular, size: 8.5, width: W - 18, align: 'right' });
-    text(page, `Invoice Date: ${indiaDate(invoice.issued_at)}`, { x: x + 8, top: top + 54, font: fonts.regular, size: 8.5, width: W - 18, align: 'right' });
-  }
-  box(page, { x: tableX, top: rowTop, width: tableW, height: 26 + bodyHeight });
-  for (const [title, left, width] of columns) {
-    text(page, title, { x: tableX + left, top: rowTop + 9, font: fonts.bold, size: 10, width, align: 'center' });
-    if (left > 0) vline(page, { x: tableX + left, top: rowTop, height: 26 + bodyHeight });
-  }
-  hline(page, { x: tableX, top: rowTop + 26, width: tableW });
-  rowTop += 26;
-  for (const row of rows) {
-    const h = Math.max(row.name.length, row.sku.length) * 12 + 8;
-    row.name.forEach((line, i) => text(page, line, { x: tableX + 5, top: rowTop + 5 + i * 12, font: fonts.regular, size: 9.5 }));
-    row.sku.forEach((line, i) => text(page, line, { x: tableX + 300, top: rowTop + 5 + i * 12, font: fonts.regular, size: 9.5, width: 140, align: 'center' }));
-    text(page, row.qty, { x: tableX + 440, top: rowTop + 5, font: fonts.regular, size: 9.5, width: 36, align: 'center' });
-    text(page, row.price, { x: tableX + 476, top: rowTop + 5, font: fonts.regular, size: 9.5, width: tableW - 476, align: 'center' });
-    rowTop += h;
-    hline(page, { x: tableX, top: rowTop, width: tableW, color: LINE });
-  }
-  if (extra > 0) text(page, `+ ${extra} more ${extra === 1 ? 'book' : 'books'} (see the invoice)`, { x: tableX + 5, top: rowTop + 4, font: fonts.italic, size: 9 });
-  top += sectionHeight;
-
-  // 6. Notes.
-  box(page, { x, top, width: W, height: 34 });
-  text(page, 'NOTE: If outer packaging/label is found tampered/damaged, do not accept parcel.', { x: x + 8, top: top + 6, font: fonts.regular, size: 9 });
-  text(page, `All disputes are subject to ${settings?.invoice_state || 'Rajasthan'} jurisdiction only.`, { x: x + 8, top: top + 19, font: fonts.regular, size: 9 });
+// The courier's service as printed in the banner: "DELHIVERY SURFACE", "XPRESSBEES AIR".
+export function courierBanner(parcel) {
+  const carrier = carrierOf(parcel);
+  const name = String(parcel?.courier_name || CARRIER_NAMES[carrier] || '').trim();
+  if (carrier === 'delhivery') return /express/i.test(name) ? 'DELHIVERY EXPRESS' : 'DELHIVERY SURFACE';
+  const mode = /air|express/i.test(name) ? 'AIR' : /surface/i.test(name) ? 'SURFACE' : '';
+  return `XPRESSBEES${mode ? ` ${mode}` : ''}`;
 }
 
-export async function downloadLabels(orders, invoices, settings) {
+// Text shrunk until it fits `width` (never below `min`).
+function fitted(page, value, { x, top, font, size, min = 7, width, align = 'center', color }) {
+  let s = size;
+  while (s > min && font.widthOfTextAtSize(printable(value), s) > width) s -= 0.5;
+  text(page, value, { x, top, font, size: s, width, align, color });
+  return s;
+}
+
+// A QR code drawn as squares (sharp at any print size).
+function qrCode(page, value, { x, top, size }) {
+  const qr = qrcode(0, 'M');
+  qr.addData(String(value));
+  qr.make();
+  const n = qr.getModuleCount();
+  const cell = size / n;
+  const pageTop = page.getHeight() - top;
+  for (let r = 0; r < n; r += 1) {
+    let run = 0;
+    for (let c = 0; c <= n; c += 1) {
+      if (c < n && qr.isDark(r, c)) {
+        run += 1;
+        continue;
+      }
+      if (run) page.drawRectangle({ x: x + (c - run) * cell, y: pageTop - (r + 1) * cell, width: run * cell + 0.05, height: cell + 0.05, color: BLACK });
+      run = 0;
+    }
+  }
+}
+
+// Handling marks (24 x 24 drawings): handle with care, this way up, keep dry.
+const MARKS = {
+  care: ['M7 3 L17 3 L17 12 L7 12 Z M7 6 L17 6', 'M2 11 L2 16 Q2 20 6 20 L18 20 Q22 20 22 16 L22 11', 'M2 15 L7 15 M22 15 L17 15'],
+  up: ['M7 20 L7 5 M3 9 L7 4 L11 9', 'M17 20 L17 5 M13 9 L17 4 L21 9', 'M3 22 L21 22'],
+  dry: ['M3 12 Q12 2 21 12 Z', 'M12 12 L12 20 Q12 22 10 22 Q8 22 8 20', 'M5 4 L4 6 M9 2 L8 4 M17 3 L16 5 M20 6 L19 8'],
+};
+function mark(page, kind, { x, top, size }) {
+  box(page, { x, top, width: size, height: size, borderWidth: 0.8 });
+  const scale = (size - 4) / 24;
+  for (const path of MARKS[kind]) page.drawSvgPath(path, { x: x + 2, y: page.getHeight() - top - 2, scale, borderColor: BLACK, borderWidth: 1 });
+}
+
+function drawLabel(page, fonts, image, order, invoice, settings, courier) {
+  const parcel = forwardOf(order);
+  const awb = courier?.awb || parcel.awb_number;
+  const [PW, PH] = LABEL_4X6;
+  const x = 8;
+  const W = PW - 16;
+  let top = 8;
+  box(page, { x, top, width: W, height: PH - 16, borderWidth: 1.4 });
+
+  // 1. Emblem | payment, order number and the tracking QR code.
+  const headH = 86;
+  const left = 78;
+  if (image) logo(page, image, { x: x + 6, top: top + 7, size: left - 12 });
+  else text(page, 'KAK', { x, top: top + 34, font: fonts.bold, size: 22, width: left, align: 'center' });
+  vline(page, { x: x + left, top, height: headH, thickness: 1.2 });
+  const cod = order.payment_method === 'cod';
+  const qr = 70;
+  const infoX = x + left + 8;
+  const infoW = W - left - qr - 22;
+  text(page, cod ? 'COD' : 'PREPAID', { x: infoX, top: top + 9, font: fonts.bold, size: 17 });
+  fitted(page, cod ? `Collect Rs. ${money(toCollect(order))}` : 'Do not collect cash', { x: infoX, top: top + 31, font: fonts.bold, size: 11, width: infoW, align: 'left' });
+  text(page, 'ORDER', { x: infoX, top: top + 52, font: fonts.regular, size: 7, color: GREY });
+  fitted(page, formatOrderNumber(order.order_number), { x: infoX, top: top + 61, font: fonts.bold, size: 12, width: infoW, align: 'left' });
+  qrCode(page, trackingUrl({ ...parcel, awb_number: awb }), { x: x + W - qr - 8, top: top + 8, size: qr });
+  top += headH;
+  hline(page, { x, top, width: W, thickness: 1.2 });
+
+  // 2. The courier and its service, as big as the line allows.
+  const bannerH = 30;
+  fitted(page, courierBanner(parcel), { x: x + 6, top: top + 7, font: fonts.bold, size: 19, min: 10, width: W - 12 });
+  top += bannerH;
+  hline(page, { x, top, width: W, thickness: 1.2 });
+
+  // 3. From (the pickup address) with ship date / weight / size, then ship to.
+  const fromTop = top;
+  const half = W / 2 + 6;
+  text(page, 'FROM:', { x: x + 7, top: top + 6, font: fonts.bold, size: 7 });
+  let y = top + 15;
+  text(page, settings?.pickup_name || 'Kitaabaurkona', { x: x + 7, top: y, font: fonts.bold, size: 8.5 });
+  y += 10;
+  for (const line of wrap(settings?.pickup_address, fonts.regular, 7.5, half - 18, 3)) {
+    text(page, line, { x: x + 7, top: y, font: fonts.regular, size: 7.5 });
+    y += 9;
+  }
+  const fromCity = [settings?.pickup_city, settings?.pickup_state].filter(Boolean).join(', ');
+  text(page, `${fromCity}${settings?.pickup_pincode ? ` ${settings.pickup_pincode}` : ''}`, { x: x + 7, top: y, font: fonts.regular, size: 7.5 });
+  y += 9;
+  if (settings?.pickup_phone) text(page, `Ph. ${settings.pickup_phone}`, { x: x + 7, top: y, font: fonts.regular, size: 7.5 });
+  const facts = [['SHIP DATE', today()]];
+  if (Number(parcel?.package_weight_g) > 0) facts.push(['WEIGHT', `${(Number(parcel.package_weight_g) / 1000).toFixed(2)} KG`]);
+  const dims = [parcel?.package_length_cm, parcel?.package_breadth_cm, parcel?.package_height_cm];
+  if (dims.every((d) => Number(d) > 0)) facts.push(['SIZE', `${dims.map((d) => money(d)).join(' x ')} CM`]);
+  facts.forEach(([k, v], i) => {
+    text(page, `${k}:`, { x: x + half, top: fromTop + 7 + i * 15, font: fonts.bold, size: 7 });
+    text(page, v, { x: x + half + 46, top: fromTop + 6 + i * 15, font: fonts.regular, size: 8.5 });
+  });
+
+  top = Math.max(y + 14, fromTop + 62);
+  const toX = x + 62;
+  const toW = W - (toX - x) - 8;
+  text(page, 'SHIP', { x: x + 7, top: top + 1, font: fonts.bold, size: 12, width: 48, align: 'right' });
+  text(page, 'TO:', { x: x + 7, top: top + 14, font: fonts.bold, size: 12, width: 48, align: 'right' });
+  y = top;
+  for (const line of wrap(order.shipping_name, fonts.bold, 11, toW, 2)) {
+    text(page, line, { x: toX, top: y, font: fonts.bold, size: 11 });
+    y += 13;
+  }
+  for (const line of wrap(order.shipping_address, fonts.regular, 8.5, toW, 3)) {
+    text(page, line, { x: toX, top: y, font: fonts.regular, size: 8.5 });
+    y += 10.5;
+  }
+  for (const line of wrap(`${order.shipping_city}, ${order.shipping_state}`, fonts.regular, 8.5, toW, 1)) {
+    text(page, line, { x: toX, top: y, font: fonts.regular, size: 8.5 });
+    y += 11;
+  }
+  text(page, `PIN ${order.shipping_pincode}`, { x: toX, top: y, font: fonts.bold, size: 12 });
+  y += 15;
+  text(page, `M.No. ${order.shipping_phone}`, { x: toX, top: y, font: fonts.regular, size: 8.5 });
+  if (order.alt_phone) text(page, `Alt. ${order.alt_phone}`, { x: toX + 100, top: y, font: fonts.regular, size: 8.5 });
+  top = y + 15;
+  hline(page, { x, top, width: W, thickness: 2 });
+
+  // 4. The courier's sort / routing code over the AWB barcode.
+  const code = courier?.routing_code || parcel?.routing_code || '';
+  const codeLabel = carrierOf(parcel) === 'delhivery' ? 'SORT CODE' : 'ROUTING CODE';
+  if (code) fitted(page, `${codeLabel}: ${code}`, { x: x + 6, top: top + 7, font: fonts.bold, size: 13, min: 8, width: W - 12 });
+  else text(page, 'AWB', { x: x + 6, top: top + 8, font: fonts.bold, size: 11, width: W - 12, align: 'center' });
+  // The barcode takes the room left above the footer (52 pt), within 40-74 pt.
+  const barTop = top + 26;
+  const barH = Math.min(74, Math.max(40, PH - 8 - 52 - barTop - 22));
+  barcode(page, awb, { x: x + 14, top: barTop, width: W - 28, height: barH });
+  text(page, `AWB: ${awb}`, { x, top: barTop + barH + 5, font: fonts.bold, size: 12, width: W, align: 'center' });
+  top = barTop + barH + 22;
+  hline(page, { x, top, width: W, thickness: 1.2 });
+
+  // 5. Contents, invoice, the tamper note and handling marks.
+  const bottom = PH - 8;
+  const markSize = 20;
+  const notesW = W - (markSize * 3 + 8) - 18;
+  const skus = order.order_items.length;
+  const quantity = order.order_items.reduce((sum, item) => sum + item.quantity, 0);
+  y = top + 5;
+  const first = order.order_items[0];
+  const more = skus > 1 ? ` + ${skus - 1} more` : '';
+  for (const line of wrap(`Contents: ${first ? `${first.title}${more}` : '-'}`, fonts.regular, 6.8, notesW, 2)) {
+    text(page, line, { x: x + 6, top: y, font: fonts.regular, size: 6.8 });
+    y += 8;
+  }
+  text(page, `SKUs: ${skus}   Qty: ${quantity}${invoice ? `   Inv: ${invoice.invoice_number}` : ''}`, { x: x + 6, top: y, font: fonts.bold, size: 6.8 });
+  y += 9;
+  for (const line of wrap('Do not accept if the outer packaging or label is tampered or damaged.', fonts.regular, 6.3, notesW, 2)) {
+    text(page, line, { x: x + 6, top: y, font: fonts.regular, size: 6.3 });
+    y += 7.5;
+  }
+  const markTop = top + Math.max(4, (bottom - top - markSize) / 2);
+  ['dry', 'up', 'care'].forEach((kind, i) => mark(page, kind, { x: x + W - 6 - markSize - i * (markSize + 4), top: markTop, size: markSize }));
+}
+
+export async function downloadLabels(orders, invoices, settings, courierData = {}) {
   const { doc, fonts } = await newDocument('Shipping labels');
   const image = await embedLogo(doc);
   for (const order of orders) {
-    const page = doc.addPage(A4);
-    drawLabel(page, fonts, image, order, invoices[order.id], settings);
+    const page = doc.addPage(LABEL_4X6);
+    drawLabel(page, fonts, image, order, invoices[order.id], settings, courierData[order.id]);
   }
   const name = orders.length === 1 ? `label-${formatOrderNumber(orders[0].order_number)}` : `labels-${orders.length}-orders-${today()}`;
   await download(doc, `${name}.pdf`);

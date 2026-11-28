@@ -96,6 +96,11 @@ const ACTIONS = {
     if (b.kind !== undefined && !['forward', 'reverse'].includes(b.kind)) throw new InputError('Invalid parcel');
     return { order_id: uuid(b.order_id, 'order'), kind: b.kind ?? 'forward' };
   },
+  label_data: (b) => {
+    only(b, ['action', 'order_ids']);
+    if (!Array.isArray(b.order_ids) || b.order_ids.length < 1 || b.order_ids.length > 50) throw new InputError('Choose 1 to 50 orders');
+    return { order_ids: [...new Set(b.order_ids.map((id) => uuid(id, 'order')))] };
+  },
   register_warehouse: (b) => {
     only(b, ['action']);
     return {};
@@ -174,7 +179,7 @@ const ACTIONS = {
 };
 
 export const CUSTOMER_ACTIONS = ['check_pincode', 'track'];
-export const ADMIN_ACTIONS = ['rates', 'set_courier', 'set_carrier', 'label', 'register_warehouse', 'pickup_request', 'book_now', 'link_awb', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
+export const ADMIN_ACTIONS = ['rates', 'set_courier', 'set_carrier', 'label', 'label_data', 'register_warehouse', 'pickup_request', 'book_now', 'link_awb', 'cancel_shipment', 'manifest', 'ndr_list', 'ndr_action', 'return_pickup'];
 export const CRON_ACTIONS = ['run_job', 'service_pincode'];
 
 export function parseRequest(body, now = new Date()) {

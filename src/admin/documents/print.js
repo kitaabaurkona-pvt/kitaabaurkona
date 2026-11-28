@@ -2,7 +2,7 @@
 // reads the seller details, draws the PDF and downloads it. Loaded only when the admin
 // prints something, so the PDF code is not part of the panel's first download.
 import { adminIssueInvoices } from '../../services/adminService';
-import { getShippingSettings } from '../../services/shippingService';
+import { getLabelData, getShippingSettings } from '../../services/shippingService';
 import { downloadInvoices, downloadLabels, downloadPackingSlips, downloadPickList, labelReady, missingInvoiceDetails } from './documents';
 
 // kind: 'labels' | 'invoices' | 'picklist' | 'slips'. Returns { printed, skipped } where
@@ -27,7 +27,22 @@ export async function printDocuments(kind, orders) {
   if (wanted.length === 0) return { printed: [], skipped };
 
   const invoices = await adminIssueInvoices(wanted.map((o) => o.id));
-  if (kind === 'labels') await downloadLabels(wanted, invoices, settings);
+  let courierData = {};
+  let courierError = '';
+  if (kind === 'labels') {
+    // The couriers' own label data (sort / routing code). Labels still print without it:
+    // the AWB barcode is what the courier scans.
+    try {
+      courierData = await getLabelData(wanted.map((o) => o.id));
+    } catch (err) {
+      courierError = err.message;
+    }
+  }
+  if (kind === 'labels') await downloadLabels(wanted, invoices, settings, courierData);
   else await downloadInvoices(wanted, invoices, settings);
-  return { printed: wanted, skipped };
+  if (kind !== 'labels') return { printed: wanted, skipped };
+  // Orders whose label has no sort / routing code, and why (shown to the admin).
+  const noCode = wanted.filter((o) => !courierData[o.id]?.routing_code);
+  const why = courierError || [...new Set(noCode.map((o) => courierData[o.id]?.error).filter(Boolean))].join('; ');
+  return { printed: wanted, skipped, noCode, why };
 }

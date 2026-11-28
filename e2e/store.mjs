@@ -15,6 +15,8 @@ import { asRole, createBackend, fetchPublicBooks, handleAuth, handleRest, SERVIC
 import { createHandler } from '../supabase/functions/shipping/handler.js';
 import { createXpressbees } from '../supabase/functions/shipping/xpressbees.js';
 import { createDelhivery } from '../supabase/functions/shipping/delhivery.js';
+import { pdfTexts } from '../supabase/functions/shipping/labeldata.js';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { SEARCH_HINTS } from '../src/utils/searchHints.js';
 import { templateCsv } from '../src/utils/csvTemplate.js';
 
@@ -108,8 +110,16 @@ async function fakeDelhivery(url, init = {}) {
   return json(404, {});
 }
 const shippingDb = createClient('https://fake.supabase.co', SERVICE_TOKEN, { auth: { persistSession: false, autoRefreshToken: false }, global: { fetch: inProcessFetch } });
+// Xpressbees' own label PDF, as the label-data action downloads it (made here, never fetched).
+const xbLabelPdf = await (async () => {
+  const d = await PDFDocument.create();
+  const pg = d.addPage([288, 432]);
+  pg.drawText('Routing Code: E/S-90/1C/028', { x: 10, y: 280, font: await d.embedFont(StandardFonts.Helvetica), size: 10 });
+  return d.save();
+})();
 const shippingFunction = createHandler({
   db: shippingDb,
+  fetchFile: async () => xbLabelPdf,
   cronSecret: 'e2e-cron-secret-0123456789abcdef',
   allowedOrigins: [new URL(BASE).origin, new URL(ADMIN_BASE).origin],
   log: { info() {}, warn() {}, error() {} },
@@ -1381,6 +1391,15 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
         })()),
       labelPdf,
     );
+    {
+      const bytes = new Uint8Array(fs.readFileSync(path.join(DL, labelPdf)));
+      const doc = await PDFDocument.load(bytes);
+      const { width, height } = doc.getPage(0).getSize();
+      const words = (await pdfTexts(bytes)).join(' ');
+      check('admin orders: the label is a 4 x 6 inch page', doc.getPageCount() === 1 && Math.round(width) === 288 && Math.round(height) === 432, `${width} x ${height}`);
+      check('admin orders: the label carries the courier, its routing code, the AWB and both addresses', /XPRESSBEES/.test(words) && words.includes('ROUTING CODE: E/S-90/1C/028') && /SHIP DATE/.test(words) && /FROM:/.test(words) && /PIN \d{6}/.test(words) && /(COD|PREPAID)/.test(words), words.slice(0, 400));
+      fs.copyFileSync(path.join(DL, labelPdf), path.join(SHOTS, 'label-4x6.pdf'));
+    }
     check('admin orders: the label keeps the same invoice number', (await one(`select count(*)::int as n from public.order_invoices where order_id = $1`, [xbOrder])).n === 1);
     await gotoA(page, `/admin/orders?stage=pack${xbItems}`);
     check('admin orders: the Pack step lists the order and counts it', await page.waitForFunction(() => /1\s*In Pack/.test(document.querySelector('.ap-sum-stages')?.innerText ?? '') && document.querySelector('.ap-segment-stage button[aria-pressed="true"]')?.textContent === 'Pack' && document.querySelectorAll('.ap-orders-table tbody tr').length === 1, { timeout: 6000 }).then(() => true).catch(() => false));

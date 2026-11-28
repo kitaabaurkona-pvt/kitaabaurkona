@@ -804,13 +804,16 @@ function AdminOrders({ view = 'process' }) {
   async function printFor(kind, list) {
     if (list.length === 0) throw new Error('There are no orders to print here.');
     const { printDocuments } = await import('../../admin/documents/print');
-    const { printed, skipped } = await printDocuments(kind, list);
+    const { printed, skipped, noCode = [], why = '' } = await printDocuments(kind, list);
     const what = { labels: 'label', invoices: 'invoice', slips: 'packing slip', picklist: 'picking list' }[kind];
     if (printed.length && kind !== 'picklist') show({ message: `${plural(printed.length, what)} downloaded` });
     if (kind === 'picklist') show({ message: `Picking list for ${plural(printed.length, 'order')} downloaded` });
     if (skipped.length) {
       const why = kind === 'labels' ? 'no booked parcel yet' : 'not paid or cancelled';
       show({ message: `${plural(skipped.length, 'order')} left out (${why}): ${skipped.map((o) => formatOrderNumber(o.order_number)).join(', ')}`, tone: 'error' });
+    }
+    if (noCode.length) {
+      show({ message: `${plural(noCode.length, 'label')} printed without the courier's sort code: ${noCode.map((o) => formatOrderNumber(o.order_number)).join(', ')}${why ? ` (${why})` : ''}`, tone: 'error' });
     }
     const toPack = kind === 'labels' ? printed.filter((o) => stageOf(o) === 'print' && ['confirmed', 'paid'].includes(o.status)).map((o) => o.id) : [];
     if (toPack.length) await adminSetStage(toPack, 'pack');

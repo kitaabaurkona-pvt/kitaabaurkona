@@ -36,6 +36,7 @@ import {
   warehouseRegistration,
 } from './delhivery-shipping.js';
 import { clean } from './text.js';
+import { delhiveryLabelFields, fetchPdf, routingCode, routingCodeFromPdf } from './labeldata.js';
 import {
   bookingPayload,
   bookingRecord,
@@ -88,7 +89,7 @@ function corsHeaders(origin, allowed) {
 // Where an admin looks a parcel up by its KAK number when a carrier answered unclearly.
 const PANELS = { xpressbees: 'Xpressbees dashboard (Orders', delhivery: 'Delhivery panel (Shipments' };
 
-export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSecret, allowedOrigins, log = console, now = () => new Date() }) {
+export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSecret, allowedOrigins, log = console, now = () => new Date(), fetchFile = (url) => fetchPdf(url, { timeoutMs: LIMITS.requestTimeoutMs }) }) {
   let xbClient = null;
   const xb = () => (xbClient ??= makeXpressbees());
   let dlClient = null;
@@ -628,6 +629,43 @@ export function createHandler({ db, makeXpressbees, makeDelhivery = null, cronSe
         if (e instanceof CarrierError) throw new AppError(502, e.message);
         throw e;
       }
+    },
+
+    // What the couriers print on their own labels, for the admin's label (Print > Labels):
+    // { orders: { <order id>: { carrier, awb, routing_code, fields } } }. Delhivery gives its
+    // packing slip as data; for Xpressbees the routing code is read from its label PDF.
+    // A code found is saved on the parcel, so the next print needs no courier call.
+    async label_data({ order_ids }) {
+      const parcels = await select(db.from('shipments').select('*').in('order_id', order_ids).eq('kind', 'forward').neq('status', 'cancelled'));
+      const orders = {};
+      const work = parcels
+        .filter((s) => s.awb_number)
+        .map((s) => async () => {
+          const entry = { carrier: s.carrier === 'delhivery' ? 'delhivery' : 'xpressbees', awb: s.awb_number, routing_code: routingCode(s.routing_code), fields: {} };
+          orders[s.order_id] = entry;
+          try {
+            if (entry.carrier === 'delhivery') {
+              const pkg = await dl().labelData(s.awb_number);
+              entry.fields = delhiveryLabelFields(pkg);
+              entry.routing_code = routingCode(pkg?.sort_code) ?? entry.routing_code;
+              log.info(JSON.stringify({ event: 'label_data', carrier: 'delhivery', found: Boolean(pkg), sort_code: Boolean(entry.routing_code), fields: Object.keys(entry.fields) }));
+            } else if (!entry.routing_code && fileUrl(s.label_url)) {
+              const pdf = await fetchFile(s.label_url);
+              entry.routing_code = pdf ? await routingCodeFromPdf(pdf) : null;
+              log.info(JSON.stringify({ event: 'label_data', carrier: 'xpressbees', pdf: Boolean(pdf), routing_code: Boolean(entry.routing_code) }));
+            }
+          } catch (e) {
+            if (!(e instanceof CarrierError)) throw e;
+            entry.error = e.message;
+          }
+          if (entry.routing_code && entry.routing_code !== s.routing_code) {
+            const { error } = await db.from('shipments').update({ routing_code: entry.routing_code }).eq('id', s.id);
+            if (error) log.warn(JSON.stringify({ event: 'routing_code_not_saved', code: error.code ?? null }));
+          }
+        });
+      // A few at a time, so 50 labels do not open 50 courier connections at once.
+      for (let i = 0; i < work.length; i += 5) await Promise.all(work.slice(i, i + 5).map((run) => run()));
+      return { orders };
     },
 
     async cancel_shipment({ order_id }, { user }) {

@@ -97,6 +97,17 @@ export const registerDelhiveryWarehouse = () => invoke('register_warehouse');
 export const requestDelhiveryPickup = ({ date, time, count }) => invoke('pickup_request', { date, time, count });
 export const cancelShipment = (orderId) => invoke('cancel_shipment', { order_id: orderId });
 export const makeManifest = (orderIds) => invoke('manifest', { order_ids: orderIds });
+
+// What the couriers print on their labels (sort / routing code, Delhivery's label fields)
+// for up to 50 orders: { <order id>: { carrier, awb, routing_code, fields, error? } }.
+export async function getLabelData(orderIds) {
+  const out = {};
+  for (let i = 0; i < orderIds.length; i += 50) {
+    const { orders } = await invoke('label_data', { order_ids: orderIds.slice(i, i + 50) });
+    Object.assign(out, orders);
+  }
+  return out;
+}
 export const listNdr = () => invoke('ndr_list');
 export const actOnNdr = (items) => invoke('ndr_action', { items });
 export const bookReturnPickup = (orderId) => invoke('return_pickup', { order_id: orderId });

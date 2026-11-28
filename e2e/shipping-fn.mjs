@@ -188,6 +188,10 @@ const dlServer = http.createServer(async (req, res) => {
     DL.cancels.push(j);
     return send(200, { status: true, waybill: j.waybill, remark: 'Shipment has been cancelled', order_id: 'KAK' });
   }
+  if (p === '/api/p/packing_slip' && url.searchParams.get('pdf') === 'false') {
+    if (DL.mode.slipDown) return send(503, { error: 'down' });
+    return send(200, { packages: [{ wbn: url.searchParams.get('wbns'), sort_code: 'UDR/HMG', pin: 700028, destination: 'Kolkata', pt: 'COD', barcode: 'data:image/png;base64,iVBORw0KGgo=', delhivery_logo: 'https://cdn.delhivery.com/logo.png', 'bad key!': 'x' }], packages_found: 1 });
+  }
   if (p === '/api/p/packing_slip') {
     return send(200, { packages: [{ wbn: url.searchParams.get('wbns'), pdf_download_link: DL.mode.evilLabel ? 'https://evil.example.com/l.pdf' : 'https://s3-ap-southeast-1.amazonaws.com/pdfs/label-1.pdf' }], packages_found: 1 });
   }
@@ -216,6 +220,17 @@ const DL_URL = `http://localhost:${dlServer.address().port}`;
 
 // ---------- The function under test ----------
 const logs = [];
+// Xpressbees' label PDF as the label-data action downloads it (a real PDF made here).
+const FILES = [];
+{
+  const { PDFDocument, StandardFonts } = await import('pdf-lib');
+  const d = await PDFDocument.create();
+  const pg = d.addPage([288, 432]);
+  const font = await d.embedFont(StandardFonts.Helvetica);
+  pg.drawText('AWB: 14326461464886', { x: 10, y: 300, font, size: 10 });
+  pg.drawText('Routing Code: E/S-90/1C/028', { x: 10, y: 280, font, size: 10 });
+  FILES.pdf = await d.save();
+}
 const log = { info: (m) => logs.push(m), warn: (m) => logs.push(m), error: (m) => logs.push(m) };
 const service = createClient(SUPA_URL, SERVICE_TOKEN, { auth: { persistSession: false, autoRefreshToken: false } });
 const tokenStore = {
@@ -236,6 +251,10 @@ const handle = createHandler({
   log,
   makeXpressbees: () => createXpressbees({ baseUrl: XB_URL, email: 'ops@example.com', password: 'correct-horse', tokenStore, timeoutMs: 400, log }),
   makeDelhivery: () => createDelhivery({ baseUrl: DL_URL, token: DL_TOKEN, timeoutMs: 400, log }),
+  fetchFile: async (url) => {
+    FILES.push(url);
+    return FILES.pdf;
+  },
 });
 
 const reader = sessionFor('reader@example.com').access_token;
@@ -731,6 +750,24 @@ try {
   DL.mode.evilLabel = false;
   check('customers cannot fetch labels', (await call({ action: 'label', order_id: oD2 }, { token: reader })).status === 403);
   check('Xpressbees labels come from the saved link', (await call({ action: 'label', order_id: o5 }, { token: admin })).json?.data?.url?.startsWith('https://xb-files.s3.amazonaws.com/'));
+  // Label data for our own label.
+  const ld = await call({ action: 'label_data', order_ids: [oD2, o5] }, { token: admin });
+  const ldD = ld.json?.data?.orders?.[oD2];
+  const ldX = ld.json?.data?.orders?.[o5];
+  check('label data: Delhivery sort code and fields come from its packing slip', ld.status === 200 && ldD?.carrier === 'delhivery' && ldD.routing_code === 'UDR/HMG' && ldD.fields.destination === 'Kolkata' && ldD.fields.pin === '700028', JSON.stringify(ld.json));
+  check('label data: pictures, links and odd keys are left out', ldD && !('barcode' in ldD.fields) && !('delhivery_logo' in ldD.fields) && !('bad key!' in ldD.fields));
+  check('label data: the Xpressbees routing code is read from its label PDF', ldX?.carrier === 'xpressbees' && ldX.routing_code === 'E/S-90/1C/028' && FILES.at(-1)?.startsWith('https://xb-files.s3.amazonaws.com/'), JSON.stringify(ldX));
+  const savedCodes = (await db.query(`select order_id, routing_code from public.shipments where order_id in ($1, $2) and kind = 'forward'`, [oD2, o5])).rows;
+  check('label data: the codes are saved on the parcels', savedCodes.length === 2 && savedCodes.every((r) => r.routing_code), JSON.stringify(savedCodes));
+  const filesBefore = FILES.length;
+  await call({ action: 'label_data', order_ids: [o5] }, { token: admin });
+  check('label data: a saved Xpressbees code needs no second download', FILES.length === filesBefore);
+  DL.mode.slipDown = true;
+  const ldDown = await call({ action: 'label_data', order_ids: [oD2] }, { token: admin });
+  check('label data: a Delhivery outage still answers, with the saved code and the reason', ldDown.status === 200 && ldDown.json.data.orders[oD2].routing_code === 'UDR/HMG' && /unavailable/i.test(ldDown.json.data.orders[oD2].error), JSON.stringify(ldDown.json));
+  DL.mode.slipDown = false;
+  check('label data: customers cannot read it', (await call({ action: 'label_data', order_ids: [oD2] }, { token: reader })).status === 403);
+  check('label data: 1 to 50 orders only', (await call({ action: 'label_data', order_ids: [] }, { token: admin })).status === 400 && (await call({ action: 'label_data', order_ids: ['nope'] }, { token: admin })).status === 400);
   check('the Xpressbees manifest leaves Delhivery parcels out', (await call({ action: 'manifest', order_ids: [oD2] }, { token: admin })).status === 400);
 
   // Pickup requests.

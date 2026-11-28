@@ -230,6 +230,17 @@ export function createDelhivery({ baseUrl, token, fetchImpl = fetch, timeoutMs =
       throw fail(r, path, 'Delhivery returned no label');
     },
 
+    // The label's data instead of its PDF (sort code and the other printed fields), or
+    // null when Delhivery has no packing slip for this AWB.
+    async labelData(waybill) {
+      const path = `/api/p/packing_slip?wbns=${encodeURIComponent(waybill)}&pdf=false`;
+      const r = await call(path);
+      const pkg = Array.isArray(r.json?.packages) ? r.json.packages[0] : null;
+      if (pkg && typeof pkg === 'object') return pkg;
+      if (r.status === 200 || NOT_FOUND.test(explain(r.json, r.text))) return null;
+      throw fail(r, path, 'Delhivery returned no label data');
+    },
+
     // Asks Delhivery to collect parcels from the warehouse on a date and time.
     async pickup({ date, time, location, count }) {
       const path = '/fm/request/new/';
