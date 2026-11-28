@@ -1415,7 +1415,8 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       const { width, height } = doc.getPage(0).getSize();
       const words = (await pdfTexts(bytes)).join(' ');
       check('admin orders: the label is a 4 x 6 inch page', doc.getPageCount() === 1 && Math.round(width) === 288 && Math.round(height) === 432, `${width} x ${height}`);
-      check('admin orders: the label carries the courier, its routing code, the AWB, the courier order ID and both addresses', /XPRESSBEES/.test(words) && words.includes('ROUTING CODE: E/S-90/1C/028') && /ORDER ID: KAK-\d+/.test(words) && /SHIP DATE/.test(words) && /FROM:/.test(words) && /PIN \d{6}/.test(words) && /(COD|PREPAID)/.test(words), words.slice(0, 400));
+      check('admin orders: the label carries the courier, its routing code, the AWB, the courier order ID and the ship-to address', /XPRESSBEES/.test(words) && words.includes('ROUTING CODE: E/S-90/1C/028') && /ORDER ID: KAK-\d+/.test(words) && /SHIP DATE/.test(words) && /PIN \d{6}/.test(words) && /(COD|PREPAID)/.test(words), words.slice(0, 400));
+      check('admin orders: the label shows no sender or return address', !/FROM:|RETURN/i.test(words) && !words.includes('Nakoda') && !words.includes('8690965448'), words.slice(0, 400));
       fs.copyFileSync(path.join(DL, labelPdf), path.join(SHOTS, 'label-4x6.pdf'));
     }
     check('admin orders: the label keeps the same invoice number', (await one(`select count(*)::int as n from public.order_invoices where order_id = $1`, [xbOrder])).n === 1);

@@ -36,7 +36,7 @@ export async function makeDocuments(kind, orders) {
   } catch (err) {
     courierError = err.message;
   }
-  const file = await makeLabels(wanted, invoices, settings, courierData);
+  const file = await makeLabels(wanted, invoices, courierData);
   // Orders whose label has no sort / routing code, and why (shown to the admin).
   const noCode = wanted.filter((o) => !courierData[o.id]?.routing_code);
   const why = courierError || [...new Set(noCode.map((o) => courierData[o.id]?.error).filter(Boolean))].join('; ');

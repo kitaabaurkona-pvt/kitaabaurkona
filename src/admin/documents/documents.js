@@ -44,8 +44,9 @@ export function missingInvoiceDetails(settings) {
 
 // ---------- Shipping label (4 x 6 inch) ----------
 // Laid out like a postal label: shop emblem | payment + order + tracking QR, the courier
-// and its service, from / ship date / weight, ship to, the courier's sort code above the
-// AWB barcode, then contents, invoice, the tamper note and handling marks. The AWB, the
+// and its service, ship date / weight / size, ship to, the courier's sort code above the
+// AWB barcode, the courier's order ID barcode with the invoice number, then contents, the
+// tamper note and handling marks. No sender or return address is printed. The AWB, the
 // courier and its sort / routing code come from the courier (courierData, fetched when
 // printing); everything else from the order.
 
@@ -101,7 +102,7 @@ function mark(page, kind, { x, top, size }) {
   for (const path of MARKS[kind]) page.drawSvgPath(path, { x: x + 2, y: page.getHeight() - top - 2, scale, borderColor: BLACK, borderWidth: 1 });
 }
 
-function drawLabel(page, fonts, image, order, invoice, settings, courier) {
+function drawLabel(page, fonts, image, order, invoice, courier) {
   const parcel = forwardOf(order);
   const awb = courier?.awb || parcel.awb_number;
   const [PW, PH] = LABEL_4X6;
@@ -110,21 +111,22 @@ function drawLabel(page, fonts, image, order, invoice, settings, courier) {
   let top = 8;
   box(page, { x, top, width: W, height: PH - 16, borderWidth: 1.4 });
 
-  // 1. Emblem | payment, order number and the tracking QR code.
-  const headH = 86;
-  const left = 78;
-  if (image) logo(page, image, { x: x + 6, top: top + 7, size: left - 12 });
+  // 1. Emblem (with room around it) | payment, order number and the tracking QR code.
+  const headH = 90;
+  const left = 96;
+  const emblem = 62;
+  if (image) logo(page, image, { x: x + (left - emblem) / 2, top: top + (headH - emblem) / 2, size: emblem });
   else text(page, 'KAK', { x, top: top + 34, font: fonts.bold, size: 22, width: left, align: 'center' });
   vline(page, { x: x + left, top, height: headH, thickness: 1.2 });
   const cod = order.payment_method === 'cod';
-  const qr = 70;
+  const qr = 66;
   const infoX = x + left + 8;
-  const infoW = W - left - qr - 22;
-  text(page, cod ? 'COD' : 'PREPAID', { x: infoX, top: top + 9, font: fonts.bold, size: 17 });
-  fitted(page, cod ? `Collect Rs. ${money(toCollect(order))}` : 'Do not collect cash', { x: infoX, top: top + 31, font: fonts.bold, size: 11, width: infoW, align: 'left' });
-  text(page, 'ORDER', { x: infoX, top: top + 52, font: fonts.regular, size: 7, color: GREY });
-  fitted(page, formatOrderNumber(order.order_number), { x: infoX, top: top + 61, font: fonts.bold, size: 12, width: infoW, align: 'left' });
-  qrCode(page, trackingUrl({ ...parcel, awb_number: awb }), { x: x + W - qr - 8, top: top + 8, size: qr });
+  const infoW = W - left - qr - 24;
+  fitted(page, cod ? 'COD' : 'PREPAID', { x: infoX, top: top + 11, font: fonts.bold, size: 17, min: 12, width: infoW, align: 'left' });
+  fitted(page, cod ? `Collect Rs. ${money(toCollect(order))}` : 'Do not collect cash', { x: infoX, top: top + 33, font: fonts.bold, size: 11, width: infoW, align: 'left' });
+  text(page, 'ORDER', { x: infoX, top: top + 54, font: fonts.regular, size: 7, color: GREY });
+  fitted(page, formatOrderNumber(order.order_number), { x: infoX, top: top + 63, font: fonts.bold, size: 12, width: infoW, align: 'left' });
+  qrCode(page, trackingUrl({ ...parcel, awb_number: awb }), { x: x + W - qr - 10, top: top + (headH - qr) / 2, size: qr });
   top += headH;
   hline(page, { x, top, width: W, thickness: 1.2 });
 
@@ -134,53 +136,39 @@ function drawLabel(page, fonts, image, order, invoice, settings, courier) {
   top += bannerH;
   hline(page, { x, top, width: W, thickness: 1.2 });
 
-  // 3. From (the pickup address) with ship date / weight / size, then ship to.
-  const fromTop = top;
-  const half = W / 2 + 6;
-  text(page, 'FROM:', { x: x + 7, top: top + 6, font: fonts.bold, size: 7 });
-  let y = top + 15;
-  text(page, settings?.pickup_name || 'Kitaabaurkona', { x: x + 7, top: y, font: fonts.bold, size: 8.5 });
-  y += 10;
-  for (const line of wrap(settings?.pickup_address, fonts.regular, 7.5, half - 18, 3)) {
-    text(page, line, { x: x + 7, top: y, font: fonts.regular, size: 7.5 });
-    y += 9;
-  }
-  const fromCity = [settings?.pickup_city, settings?.pickup_state].filter(Boolean).join(', ');
-  text(page, `${fromCity}${settings?.pickup_pincode ? ` ${settings.pickup_pincode}` : ''}`, { x: x + 7, top: y, font: fonts.regular, size: 7.5 });
-  y += 9;
-  if (settings?.pickup_phone) text(page, `Ph. ${settings.pickup_phone}`, { x: x + 7, top: y, font: fonts.regular, size: 7.5 });
-  const facts = [['SHIP DATE', today()]];
-  if (Number(parcel?.package_weight_g) > 0) facts.push(['WEIGHT', `${(Number(parcel.package_weight_g) / 1000).toFixed(2)} KG`]);
+  // 3. Ship date / weight / size on one line, then ship to. No sender or return address:
+  // the owner keeps the shop's details off the label.
+  const facts = [`SHIP DATE: ${today()}`];
+  if (Number(parcel?.package_weight_g) > 0) facts.push(`WEIGHT: ${(Number(parcel.package_weight_g) / 1000).toFixed(2)} KG`);
   const dims = [parcel?.package_length_cm, parcel?.package_breadth_cm, parcel?.package_height_cm];
-  if (dims.every((d) => Number(d) > 0)) facts.push(['SIZE', `${dims.map((d) => money(d)).join(' x ')} CM`]);
-  facts.forEach(([k, v], i) => {
-    text(page, `${k}:`, { x: x + half, top: fromTop + 7 + i * 15, font: fonts.bold, size: 7 });
-    text(page, v, { x: x + half + 46, top: fromTop + 6 + i * 15, font: fonts.regular, size: 8.5 });
-  });
+  if (dims.every((d) => Number(d) > 0)) facts.push(`SIZE: ${dims.map((d) => money(d)).join(' x ')} CM`);
+  fitted(page, facts.join('  ·  '), { x: x + 7, top: top + 6, font: fonts.bold, size: 7.5, min: 6, width: W - 14, align: 'left' });
+  top += 18;
+  hline(page, { x, top, width: W, thickness: 0.8 });
 
-  top = Math.max(y + 14, fromTop + 62);
+  top += 8;
   const toX = x + 62;
   const toW = W - (toX - x) - 8;
-  text(page, 'SHIP', { x: x + 7, top: top + 1, font: fonts.bold, size: 12, width: 48, align: 'right' });
-  text(page, 'TO:', { x: x + 7, top: top + 14, font: fonts.bold, size: 12, width: 48, align: 'right' });
-  y = top;
-  for (const line of wrap(order.shipping_name, fonts.bold, 11, toW, 2)) {
-    text(page, line, { x: toX, top: y, font: fonts.bold, size: 11 });
-    y += 13;
+  text(page, 'SHIP', { x: x + 7, top: top + 1, font: fonts.bold, size: 13, width: 48, align: 'right' });
+  text(page, 'TO:', { x: x + 7, top: top + 15, font: fonts.bold, size: 13, width: 48, align: 'right' });
+  let y = top;
+  for (const line of wrap(order.shipping_name, fonts.bold, 12.5, toW, 2)) {
+    text(page, line, { x: toX, top: y, font: fonts.bold, size: 12.5 });
+    y += 15;
   }
-  for (const line of wrap(order.shipping_address, fonts.regular, 8.5, toW, 3)) {
-    text(page, line, { x: toX, top: y, font: fonts.regular, size: 8.5 });
-    y += 10.5;
+  for (const line of wrap(order.shipping_address, fonts.regular, 9.5, toW, 3)) {
+    text(page, line, { x: toX, top: y, font: fonts.regular, size: 9.5 });
+    y += 11.5;
   }
-  for (const line of wrap(`${order.shipping_city}, ${order.shipping_state}`, fonts.regular, 8.5, toW, 1)) {
-    text(page, line, { x: toX, top: y, font: fonts.regular, size: 8.5 });
-    y += 11;
+  for (const line of wrap(`${order.shipping_city}, ${order.shipping_state}`, fonts.regular, 9.5, toW, 1)) {
+    text(page, line, { x: toX, top: y, font: fonts.regular, size: 9.5 });
+    y += 12.5;
   }
-  text(page, `PIN ${order.shipping_pincode}`, { x: toX, top: y, font: fonts.bold, size: 12 });
-  y += 15;
-  text(page, `M.No. ${order.shipping_phone}`, { x: toX, top: y, font: fonts.regular, size: 8.5 });
-  if (order.alt_phone) text(page, `Alt. ${order.alt_phone}`, { x: toX + 100, top: y, font: fonts.regular, size: 8.5 });
-  top = y + 15;
+  text(page, `PIN ${order.shipping_pincode}`, { x: toX, top: y, font: fonts.bold, size: 13.5 });
+  y += 17;
+  text(page, `M.No. ${order.shipping_phone}`, { x: toX, top: y, font: fonts.regular, size: 9.5 });
+  if (order.alt_phone) text(page, `Alt. ${order.alt_phone}`, { x: toX + 108, top: y, font: fonts.regular, size: 9.5 });
+  top = y + 16;
   hline(page, { x, top, width: W, thickness: 2 });
 
   // 4. The courier's sort / routing code over the AWB barcode.
@@ -188,11 +176,11 @@ function drawLabel(page, fonts, image, order, invoice, settings, courier) {
   const codeLabel = carrierOf(parcel) === 'delhivery' ? 'SORT CODE' : 'ROUTING CODE';
   if (code) fitted(page, `${codeLabel}: ${code}`, { x: x + 6, top: top + 6, font: fonts.bold, size: 13, min: 8, width: W - 12 });
   else text(page, 'AWB', { x: x + 6, top: top + 7, font: fonts.bold, size: 11, width: W - 12, align: 'center' });
-  // The barcode takes the room left above the order row and footer (72 pt), within 26-66
+  // The barcode takes the room left above the order row and footer (72 pt), within 26-72
   // pt (a very long address leaves it the least).
   const bottom = PH - 8;
   const barTop = top + 24;
-  const barH = Math.min(66, Math.max(26, bottom - 72 - barTop - 19));
+  const barH = Math.min(72, Math.max(26, bottom - 72 - barTop - 19));
   barcode(page, awb, { x: x + 14, top: barTop, width: W - 28, height: barH });
   text(page, `AWB: ${awb}`, { x, top: barTop + barH + 4, font: fonts.bold, size: 11.5, width: W, align: 'center' });
   top = barTop + barH + 19;
@@ -220,7 +208,8 @@ function drawLabel(page, fonts, image, order, invoice, settings, courier) {
   // 6. Contents, the tamper note and handling marks.
   const markSize = 18;
   const notesW = W - (markSize * 3 + 8) - 18;
-  y = top + 4;
+  // Contents and the tamper note (two lines, 16 pt) sit in the middle of what is left.
+  y = top + Math.max(4, (bottom - top - 16) / 2);
   const first = order.order_items[0];
   const more = skus > 1 ? ` + ${skus - 1} more` : '';
   for (const line of wrap(`Contents: ${first ? `${first.title}${more}` : '-'}`, fonts.regular, 6.8, notesW, 1)) {
@@ -228,16 +217,16 @@ function drawLabel(page, fonts, image, order, invoice, settings, courier) {
     y += 8.5;
   }
   fitted(page, 'Do not accept if the packaging or label is tampered or damaged.', { x: x + 6, top: y, font: fonts.regular, size: 6.3, min: 5, width: notesW, align: 'left' });
-  const markTop = top + Math.max(3, Math.min(8, (bottom - top - markSize) / 2));
+  const markTop = top + Math.max(3, (bottom - top - markSize) / 2);
   ['dry', 'up', 'care'].forEach((kind, i) => mark(page, kind, { x: x + W - 6 - markSize - i * (markSize + 4), top: markTop, size: markSize }));
 }
 
-export async function makeLabels(orders, invoices, settings, courierData = {}) {
+export async function makeLabels(orders, invoices, courierData = {}) {
   const { doc, fonts } = await newDocument('Shipping labels');
   const image = await embedLogo(doc);
   for (const order of orders) {
     const page = doc.addPage(LABEL_4X6);
-    drawLabel(page, fonts, image, order, invoices[order.id], settings, courierData[order.id]);
+    drawLabel(page, fonts, image, order, invoices[order.id], courierData[order.id]);
   }
   const name = orders.length === 1 ? `label-${formatOrderNumber(orders[0].order_number)}` : `labels-${orders.length}-orders-${today()}`;
   return finish(doc, `${name}.pdf`);
