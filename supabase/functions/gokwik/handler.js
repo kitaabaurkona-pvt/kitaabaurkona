@@ -66,7 +66,8 @@ const IP_CHECKS = ['off', 'log', 'enforce'];
 // testing by hand send it in other ways too: with "Bearer" pasted into Postman's token
 // box (Postman then sends "Bearer Bearer <token>"), without "Bearer", or in quotes. All
 // of these carry the same secret, so all are accepted; only the secret itself counts.
-const TOKEN_HEADERS = ['authorization', 'x-api-key', 'api-key', 'apikey', 'x-access-token', 'access-token', 'token'];
+// GoKwik's production mail (28 Nov) names the header "x-auth-id".
+const TOKEN_HEADERS = ['authorization', 'x-auth-id', 'x-api-key', 'api-key', 'apikey', 'x-access-token', 'access-token', 'token'];
 export function sentTokens(req) {
   const found = [];
   for (const header of TOKEN_HEADERS) {

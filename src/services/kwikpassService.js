@@ -1,19 +1,20 @@
 import { loadSupabase } from '../clients/supabase';
 import { previewMode } from '../preview/mode';
-import { SITE, STAGING } from '../utils/release';
+import { SITE } from '../utils/release';
 
 // Mobile number login through GoKwik's KwikPass. It is on only where the site was built
 // with a KwikPass merchant id:
 //   VITE_KWIKPASS_MID   the merchant id GoKwik gave for KwikPass (public)
 //   VITE_KWIKPASS_ENV   'production' for the live site; anything else means the sandbox
-// The test shop (staging) is always the sandbox. The admin panel never loads it.
+// The test shop (staging) follows VITE_KWIKPASS_ENV too (GoKwik's production check runs
+// there). The admin panel never loads it.
 //
 // How a login works: GoKwik's script sends the OTP and checks it. When the OTP is right it
 // gives us a sealed token (kpToken) holding the number. The `kwikpass` Edge Function opens
 // it with GoKwik's secret key and answers with a one-time code, which Supabase Auth turns
 // into a normal session. The website never decides which account it logs in to.
 const MID = (import.meta.env.VITE_KWIKPASS_MID ?? '').trim();
-const ENVIRONMENT = import.meta.env.VITE_KWIKPASS_ENV === 'production' && !STAGING ? 'production' : 'sandbox';
+const ENVIRONMENT = import.meta.env.VITE_KWIKPASS_ENV === 'production' ? 'production' : 'sandbox';
 const SDK_URL =
   ENVIRONMENT === 'production'
     ? 'https://pdp.gokwik.co/kwikpass/plugin/build/kp-custom-merchant.js'

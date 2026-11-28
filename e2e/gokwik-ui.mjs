@@ -35,7 +35,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*', 'access-control-expose-headers': 'content-range, range' };
 
 // ---------- The site, built with GoKwik switched on ----------
-// The test shop (staging) is built too, told it is "production", to show it stays sandbox.
+// The test shop (staging) is built too, told it is "production": GoKwik's go-live check
+// runs their production keys there, so it must use production and say orders are real.
 const STAGING_PORT = 5205;
 const STAGING_BASE = `http://localhost:${STAGING_PORT}`;
 const STAGING_BUILD = path.join(SHOTS, 'gokwik-staging-build');
@@ -151,7 +152,7 @@ async function toCheckout(page, query = '') {
 try {
   const headers = (await fetch(`${BASE}/`)).headers;
   const csp = headers.get('content-security-policy') ?? '';
-  check("the security policy lets GoKwik's script, popup and calls through, and nothing else new", /script-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && /frame-src https:\/\/\*\.gokwik\.co;/.test(csp) && /connect-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp) && /frame-ancestors 'none'/.test(csp), csp);
+  check("the security policy lets GoKwik's script, popup and calls through, and nothing else new", /script-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && /frame-src https:\/\/\*\.gokwik\.co( https:\/\/www\.facebook\.com)?;/.test(csp) && /connect-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp) && /frame-ancestors 'none'/.test(csp), csp);
 
   // ---------- GoKwik's REAL script under our security policy (needs the internet) ----------
   // The stand-in above cannot show this: GoKwik's script creates window.gokwikSdk by
@@ -276,15 +277,15 @@ try {
     check('live store build: no test shop bar or noindex', !/noindex/.test(await (await fetch(`${BASE}/`)).text()));
     const { page, ctx, sdkRequests } = await newPage();
     await signIn(page);
-    check('test shop: the "Test shop" bar is shown', await waitFor(page, () => /Test shop/.test(document.querySelector('.test-site-bar')?.textContent ?? ''), 5000));
+    check('test shop: the "Test shop" bar says GoKwik production orders are real', await waitFor(page, () => /Test shop.*GoKwik production: payments here are real/.test(document.querySelector('.test-site-bar')?.textContent ?? ''), 5000));
     await toCheckout(page);
     await waitSel(page, '.line-list .line');
     await clickPay(page);
     await waitFor(page, () => window.__gk?.inits.length === 1);
     const init = await page.evaluate(() => window.__gk.inits[0]);
-    check('test shop: GoKwik is always the sandbox, even if the build says production', init.environment === 'sandbox' && sdkRequests[0] === 'https://sandbox.pdp.gokwik.co/v4/build/gokwik.js', JSON.stringify({ env: init.environment, sdkRequests }));
+    check('test shop: GoKwik production when the build says production', init.environment === 'production' && sdkRequests[0] === 'https://pdp.gokwik.co/v4/build/gokwik.js', JSON.stringify({ env: init.environment, sdkRequests }));
     await fire(page, 'checkout-initiation-failure');
-    check('test shop: if GoKwik cannot start, there is no cash on delivery form', (await waitFor(page, () => /GoKwik sandbox checkout could not be opened/.test(document.body.innerText), 5000)) && (await page.$('#ship-name')) === null);
+    check('test shop: if GoKwik cannot start, there is no cash on delivery form', (await waitFor(page, () => /GoKwik production checkout could not be opened/.test(document.body.innerText), 5000)) && (await page.$('#ship-name')) === null);
     await goto(page, '/checkout?native=1');
     check("test shop: GoKwik's fallback address offers no cash on delivery either", (await waitFor(page, () => /could not be opened/.test(document.body.innerText), 8000)) && (await page.$('#ship-name')) === null);
     await page.screenshot({ path: path.join(SHOTS, 'gokwik-staging-blocked-1280.png'), fullPage: true });

@@ -10,7 +10,7 @@ import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { getProfile } from '../services/profileService';
 import { createOrder } from '../services/orderService';
 import { checkPincode } from '../services/shippingService';
-import { createCheckoutCart, getCheckoutCartOrder, gokwikEnabled, openGokwikCheckout } from '../services/gokwikService';
+import { createCheckoutCart, getCheckoutCartOrder, GOKWIK_ENVIRONMENT, gokwikEnabled, openGokwikCheckout } from '../services/gokwikService';
 import { coverOf, formatPrice } from '../utils/format';
 import { STAGING } from '../utils/release';
 import { INDIAN_STATES, normalizeShipping, orderErrorMessage, validateShipping } from '../utils/storeForm';
@@ -416,9 +416,9 @@ function Checkout() {
       wholeCart: !buyId,
     };
     // The test shop shares the live database, so its own checkout would make real
-    // cash-on-delivery orders: there, only GoKwik's sandbox may take an order.
+    // cash-on-delivery orders: there, only GoKwik may take an order.
     content = STAGING && !useGokwik ? (
-      <StateBlock title={gokwikEnabled ? 'GoKwik sandbox checkout could not be opened.' : 'The test shop takes orders only through GoKwik sandbox, which is not set up yet.'}>
+      <StateBlock title={gokwikEnabled ? `GoKwik ${GOKWIK_ENVIRONMENT} checkout could not be opened.` : 'The test shop takes orders only through GoKwik, which is not set up yet.'}>
         {gokwikEnabled && (
           <button type="button" className="btn btn-dark" onClick={() => window.location.assign(`/checkout${buyId ? `?buy=${encodeURIComponent(buyId)}` : ''}`)}>
             Try again

@@ -165,6 +165,7 @@ try {
     'Authorization: Bearer "<token>" (in quotes)': { authorization: `Bearer "${SANDBOX_TOKEN}"` },
     'authorization: bearer <token> (lower case)': { authorization: `bearer ${SANDBOX_TOKEN}` },
     'X-API-Key: <token> (validator "API key" setting)': { 'x-api-key': SANDBOX_TOKEN },
+    'x-auth-id: <token> (GoKwik production mail, 28 Nov)': { 'x-auth-id': SANDBOX_TOKEN },
   };
   for (const [form, headers] of Object.entries(tokenForms)) {
     check(`the token is accepted as ${form}`, (await call('/get-cart', { cart_id: cartA }, { token: null, headers })).status === 200);

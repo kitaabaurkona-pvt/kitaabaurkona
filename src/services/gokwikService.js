@@ -1,7 +1,6 @@
 import { loadSupabase } from '../clients/supabase';
 import { previewMode } from '../preview/mode';
 import { unwrap } from './request';
-import { STAGING } from '../utils/release';
 
 // GoKwik's checkout (address, online payment and cash on delivery in one popup). It is
 // on only where the site was built with a GoKwik merchant id:
@@ -10,9 +9,12 @@ import { STAGING } from '../utils/release';
 // Without a merchant id the site keeps its own checkout (cash on delivery).
 // The website only starts the popup. Reading the cart, taking payment and placing the
 // order all happen between GoKwik's servers and the `gokwik` Edge Function.
-// The test shop (staging) is always the sandbox, whatever VITE_GOKWIK_ENV says.
+// The test shop (staging) follows VITE_GOKWIK_ENV too: GoKwik's go-live check runs their
+// production keys there. Orders made with production are real (live database, real
+// stock, real payments); the test shop's bar says so.
 const MID = (import.meta.env.VITE_GOKWIK_MID ?? '').trim();
-const ENVIRONMENT = import.meta.env.VITE_GOKWIK_ENV === 'production' && !STAGING ? 'production' : 'sandbox';
+const ENVIRONMENT = import.meta.env.VITE_GOKWIK_ENV === 'production' ? 'production' : 'sandbox';
+export const GOKWIK_ENVIRONMENT = ENVIRONMENT;
 const SDK_URL = ENVIRONMENT === 'production' ? 'https://pdp.gokwik.co/v4/build/gokwik.js' : 'https://sandbox.pdp.gokwik.co/v4/build/gokwik.js';
 const LOAD_TIMEOUT_MS = 10000;
 

@@ -61,7 +61,7 @@ const BASE = `http://localhost:${PORT}`;
 const STAGING_BASE = `http://localhost:${STAGING_PORT}`;
 console.log('Building the store and the test shop with mobile number login on…');
 const preview = await buildAndServe(path.join(SHOTS, 'kwikpass-build'), PORT, [], { VITE_KWIKPASS_MID: MID, VITE_KWIKPASS_ENV: 'production' });
-const stagingPreview = await buildAndServe(path.join(SHOTS, 'kwikpass-staging-build'), STAGING_PORT, ['--mode', 'staging'], { VITE_KWIKPASS_MID: MID, VITE_KWIKPASS_ENV: 'production' });
+const stagingPreview = await buildAndServe(path.join(SHOTS, 'kwikpass-staging-build'), STAGING_PORT, ['--mode', 'staging'], { VITE_KWIKPASS_MID: MID });
 
 // ---------- Fake Supabase, and the real kwikpass function in this process ----------
 const db = await createBackend({ schemaPath: path.join(ROOT, 'supabase', 'schema.sql'), books: await fetchPublicBooks(path.join(ROOT, '.env.local')) });
@@ -451,7 +451,7 @@ try {
     const { page, ctx, sdkRequests } = await newPage({ tokens: sandboxTokens });
     await goto(page, '/');
     check("GoKwik's script loads on every page, not only sign-in", await waitFor(page, () => !!window.__kp?.merchantInfoAtLoad, 10000));
-    check('the test shop always uses the sandbox script, even if the build says production', sdkRequests[0] === 'https://sandbox.pdp.gokwik.co/kwikpass/plugin/build/kp-custom-merchant.js' && (await page.evaluate(() => window.__kp.merchantInfoAtLoad.environment)) === 'sandbox', JSON.stringify(sdkRequests));
+    check('the test shop uses the sandbox script unless its build says production', sdkRequests[0] === 'https://sandbox.pdp.gokwik.co/kwikpass/plugin/build/kp-custom-merchant.js' && (await page.evaluate(() => window.__kp.merchantInfoAtLoad.environment)) === 'sandbox', JSON.stringify(sdkRequests));
     await goto(page, '/sign-in');
     await sendOtp(page, '9812345678');
     await enterOtp(page, '1234');
