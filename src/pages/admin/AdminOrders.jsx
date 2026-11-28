@@ -36,6 +36,7 @@ import { CallStatusDialog, CancelDialog, NoteDialog } from '../../components/adm
 import DelhiveryPickup from '../../components/admin/DelhiveryPickup';
 import HoverHint from '../../components/admin/HoverHint';
 import DateRange from '../../components/admin/DateRange';
+import DocumentPreview from '../../components/admin/DocumentPreview';
 import { downloadCsv } from '../../utils/csv';
 
 const NUMERIC_SEARCH = ['order', 'phone', 'min_qty', 'max_qty'];
@@ -696,6 +697,8 @@ function AdminOrders({ view = 'process' }) {
   const [noteFor, setNoteFor] = useState(null);
   const [cancelFor, setCancelFor] = useState(null);
   const [callFor, setCallFor] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const movedFor = useRef(null);
   const [tipHidden, hideTip] = useTip(stage || tab);
   const { show } = useToast();
   // "Now" for ages and late badges: when the list arrived.
@@ -799,15 +802,13 @@ function AdminOrders({ view = 'process' }) {
     }
   }
 
-  // Labels, invoices, packing slips or a picking list for some orders, as one PDF.
-  // Printing labels at the Print step moves those orders to Pack (as on ShopDeck).
+  // Labels, invoices, packing slips or a picking list for some orders, as one PDF, shown
+  // in a preview first. Downloading or printing labels from the preview moves orders at
+  // the Print step to Pack (as on ShopDeck).
   async function printFor(kind, list) {
     if (list.length === 0) throw new Error('There are no orders to print here.');
-    const { printDocuments } = await import('../../admin/documents/print');
-    const { printed, skipped, noCode = [], why = '' } = await printDocuments(kind, list);
-    const what = { labels: 'label', invoices: 'invoice', slips: 'packing slip', picklist: 'picking list' }[kind];
-    if (printed.length && kind !== 'picklist') show({ message: `${plural(printed.length, what)} downloaded` });
-    if (kind === 'picklist') show({ message: `Picking list for ${plural(printed.length, 'order')} downloaded` });
+    const { makeDocuments, saveFile } = await import('../../admin/documents/print');
+    const { file, printed, skipped, noCode = [], why = '' } = await makeDocuments(kind, list);
     if (skipped.length) {
       const why = kind === 'labels' ? 'no booked parcel yet' : 'not paid or cancelled';
       show({ message: `${plural(skipped.length, 'order')} left out (${why}): ${skipped.map((o) => formatOrderNumber(o.order_number)).join(', ')}`, tone: 'error' });
@@ -815,9 +816,43 @@ function AdminOrders({ view = 'process' }) {
     if (noCode.length) {
       show({ message: `${plural(noCode.length, 'label')} printed without the courier's sort code: ${noCode.map((o) => formatOrderNumber(o.order_number)).join(', ')}${why ? ` (${why})` : ''}`, tone: 'error' });
     }
+    if (!file) return 0;
     const toPack = kind === 'labels' ? printed.filter((o) => stageOf(o) === 'print' && ['confirmed', 'paid'].includes(o.status)).map((o) => o.id) : [];
-    if (toPack.length) await adminSetStage(toPack, 'pack');
+    const what = { labels: 'Label', invoices: 'Invoice', slips: 'Packing slip', picklist: 'Picking list' }[kind];
+    const title =
+      printed.length === 1 && kind !== 'picklist'
+        ? `${what} · ${formatOrderNumber(printed[0].order_number)}`
+        : `${kind === 'picklist' ? what : `${what}s`} · ${plural(printed.length, 'order')} · ${plural(file.pages, 'page')}`;
+    setPreview({ kind, file, url: URL.createObjectURL(file.blob), title, count: printed.length, toPack, saveFile });
     return printed.length;
+  }
+
+  function closePreview() {
+    if (preview) URL.revokeObjectURL(preview.url);
+    setPreview(null);
+  }
+
+  // The preview's Download / Print. Labels at the Print step move to Pack once, on the
+  // first download or print.
+  async function onPreviewUse(how) {
+    const p = preview;
+    if (!p) return;
+    if (how === 'download') {
+      p.saveFile(p.file);
+      const what = { labels: 'label', invoices: 'invoice', slips: 'packing slip' }[p.kind];
+      show({ message: p.kind === 'picklist' ? `Picking list for ${plural(p.count, 'order')} downloaded` : `${plural(p.count, what)} downloaded` });
+    }
+    if (p.toPack.length && movedFor.current !== p) {
+      movedFor.current = p;
+      try {
+        await adminSetStage(p.toPack, 'pack');
+        show({ message: `${plural(p.toPack.length, 'order')} moved to Pack` });
+        changed();
+      } catch (err) {
+        movedFor.current = null;
+        show({ message: err.code || err.hint ? adminErrorMessage(err) : err.message, tone: 'error' });
+      }
+    }
   }
 
   const printSelected = (kind) => runBulk(`print-${kind}`, () => printFor(kind, chosen()));
@@ -1441,6 +1476,7 @@ function AdminOrders({ view = 'process' }) {
       <NoteDialog order={noteFor} onClose={() => setNoteFor(null)} onChanged={changed} />
       <CancelDialog order={cancelFor} onClose={() => setCancelFor(null)} onChanged={changed} />
       <CallStatusDialog order={callFor} onClose={() => setCallFor(null)} onChanged={changed} />
+      <DocumentPreview preview={preview} onClose={closePreview} onUse={onPreviewUse} />
     </div>
   );
 }

@@ -1364,19 +1364,37 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       await page.$$eval('.ap-bulkbar button', (bs) => bs.find((b) => /^Print/.test(b.textContent.trim()))?.click());
       await page.$$eval('.ap-menu-list button', (bs, k) => bs.find((b) => b.textContent.trim() === k)?.click(), kind);
     };
+    // Documents open in a preview first (the PDF in a frame); Download saves it. Returns
+    // the preview's title, or '' when no preview showed.
+    const fromPreview = async () => {
+      const shown = await page.waitForSelector('.ap-preview iframe[src^="blob:"]', { timeout: 8000 }).then(() => true).catch(() => false);
+      if (!shown) return '';
+      const title = await page.$eval('.ap-preview .ap-dialog-title', (t) => t.textContent.trim());
+      await page.$$eval('.ap-preview button', (bs) => bs.find((b) => b.textContent.trim() === 'Download')?.click());
+      await sleep(300);
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.querySelector('.ap-preview'), { timeout: 3000 }).catch(() => {});
+      return title;
+    };
     check('admin orders: a booked order can be selected at Print', await waitSel(page, 'tbody .pick input[type=checkbox]', 3000));
     await printSelected('Invoices');
     check('admin orders: invoices need the seller details first', await page.waitForFunction(() => /Fill in the invoice details first/.test(document.querySelector('.ap-card-notice')?.textContent ?? ''), { timeout: 6000 }).then(() => true).catch(() => false));
     await db.query(`update public.shipping_settings set invoice_business_name = 'KITAABAURKONA', invoice_address = '59, Test Road, Udaipur', invoice_phone = '9000000001', invoice_gstin = '08ABCDE1234F1Z5', invoice_pan = 'ABCDE1234F', invoice_state = 'Rajasthan'`);
     await printSelected('Invoices');
+    const invoiceTitle = await fromPreview();
+    check('admin orders: the invoice opens in a preview before it downloads', /^Invoice · KB-\d{6}$/.test(invoiceTitle), invoiceTitle);
     const invoicePdf = await waitPdf('invoice-KAK-');
     const invoiceRow = await one(`select invoice_number from public.order_invoices where order_id = $1`, [xbOrder]);
     check('admin orders: an invoice PDF downloads with a KAK/yy-yy/00001 number', Boolean(invoicePdf) && /^KAK\/\d{2}-\d{2}\/\d{5}$/.test(invoiceRow?.invoice_number ?? ''), `${invoicePdf} ${invoiceRow?.invoice_number} files=${fs.readdirSync(DL).join(',')} notice=${await page.$eval('.ap-card-notice', (n) => n.textContent).catch(() => '-')} toasts=${await page.$$eval('.toast', (ts) => ts.map((t) => t.textContent).join(' | '))}`);
     await printSelected('Picking list');
+    await fromPreview();
     check('admin orders: a picking list PDF downloads', Boolean(await waitPdf('picking-list-')));
     await printSelected('Packing slips');
+    await fromPreview();
     check('admin orders: packing slips download', Boolean(await waitPdf('packing-slips-')));
     await printSelected('Labels');
+    const labelTitle = await fromPreview();
+    check('admin orders: the label opens in a preview before it downloads', /^Label · KB-\d{6}$/.test(labelTitle), labelTitle);
     const labelPdf = await waitPdf('label-KB-');
     check(
       'admin orders: printing the label downloads it and moves the order to Pack',
@@ -1397,7 +1415,7 @@ check('checkout: one Place order button', (await page.$$eval('main .btn-primary'
       const { width, height } = doc.getPage(0).getSize();
       const words = (await pdfTexts(bytes)).join(' ');
       check('admin orders: the label is a 4 x 6 inch page', doc.getPageCount() === 1 && Math.round(width) === 288 && Math.round(height) === 432, `${width} x ${height}`);
-      check('admin orders: the label carries the courier, its routing code, the AWB and both addresses', /XPRESSBEES/.test(words) && words.includes('ROUTING CODE: E/S-90/1C/028') && /SHIP DATE/.test(words) && /FROM:/.test(words) && /PIN \d{6}/.test(words) && /(COD|PREPAID)/.test(words), words.slice(0, 400));
+      check('admin orders: the label carries the courier, its routing code, the AWB, the courier order ID and both addresses', /XPRESSBEES/.test(words) && words.includes('ROUTING CODE: E/S-90/1C/028') && /ORDER ID: KAK-\d+/.test(words) && /SHIP DATE/.test(words) && /FROM:/.test(words) && /PIN \d{6}/.test(words) && /(COD|PREPAID)/.test(words), words.slice(0, 400));
       fs.copyFileSync(path.join(DL, labelPdf), path.join(SHOTS, 'label-4x6.pdf'));
     }
     check('admin orders: the label keeps the same invoice number', (await one(`select count(*)::int as n from public.order_invoices where order_id = $1`, [xbOrder])).n === 1);

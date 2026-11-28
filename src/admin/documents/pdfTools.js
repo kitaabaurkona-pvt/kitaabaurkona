@@ -165,10 +165,15 @@ export const money = (value) => {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 };
 
-// Saves the PDF on the admin's computer (a download, like ShopDeck's documents).
-export async function download(doc, fileName) {
+// The finished PDF as a file: shown in a preview first, downloaded from there.
+export async function finish(doc, fileName) {
   const bytes = await doc.save();
-  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  return { blob: new Blob([bytes], { type: 'application/pdf' }), fileName, pages: doc.getPageCount() };
+}
+
+// Saves a finished PDF on the admin's computer (a download, like ShopDeck's documents).
+export function saveFile({ blob, fileName }) {
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = fileName;
@@ -176,5 +181,4 @@ export async function download(doc, fileName) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
-  return bytes.length;
 }

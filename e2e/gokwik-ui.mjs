@@ -152,7 +152,7 @@ async function toCheckout(page, query = '') {
 try {
   const headers = (await fetch(`${BASE}/`)).headers;
   const csp = headers.get('content-security-policy') ?? '';
-  check("the security policy lets GoKwik's script, popup and calls through, and nothing else new", /script-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && /frame-src https:\/\/\*\.gokwik\.co( https:\/\/www\.facebook\.com)?;/.test(csp) && /connect-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp) && /frame-ancestors 'none'/.test(csp), csp);
+  check("the security policy lets GoKwik's script, popup and calls through, and nothing else new", /script-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && /frame-src https:\/\/\*\.gokwik\.co( https:\/\/www\.facebook\.com)?( blob:)?;/.test(csp) && /connect-src [^;]*https:\/\/\*\.gokwik\.co/.test(csp) && !/unsafe-eval/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp) && /frame-ancestors 'none'/.test(csp), csp);
 
   // ---------- GoKwik's REAL script under our security policy (needs the internet) ----------
   // The stand-in above cannot show this: GoKwik's script creates window.gokwikSdk by

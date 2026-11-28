@@ -1,6 +1,6 @@
 // The admin's printable documents, laid out like the ShopDeck ones the owner uses:
 // shipping labels, tax invoices, a picking list and packing slips. Each builder takes
-// orders as the Orders page loads them and downloads one PDF.
+// orders as the Orders page loads them and makes one PDF (previewed, then downloaded).
 import { formatOrderNumber } from '../../utils/format';
 import qrcode from 'qrcode-generator';
 import { CARRIER_NAMES, carrierOf, trackingUrl } from '../../services/shippingService';
@@ -12,7 +12,7 @@ import {
   WASH,
   barcode,
   box,
-  download,
+  finish,
   embedLogo,
   hline,
   indiaDate,
@@ -186,40 +186,53 @@ function drawLabel(page, fonts, image, order, invoice, settings, courier) {
   // 4. The courier's sort / routing code over the AWB barcode.
   const code = courier?.routing_code || parcel?.routing_code || '';
   const codeLabel = carrierOf(parcel) === 'delhivery' ? 'SORT CODE' : 'ROUTING CODE';
-  if (code) fitted(page, `${codeLabel}: ${code}`, { x: x + 6, top: top + 7, font: fonts.bold, size: 13, min: 8, width: W - 12 });
-  else text(page, 'AWB', { x: x + 6, top: top + 8, font: fonts.bold, size: 11, width: W - 12, align: 'center' });
-  // The barcode takes the room left above the footer (52 pt), within 40-74 pt.
-  const barTop = top + 26;
-  const barH = Math.min(74, Math.max(40, PH - 8 - 52 - barTop - 22));
+  if (code) fitted(page, `${codeLabel}: ${code}`, { x: x + 6, top: top + 6, font: fonts.bold, size: 13, min: 8, width: W - 12 });
+  else text(page, 'AWB', { x: x + 6, top: top + 7, font: fonts.bold, size: 11, width: W - 12, align: 'center' });
+  // The barcode takes the room left above the order row and footer (72 pt), within 26-66
+  // pt (a very long address leaves it the least).
+  const bottom = PH - 8;
+  const barTop = top + 24;
+  const barH = Math.min(66, Math.max(26, bottom - 72 - barTop - 19));
   barcode(page, awb, { x: x + 14, top: barTop, width: W - 28, height: barH });
-  text(page, `AWB: ${awb}`, { x, top: barTop + barH + 5, font: fonts.bold, size: 12, width: W, align: 'center' });
-  top = barTop + barH + 22;
+  text(page, `AWB: ${awb}`, { x, top: barTop + barH + 4, font: fonts.bold, size: 11.5, width: W, align: 'center' });
+  top = barTop + barH + 19;
   hline(page, { x, top, width: W, thickness: 1.2 });
 
-  // 5. Contents, invoice, the tamper note and handling marks.
-  const bottom = PH - 8;
-  const markSize = 20;
-  const notesW = W - (markSize * 3 + 8) - 18;
+  // 5. The order as the courier knows it (KAK-<number>, sent at booking) as a barcode,
+  // like the order ID barcode on the couriers' own labels, beside the invoice and counts.
+  const courierOrder = `KAK-${order.order_number}`;
+  const obX = x + 12;
+  const obW = 132;
+  const rowH = 40;
+  barcode(page, courierOrder, { x: obX, top: top + 5, width: obW, height: 22 });
+  text(page, `ORDER ID: ${courierOrder}`, { x: obX, top: top + 30, font: fonts.bold, size: 7, width: obW, align: 'center' });
+  const rx = obX + obW + 12;
+  const rw = x + W - rx - 12;
+  vline(page, { x: rx, top, height: rowH });
   const skus = order.order_items.length;
   const quantity = order.order_items.reduce((sum, item) => sum + item.quantity, 0);
-  y = top + 5;
+  text(page, 'INVOICE', { x: rx + 6, top: top + 5, font: fonts.regular, size: 6, color: GREY });
+  fitted(page, invoice?.invoice_number || '-', { x: rx + 6, top: top + 13, font: fonts.bold, size: 8.5, min: 6, width: rw, align: 'left' });
+  text(page, `SKUs: ${skus}   Qty: ${quantity}`, { x: rx + 6, top: top + 27, font: fonts.bold, size: 7 });
+  top += rowH;
+  hline(page, { x, top, width: W, thickness: 1.2 });
+
+  // 6. Contents, the tamper note and handling marks.
+  const markSize = 18;
+  const notesW = W - (markSize * 3 + 8) - 18;
+  y = top + 4;
   const first = order.order_items[0];
   const more = skus > 1 ? ` + ${skus - 1} more` : '';
-  for (const line of wrap(`Contents: ${first ? `${first.title}${more}` : '-'}`, fonts.regular, 6.8, notesW, 2)) {
+  for (const line of wrap(`Contents: ${first ? `${first.title}${more}` : '-'}`, fonts.regular, 6.8, notesW, 1)) {
     text(page, line, { x: x + 6, top: y, font: fonts.regular, size: 6.8 });
-    y += 8;
+    y += 8.5;
   }
-  text(page, `SKUs: ${skus}   Qty: ${quantity}${invoice ? `   Inv: ${invoice.invoice_number}` : ''}`, { x: x + 6, top: y, font: fonts.bold, size: 6.8 });
-  y += 9;
-  for (const line of wrap('Do not accept if the outer packaging or label is tampered or damaged.', fonts.regular, 6.3, notesW, 2)) {
-    text(page, line, { x: x + 6, top: y, font: fonts.regular, size: 6.3 });
-    y += 7.5;
-  }
-  const markTop = top + Math.max(4, (bottom - top - markSize) / 2);
+  fitted(page, 'Do not accept if the packaging or label is tampered or damaged.', { x: x + 6, top: y, font: fonts.regular, size: 6.3, min: 5, width: notesW, align: 'left' });
+  const markTop = top + Math.max(3, Math.min(8, (bottom - top - markSize) / 2));
   ['dry', 'up', 'care'].forEach((kind, i) => mark(page, kind, { x: x + W - 6 - markSize - i * (markSize + 4), top: markTop, size: markSize }));
 }
 
-export async function downloadLabels(orders, invoices, settings, courierData = {}) {
+export async function makeLabels(orders, invoices, settings, courierData = {}) {
   const { doc, fonts } = await newDocument('Shipping labels');
   const image = await embedLogo(doc);
   for (const order of orders) {
@@ -227,7 +240,7 @@ export async function downloadLabels(orders, invoices, settings, courierData = {
     drawLabel(page, fonts, image, order, invoices[order.id], settings, courierData[order.id]);
   }
   const name = orders.length === 1 ? `label-${formatOrderNumber(orders[0].order_number)}` : `labels-${orders.length}-orders-${today()}`;
-  await download(doc, `${name}.pdf`);
+  return finish(doc, `${name}.pdf`);
 }
 
 // ---------- Tax invoice ----------
@@ -353,7 +366,7 @@ function drawInvoice(page, fonts, image, order, invoice, settings) {
   text(page, 'This is a computer-generated document and does not require a signature', { x, top: rowTop + totalH + 28, font: fonts.regular, size: 10.5, width: A4[0] - 36, align: 'center' });
 }
 
-export async function downloadInvoices(orders, invoices, settings) {
+export async function makeInvoices(orders, invoices, settings) {
   const { doc, fonts } = await newDocument('Tax invoices');
   const image = await embedLogo(doc);
   let count = 0;
@@ -362,18 +375,17 @@ export async function downloadInvoices(orders, invoices, settings) {
     drawInvoice(doc.addPage(A4), fonts, image, order, invoices[order.id], settings);
     count += 1;
   }
-  if (count === 0) return 0;
+  if (count === 0) return null;
   const first = orders.find((o) => invoices[o.id]);
   const name = count === 1 ? `invoice-${printable(invoices[first.id].invoice_number).replace(/\//g, '-')}` : `invoices-${count}-orders-${today()}`;
-  await download(doc, `${name}.pdf`);
-  return count;
+  return finish(doc, `${name}.pdf`);
 }
 
 // ---------- Picking list ----------
 
 const copiesText = (n) => `${n} ${n === 1 ? 'copy' : 'copies'}`;
 
-export async function downloadPickList(orders) {
+export async function makePickList(orders) {
   const { doc, fonts } = await newDocument('Picking list');
   const bySku = new Map();
   for (const order of orders) {
@@ -432,12 +444,12 @@ export async function downloadPickList(orders) {
     top += h;
     hline(page, { x, top, width: W, color: LINE });
   }
-  await download(doc, `picking-list-${today()}.pdf`);
+  return finish(doc, `picking-list-${today()}.pdf`);
 }
 
 // ---------- Packing slips (three to a page, cut along the dashes) ----------
 
-export async function downloadPackingSlips(orders) {
+export async function makePackingSlips(orders) {
   const { doc, fonts } = await newDocument('Packing slips');
   const image = await embedLogo(doc);
   const x = 30;
@@ -482,6 +494,6 @@ export async function downloadPackingSlips(orders) {
     const copies = order.order_items.reduce((s, i) => s + i.quantity, 0);
     text(page, `${copies} ${copies === 1 ? 'book' : 'books'} in this parcel`, { x, top: 20 + (slot + 1) * slotH - 26, font: fonts.italic, size: 9, color: GREY });
   });
-  await download(doc, `packing-slips-${today()}.pdf`);
+  return finish(doc, `packing-slips-${today()}.pdf`);
 }
 
