@@ -26,8 +26,9 @@ export const GOKWIK_IPS = {
   production: ['3.108.114.222', '52.66.34.242', '13.127.239.196', '65.1.24.196'],
 };
 
-// GoKwik's own API (Update Order) is only ever called on a GoKwik host.
-export const GOKWIK_API_HOST = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.gokwik\.(co|io|in)$/;
+// GoKwik's own API (Update Order) is only ever called on a GoKwik host. The base address
+// may carry a path: GoKwik's sandbox is https://api-gw-v4.dev.gokwik.io/sandbox.
+export const GOKWIK_API_HOST = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.gokwik\.(co|io|in)(\/[A-Za-z0-9][A-Za-z0-9._~-]*)*$/;
 
 // The delivery estimate shown in GoKwik's checkout (owner, 2026-11-17), in days. The
 // GOKWIK_DELIVERY_DAYS secret overrides it without a new deploy.

@@ -212,6 +212,15 @@ try {
   check('jobs without the cron secret are refused', (await job('/jobs/push-updates', null)).status === 401 && (await job('/jobs/push-updates', 'guess')).status === 401);
   check('webhooks without the key are refused', (await hook('/webhooks/payments', {}, null)).status === 401 && (await hook('/webhooks/payments', {}, 'guess')).status === 401);
   check('the GoKwik API address must be a GoKwik host', createGokwikApi({ baseUrl: 'https://evil.example.com', appId: 'a', appSecret: 'b' }) === null && GOKWIK_API_HOST.test('https://api.gokwik.co') && !GOKWIK_API_HOST.test('https://gokwik.co.evil.com') && !GOKWIK_API_HOST.test('http://api.gokwik.co'));
+  check(
+    "GoKwik's sandbox address with its /sandbox path is accepted, look-alikes are not",
+    GOKWIK_API_HOST.test('https://api-gw-v4.dev.gokwik.io/sandbox') &&
+      createGokwikApi({ baseUrl: 'https://api-gw-v4.dev.gokwik.io/sandbox/', appId: 'a', appSecret: 'b' }) !== null &&
+      !GOKWIK_API_HOST.test('https://api.gokwik.io@evil.com/x') &&
+      !GOKWIK_API_HOST.test('https://api.gokwik.io/x?y=1') &&
+      !GOKWIK_API_HOST.test('https://api.gokwik.io/../x') &&
+      !GOKWIK_API_HOST.test('https://api.gokwik.io.evil.com/sandbox'),
+  );
 
   // ---------- GoKwik's addresses ----------
   const from = (ip, extra = {}) => ({ via: enforced, headers: { 'x-real-ip': ip, ...extra } });
